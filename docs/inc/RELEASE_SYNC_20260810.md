@@ -7,9 +7,9 @@
 - `examples/CMakeLists.txt`：上述 target 的构建入口。
 - `docs/inc/`：当前设计、API、硬件 profile、历史正式结果和 2026-08-10 发布候选。
 
-最新 Fusion 数据入口是
-`docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md`；2026-08-09 的完整四路径
-矩阵必须一并保留，不能用新结果覆盖。
+最新 Fusion 资格化入口是
+`docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/README.md`；扩展 sweep 位于
+`fusion_kernel_release_20260810/`，2026-08-09 的完整四路径矩阵也保留用于历史对照。
 
 ## 不应同步
 
@@ -17,26 +17,22 @@
 - `.git/broken-metadata-20260810/`、Codex attachment、临时 patch、NPU profile 和 core dump。
 - `__pycache__`、`*.pyc`、`*.orig`、`._*`、PID/READY/stdout/stderr 文件。
 
-## Git 注意事项
+## Git 交付结构
 
-当前工作区原本引用的本地 commit object 已丢失。本轮已将 Git HEAD 修复到
-`origin/master@7965bdd0bc9c9c9b270e7508c3c86c65caa7969a`，分支名为
-`inc-single-fusion-release-20260810`；工作区实现相对该远端基线会显示大量新增/修改。
-不要执行 `git reset --hard`，也不要不审查地 `git add -A`。
+当前同步分支为 `inc-single-fusion-logical-20260811`，从
+`origin/master@7965bdd0bc9c9c9b270e7508c3c86c65caa7969a` 建立，按开发逻辑拆分为：
 
-建议在同步前只暂存明确范围：
+1. `227879d`：单/多 INC Dispatch+Combine；
+2. `6bfb81b`：ABI 13 fusion kernel；
+3. `57e4475`：vLLM-Ascend 接入；
+4. `9343813`：CMake 构建接线；
+5. `95f4d7d`：硬件 profile 与 gate；
+6. `9bf33eb`：架构、协议与 API 文档；
+7. `118e44c`：最新资格化和性能数据。
 
-```bash
-git add examples/CMakeLists.txt \
-  examples/inc/dispatch_combine \
-  examples/inc/fusion_kernel \
-  docs/inc
-git diff --cached --check
-git status --short
-```
-
-确认 staged diff 没有带入构建目录和大日志后，再由维护者提交/推送。由于原本本地基线不可恢复，
-最终远端合并应按目录审查，而不是把当前全树差异当作一次普通小 patch。
+分支相对主线只修改 `examples/CMakeLists.txt`，并新增 `examples/inc/` 与 `docs/inc/`；
+不包含构建目录、二进制演示稿、参考模型源码或运行日志。原始单体快照 `780334b` 只用于
+核对资格化源码内容，不再作为推荐同步单位。
 
 ## 发布前门禁
 

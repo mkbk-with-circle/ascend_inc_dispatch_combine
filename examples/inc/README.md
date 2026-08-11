@@ -1,22 +1,22 @@
 # INC examples
 
-This directory has two explicit ownership domains:
+本目录只保留两套正式交付：
 
-- `dispatch_combine/` is the maintained, CMake-built Single-INC and Multi-INC
-  communication delivery, including public APIs, tests, and qualification
-  scripts.
-- `fusion_kernel/` is reference-only integration research and is not part of
-  the INC transport build.
+- `dispatch_combine/`：单 INC 与多 INC 的 Dispatch/Combine、公开 API、测试和
+  资格化脚本；
+- `fusion_kernel/`：ABI 13 单 INC fusion kernel、prepared API、vLLM-Ascend
+  接入层、测试与运行手册。
 
-`CMakeLists.txt` intentionally builds only `dispatch_combine/` — **`fusion_kernel/`
-is not a build target here**. Shared FP16, UB, vector-reduction, gather,
-topology, and resource-policy primitives live in
-`dispatch_combine/common/platform/`; there is no legacy source layer in this
-directory root.
+两者都由本目录的 `CMakeLists.txt` 构建。共享 FP16、UB、vector-reduction、gather、
+拓扑和资源策略位于 `dispatch_combine/common/platform/`。历史 AG/RS、`inc_s09`、
+MegaMoE/NVIDIA 参考源码、临时探针、构建产物和 launcher 日志均不属于当前依赖闭包。
 
-Historical AG/RS and `inc_s09` prototypes are not part of the maintained
-dependency closure. Current evidence and hardware profiles live under
-`docs/inc/`.
+最新结构化结果和硬件 profile 位于 `docs/inc/`：
+
+- Fusion 最终资格化：`docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/`；
+- ABI 13 sweep 与 vLLM 对照：`docs/inc/report/nb-borrow/fusion_kernel_release_20260810/`；
+- 单/多 INC 状态：`docs/inc/report/single_inc_LIVE_STATUS.md` 和
+  `docs/inc/report/multi_inc_delivery_validation_gate.json`。
 
 ## New here? / 新人从这里开始
 
@@ -34,3 +34,8 @@ runtime wiring, how to run one case), read:
 
 Then skim `dispatch_combine/README.md` for how `common/`, `single_inc/`,
 `multi_inc/`, `scripts/`, and `tests/` split ownership.
+
+Fusion 的协议、token-wave timeline、调用接口和 nb 复现命令分别见
+[`fusion_kernel/PRINCIPLES.md`](fusion_kernel/PRINCIPLES.md)、
+[`fusion_kernel/README.md`](fusion_kernel/README.md) 和
+[`fusion_kernel/framework/vllm_ascend/RUNBOOK_NB_VLLM.md`](fusion_kernel/framework/vllm_ascend/RUNBOOK_NB_VLLM.md)。
