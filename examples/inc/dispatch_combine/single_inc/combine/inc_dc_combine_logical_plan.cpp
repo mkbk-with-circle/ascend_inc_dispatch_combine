@@ -143,66 +143,6 @@ IncDcStatus BuildSyntheticLogicalPlanV2(uint32_t worker_world_size,
     return IncDcStatus::OK;
 }
 
-IncDcStatus LegacyPlanToLogicalPlanV2(const IncDcCombineReducePlan &legacy,
-                                      uint32_t worker_world_size,
-                                      uint32_t declared_max_topk,
-                                      IncDcCombineLogicalPlanV2 *out)
-{
-    if (out == nullptr || worker_world_size == 0) {
-        return IncDcStatus::INVALID_ARGUMENT;
-    }
-    out->abi_version = kIncDcCombineLogicalPlanAbiV2;
-    out->worker_world_size = worker_world_size;
-    out->declared_max_topk = declared_max_topk;
-    out->results.clear();
-    out->contributions.clear();
-    out->results.reserve(legacy.result_tokens.size());
-
-    uint32_t max_k = 0;
-    for (size_t ri = 0; ri < legacy.result_tokens.size(); ++ri) {
-        const auto &tok = legacy.result_tokens[ri];
-        IncDcLogicalResultV2 res{};
-        // Legacy source_rank/source_token are destination fields.
-        res.dst_rank = static_cast<uint32_t>(tok.source_rank < 0 ? 0 : tok.source_rank);
-        res.dst_local_row =
-            static_cast<uint32_t>(tok.source_token < 0 ? 0 : tok.source_token);
-        res.contribution_begin = static_cast<uint32_t>(out->contributions.size());
-        const int32_t begin = tok.contrib_begin;
-        const int32_t count = tok.contrib_count;
-        if (begin < 0 || count < 0 ||
-            static_cast<size_t>(begin + count) > legacy.contributions.size()) {
-            return IncDcStatus::INVALID_ARGUMENT;
-        }
-        for (int32_t i = 0; i < count; ++i) {
-            const auto &lc = legacy.contributions[static_cast<size_t>(begin + i)];
-            IncDcLogicalContributionV2 c{};
-            c.contribution_uid =
-                (static_cast<uint64_t>(lc.assignment_id) << 32) |
-                static_cast<uint32_t>(ri * 64 + i);
-            c.result_id = static_cast<uint32_t>(ri);
-            c.ordinal = static_cast<uint32_t>(i);
-            c.contributor_rank =
-                static_cast<uint32_t>(lc.contributor_rank < 0 ? 0 : lc.contributor_rank);
-            c.contributor_local_row = lc.expert_output_offset;
-            c.weight = lc.weight;
-            // ingress_slot intentionally dropped (physical layer).
-            out->contributions.push_back(c);
-        }
-        res.contribution_count = static_cast<uint32_t>(count);
-        max_k = std::max(max_k, res.contribution_count);
-        out->results.push_back(res);
-    }
-    if (out->declared_max_topk == 0) {
-        out->declared_max_topk = max_k;
-    }
-    out->result_count = static_cast<uint32_t>(out->results.size());
-    out->contribution_count =
-        static_cast<uint32_t>(out->contributions.size());
-    FinalizeUniform(out);
-    out->semantic_digest = ComputeLogicalPlanSemanticDigest(*out);
-    return IncDcStatus::OK;
-}
-
 IncDcStatus ValidateLogicalPlanV2(const IncDcCombineLogicalPlanV2 &plan,
                                   IncDcLogicalPlanValidateReport *report)
 {

@@ -63,81 +63,34 @@ bool LookupIngressChannel(const IncDcTopologyDescriptor &topo, uint32_t worker,
     return false;
 }
 
-IncDcStatus BuildAllToAllIncReachability(IncDcTopologyDescriptor *topo)
+IncDcStatus BuildSingleIncTopology(uint32_t worker_count,
+                                   uint32_t owner_count,
+                                   uint32_t worker_pe_base,
+                                   uint32_t inc_pe,
+                                   uint64_t generation,
+                                   IncDcTopologyDescriptor *out)
 {
-    if (topo == nullptr || topo->worker_count == 0 || topo->inc_count == 0) {
-        return IncDcStatus::INVALID_ARGUMENT;
-    }
-    topo->worker_inc_offsets.assign(topo->worker_count + 1u, 0);
-    topo->worker_inc_indices.clear();
-    topo->worker_inc_indices.reserve(
-        static_cast<size_t>(topo->worker_count) * topo->inc_count);
-    for (uint32_t w = 0; w < topo->worker_count; ++w) {
-        topo->worker_inc_offsets[w] =
-            static_cast<uint32_t>(topo->worker_inc_indices.size());
-        for (uint32_t i = 0; i < topo->inc_count; ++i) {
-            topo->worker_inc_indices.push_back(i);
-        }
-    }
-    topo->worker_inc_offsets[topo->worker_count] =
-        static_cast<uint32_t>(topo->worker_inc_indices.size());
-    AssignSequentialChannels(topo);
-    topo->topology_digest = ComputeTopologyDigest(*topo);
-    return IncDcStatus::OK;
-}
-
-IncDcStatus BuildExplicitPairedTopology(uint32_t worker_count, uint32_t inc_count,
-                                        uint32_t owner_count_per_inc,
-                                        uint32_t worker_pe_base,
-                                        uint32_t inc_pe_base,
-                                        uint64_t generation,
-                                        IncDcTopologyDescriptor *out)
-{
-    if (out == nullptr || worker_count == 0 || inc_count == 0 ||
-        owner_count_per_inc == 0) {
+    if (out == nullptr || worker_count == 0u || owner_count == 0u) {
         return IncDcStatus::INVALID_ARGUMENT;
     }
     *out = IncDcTopologyDescriptor{};
     out->worker_count = worker_count;
-    out->inc_count = inc_count;
-    out->owner_count_per_inc = owner_count_per_inc;
+    out->inc_count = 1u;
+    out->owner_count_per_inc = owner_count;
     out->topology_generation = generation;
     out->worker_pe_ids.resize(worker_count);
-    out->inc_pe_ids.resize(inc_count);
-    for (uint32_t w = 0; w < worker_count; ++w) {
-        out->worker_pe_ids[w] = worker_pe_base + w;
+    for (uint32_t worker = 0u; worker < worker_count; ++worker) {
+        out->worker_pe_ids[worker] = worker_pe_base + worker;
     }
-    for (uint32_t i = 0; i < inc_count; ++i) {
-        out->inc_pe_ids[i] = inc_pe_base + i;
+    out->inc_pe_ids = {inc_pe};
+    out->worker_inc_offsets.resize(worker_count + 1u);
+    out->worker_inc_indices.assign(worker_count, 0u);
+    for (uint32_t worker = 0u; worker <= worker_count; ++worker) {
+        out->worker_inc_offsets[worker] = worker;
     }
-    out->worker_inc_offsets.assign(worker_count + 1u, 0);
-    out->worker_inc_indices.clear();
-    for (uint32_t w = 0; w < worker_count; ++w) {
-        out->worker_inc_offsets[w] =
-            static_cast<uint32_t>(out->worker_inc_indices.size());
-        out->worker_inc_indices.push_back(w % inc_count);
-    }
-    out->worker_inc_offsets[worker_count] =
-        static_cast<uint32_t>(out->worker_inc_indices.size());
     AssignSequentialChannels(out);
     out->topology_digest = ComputeTopologyDigest(*out);
     return IncDcStatus::OK;
-}
-
-IncDcStatus BuildExplicitAllToAllTopology(uint32_t worker_count,
-                                          uint32_t inc_count,
-                                          uint32_t owner_count_per_inc,
-                                          uint32_t worker_pe_base,
-                                          uint32_t inc_pe_base,
-                                          uint64_t generation,
-                                          IncDcTopologyDescriptor *out)
-{
-    if (BuildExplicitPairedTopology(worker_count, inc_count, owner_count_per_inc,
-                                    worker_pe_base, inc_pe_base, generation,
-                                    out) != IncDcStatus::OK) {
-        return IncDcStatus::INVALID_ARGUMENT;
-    }
-    return BuildAllToAllIncReachability(out);
 }
 
 IncDcStatus ValidateTopologyDescriptor(const IncDcTopologyDescriptor &topo,
@@ -150,7 +103,8 @@ IncDcStatus ValidateTopologyDescriptor(const IncDcTopologyDescriptor &topo,
         rep->first_error = msg;
         return IncDcStatus::INVALID_ARGUMENT;
     };
-    if (topo.worker_count == 0 || topo.inc_count == 0) return fail("empty_counts");
+    if (topo.worker_count == 0) return fail("empty_worker_count");
+    if (topo.inc_count != 1u) return fail("single_inc_required");
     if (topo.owner_count_per_inc == 0) return fail("owner_count_zero");
     if (topo.worker_pe_ids.size() != topo.worker_count) return fail("worker_pe_size");
     if (topo.inc_pe_ids.size() != topo.inc_count) return fail("inc_pe_size");

@@ -177,11 +177,10 @@ Host 侧计划编译链（概念顺序）：
 
 | 你应该读的稳定名（CMake 实际编译） | 仍可能见到的历史/CMake 名 | 说明 |
 |---|---|---|
-| `inc_dc_combine_kernel.cpp` | **target** 名 `inc_dc_sv2_dyn_csr_combine_kernel`；磁盘上或有未挂接的 `inc_dc_sv2_*_kernel.cpp` | **产品数据面 = dyn-CSR**；勿把未挂接副本当第二套必需源 |
-| `inc_dc_combine_launcher.cpp` | **exe** 名 `inc_dc_sv2_dyn_csr_combine`；或有未挂接的 `*_main.cpp` | `run_single_inc_dyn_case.sh` 跑的是该 exe |
-| `inc_dc_combine_runtime_abi.h` | 或有未挂接的 `inc_dc_sv2_dyn_csr_combine.h` | `DynCsrCtrl`，magic `'DYCS'` |
-| `inc_dc_combine_logical_plan.*` | 或有未挂接的 `*_logical_plan_v2.*` | **当前构建入口已是 V2 字段**；不是「v1 + v2 两套并行必需」 |
-| `inc_dc_combine_packed_transport.h` / `inc_combine_bw05.h` | bw03/bw05 | 历史 packed 布局 / 间接 include；**不是** Framework/native 热路径 |
+| `inc_dc_combine_kernel.cpp` | **target** 名 `inc_dc_sv2_dyn_csr_combine_kernel` | **产品数据面 = dyn-CSR**；target 名仅为兼容保留 |
+| `inc_dc_combine_launcher.cpp` | **exe** 名 `inc_dc_sv2_dyn_csr_combine` | `run_single_inc_dyn_case.sh` 跑的是该 exe |
+| `inc_dc_combine_runtime_abi.h` | `DynCsrCtrl`，magic `'DYCS'` | 唯一 host/device ABI 头 |
+| `inc_dc_combine_logical_plan.*` | 当前结构即 V2 字段 | 唯一逻辑计划实现 |
 
 构建真相：打开 `examples/inc/CMakeLists.txt` 搜文件名；详表见 [`combine/README.md`](combine/README.md)。
 
@@ -193,7 +192,7 @@ Host 侧计划编译链（概念顺序）：
 IncDcCombineLogicalPlanV2          （与物理拓扑无关的 contribution/result）
         │
         ▼
-IncDcTopologyDescriptor            （worker↔INC 可达性；单 INC 用 AllToAll 显式拓扑）
+IncDcTopologyDescriptor            （worker↔唯一 INC 的显式可达性）
         │
         ▼
 CompileLogicalPlanToExecution      → IncDcCompiledExecutionPlan
@@ -212,7 +211,7 @@ contribution 顺序跟 Dispatch 物理行 / assignment 对齐，避免「正反�
 - `IncDcLogicalResultV2`：结果落在哪个 `dst_rank/row`，需要多少 contribution。
 - `IncDcLogicalContributionV2`：谁贡献（`contributor_rank/row`）、ordinal、weight、uid。
 
-非法拓扑（例如没有公共 INC 可归约）在 compile 阶段 **fail-closed**，不会静默错路由。
+非法拓扑（worker 无法到达唯一 INC）在 compile 阶段 **fail-closed**，不会静默错路由。
 
 #### 3.3 设备：三个阶段
 
@@ -236,7 +235,7 @@ pe == W  →  INC reducer +（可拆分的）TX fan-back lanes
 
 - 按 **result CSR / owner worklist** 扫自己该管的 result（注释强调：**不要**按 `source=0..N` 盲扫）。
 - 等齐 expected contributions → FP16→FP32 **加权向量归约**  
-  （`inc_dc_combine_vector_reduce_aicore.h` / `inc_dc_sv2_c0_vector_reduce_aicore.h`；fail-closed，禁止静默标量回退）。
+  （`inc_dc_combine_vector_reduce_aicore.h`；fail-closed，禁止静默标量回退）。
 - 写到 `output_off`，并置 `result_tx_ready` 一类信号供 TX。
 
 **阶段 3 — Fan-back TX**  
@@ -293,7 +292,7 @@ Launcher 也可依赖 host/stream 同步——读脚本/环境变量时注意两
 7. `combine/inc_dc_combine_kernel.cpp`：先抓 producer → owner reduce → split TX 控制流，再看优化分支  
 8. `runtime/inc_dc_native_inc_service.h` + 浏览 `inc_dc_native_full_example_main.cpp`  
 9. `../common/api/inc_dc_framework_c_api.h` / `inc_dc_easy_api.h`（你对外该承诺的边界）  
-10. Packed/BW05 **仅作背景**，不要当成当前 Framework 热路径  
+10. `scripts/single_inc/` 的拓扑与空闲门禁
 
 ---
 
@@ -329,7 +328,7 @@ Host 逻辑回归（不占 NPU）：`../tests/common/`、`../tests/single_inc/`�
 ### 7. 常见误读（请避开）
 
 1. **以为本树还包含独立的「SwiGLU / expert 计算」阶段**——这里是通信库；expert GEMM 在框架或 `fusion_kernel/`（**不进** `examples/inc/CMakeLists.txt`）参考集成里。  
-2. **把 bw05 packed / 磁盘上的 `inc_dc_sv2_*` 未挂接副本当成 Easy 热路径或第二套必需源**——Native Combine 走 dyn-CSR；以 CMake 列表为准。
+2. **根据旧报告里的 target 名寻找第二套源文件**——当前 Combine 只有稳定名 dyn-CSR 源；`sv2` 仅保留在 target/符号兼容层。
 3. **把 `WorkerDirect` / bypass INC 当成可交付 Dispatch 路径**——违反 H1；资格化固定关闭。
 4. **混淆多层 generation**：ABI 常量 / 每 op cacheline 信号 / Framework `operation_generation` 不是同一个变量。
 5. **跳过 start-gate / ready 语义直接看 putmem**——同步点才是正确性核心。

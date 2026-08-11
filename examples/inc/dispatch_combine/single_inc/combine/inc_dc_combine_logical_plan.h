@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 
-#include "inc_combine_plan.h"
 #include "inc_dc_types.h"
 
 namespace inc {
@@ -60,11 +59,6 @@ IncDcStatus BuildSyntheticLogicalPlanV2(uint32_t worker_world_size,
                                         uint32_t declared_max_topk,
                                         uint32_t result_count, uint32_t mode,
                                         IncDcCombineLogicalPlanV2 *out);
-
-IncDcStatus LegacyPlanToLogicalPlanV2(const IncDcCombineReducePlan &legacy,
-                                      uint32_t worker_world_size,
-                                      uint32_t declared_max_topk,
-                                      IncDcCombineLogicalPlanV2 *out);
 
 uint64_t ComputeLogicalPlanSemanticDigest(const IncDcCombineLogicalPlanV2 &plan);
 

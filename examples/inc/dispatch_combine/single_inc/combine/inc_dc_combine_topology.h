@@ -31,27 +31,15 @@ struct IncDcTopologyValidateReport {
     std::string first_error;
 };
 
-// Paired-like reachability: worker w reaches only INC (w % inc_count).
-// Multi-contributor results that span workers with disjoint INC sets will
-// fail-closed at compile (no_common_reduction_inc).
-IncDcStatus BuildExplicitPairedTopology(uint32_t worker_count, uint32_t inc_count,
-                                        uint32_t owner_count_per_inc,
-                                        uint32_t worker_pe_base,
-                                        uint32_t inc_pe_base,
-                                        uint64_t generation,
-                                        IncDcTopologyDescriptor *out);
-
-// Explicit all-to-all reachability + channel map (device baseline for scheme A).
-IncDcStatus BuildExplicitAllToAllTopology(uint32_t worker_count,
-                                          uint32_t inc_count,
-                                          uint32_t owner_count_per_inc,
-                                          uint32_t worker_pe_base,
-                                          uint32_t inc_pe_base,
-                                          uint64_t generation,
-                                          IncDcTopologyDescriptor *out);
-
-// Rewrite reachability CSR to all-to-all and rebuild channel map + digest.
-IncDcStatus BuildAllToAllIncReachability(IncDcTopologyDescriptor *topo);
+// Build the only supported execution topology: every worker reaches one INC.
+// The descriptor remains explicit so a caller can map logical worker/INC PEs
+// to any physical devices without changing the plan compiler.
+IncDcStatus BuildSingleIncTopology(uint32_t worker_count,
+                                   uint32_t owner_count,
+                                   uint32_t worker_pe_base,
+                                   uint32_t inc_pe,
+                                   uint64_t generation,
+                                   IncDcTopologyDescriptor *out);
 
 // Lookup explicit channel for (worker, inc). Returns false if no edge.
 bool LookupIngressChannel(const IncDcTopologyDescriptor &topo, uint32_t worker,

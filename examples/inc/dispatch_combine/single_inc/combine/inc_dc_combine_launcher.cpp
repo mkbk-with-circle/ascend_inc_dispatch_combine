@@ -1,7 +1,7 @@
 /**
  * DYN3D/DYN3C multi-rank CSR combine correctness host.
  * Usage:
- *   bin n_pes pe ipport npus first_npu W I K results hidden mode
+ *   bin n_pes pe ipport npus first_npu W K results hidden mode
  * mode: 0=rr 1=multi_ordinal_zero_worker 2=ragged 3=skew_all_to_one
  *       4=half_worker_skew
  *       5..8=contribution-conserving hot-rank skew (12.5/37.5/62.5/87.5%)
@@ -415,8 +415,8 @@ static IncDcStatus ReassignPackedOwnerBlocks(
 
 int main(int argc, char **argv)
 {
-    if (argc < 12) {
-        std::cerr << "Usage: bin n_pes pe ipport npus first_npu W I K results "
+    if (argc < 11) {
+        std::cerr << "Usage: bin n_pes pe ipport npus first_npu W K results "
                      "hidden mode\n";
         return 2;
     }
@@ -426,12 +426,12 @@ int main(int argc, char **argv)
     g_npus = std::atoi(argv[4]);
     first_npu = std::atoi(argv[5]);
     const uint32_t W = static_cast<uint32_t>(std::atoi(argv[6]));
-    const uint32_t I = static_cast<uint32_t>(std::atoi(argv[7]));
-    const uint32_t K = static_cast<uint32_t>(std::atoi(argv[8]));
-    const uint32_t results = static_cast<uint32_t>(std::atoi(argv[9]));
-    const uint32_t hidden = static_cast<uint32_t>(std::atoi(argv[10]));
-    const uint32_t mode = static_cast<uint32_t>(std::atoi(argv[11]));
-    if (n_pes <= 0 || pe < 0 || pe >= n_pes || W < 1u || I < 1u ||
+    constexpr uint32_t I = 1u;
+    const uint32_t K = static_cast<uint32_t>(std::atoi(argv[7]));
+    const uint32_t results = static_cast<uint32_t>(std::atoi(argv[8]));
+    const uint32_t hidden = static_cast<uint32_t>(std::atoi(argv[9]));
+    const uint32_t mode = static_cast<uint32_t>(std::atoi(argv[10]));
+    if (n_pes <= 0 || pe < 0 || pe >= n_pes || W < 1u ||
         n_pes != static_cast<int>(W + I) || g_npus <= 0 ||
         first_npu < 0) {
         return 2;
@@ -647,13 +647,13 @@ int main(int argc, char **argv)
     // explicit split-TX environment knob remains available for diagnostics.
 
     IncDcTopologyDescriptor topo{};
-    if (BuildExplicitAllToAllTopology(W, I, owner_count, /*wpe*/ 0,
-                                      /*ipe*/ W, 1, &topo) != IncDcStatus::OK) {
+    if (BuildSingleIncTopology(W, owner_count, /*wpe*/ 0,
+                               /*ipe*/ W, 1, &topo) != IncDcStatus::OK) {
         return 1;
     }
-    // Map PE ids to actual ranks: workers 0..W-1, incs W..W+I-1
+    // Map PE ids to actual ranks: workers 0..W-1, single INC W.
     for (uint32_t w = 0; w < W; ++w) topo.worker_pe_ids[w] = w;
-    for (uint32_t i = 0; i < I; ++i) topo.inc_pe_ids[i] = W + i;
+    topo.inc_pe_ids[0] = W;
     topo.topology_digest = ComputeTopologyDigest(topo);
 
     IncDcCompiledExecutionPlan exec{};

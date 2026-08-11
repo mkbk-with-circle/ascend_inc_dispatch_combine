@@ -80,7 +80,7 @@ trap cleanup_owned_ranks EXIT INT TERM
 for ((pe=0; pe<NPES; ++pe)); do
   timeout --kill-after=5 "$TIMEOUT_SEC" "$BIN" \
     "$NPES" "$pe" "tcp://127.0.0.1:${port}" 16 0 \
-    "$W" 1 "$K" "$R" "$H" "$MODE" \
+    "$W" "$K" "$R" "$H" "$MODE" \
     >"$LOG_DIR/pe${pe}.log" 2>&1 &
   pids+=("$!")
   echo "$!" >>"$LOG_DIR/pids.txt"

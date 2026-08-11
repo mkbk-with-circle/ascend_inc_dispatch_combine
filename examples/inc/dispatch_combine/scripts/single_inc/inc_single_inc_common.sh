@@ -34,24 +34,9 @@ inc_single_worker_phys() {
     echo "${requested[*]}"
     return 0
   fi
-  # Preserve the bandwidth-qualified profile on the current platform.  No
-  # production kernel depends on these IDs: another platform may supply an
-  # explicit profile, or use the live-topology fallback below.
-  if [[ "$inc_phy" -eq 0 ]]; then
-    case "$workers" in
-    2) echo "2 4"; return 0 ;;
-    4) echo "2 4 6 8"; return 0 ;;
-    # Live simultaneous fan-in qualification is part of placement, not just
-    # the topology label.  Phy2..9 are all HCCS_SW to Phy0 and measured within
-    # 1.4% per-worker bandwidth skew; the former every-card-first selection
-    # showed ~23% skew under eight-way load despite the same topology class.
-    8) echo "2 3 4 5 6 7 8 9"; return 0 ;;
-    esac
-  fi
-
-  # Portable fallback: discover peers having the same switched-HCCS class.
-  # Qualification can pin a measured profile through WORKER_PHYS without
-  # rebuilding anything.
+  # Portable default: discover peers in the live HCCS fabric.  A measured
+  # machine profile can pin a preferred set through the scale-specific
+  # WORKER_PHYS variables above without rebuilding anything.
   local topo row candidates=() col relation
   topo=$(npu-smi info -t topo -i 0 2>/dev/null) || return 2
   row=$(awk -v phy_key="Phy-ID${inc_phy}" -v npu_key="NPU${inc_phy}" \

@@ -23,40 +23,6 @@ bool WorkerReachesInc(const IncDcTopologyDescriptor &topo, uint32_t worker,
     return LookupIngressChannel(topo, worker, inc, &ch);
 }
 
-// Intersection of reachable INC sets for all contributors of one result.
-// Returns sorted unique INC indices; empty => no_common_reduction_inc.
-std::vector<uint32_t> CommonReachableIncs(
-    const IncDcTopologyDescriptor &topo,
-    const IncDcCombineLogicalPlanV2 &logical, uint32_t result_id)
-{
-    const auto &r = logical.results[result_id];
-    if (r.contribution_count == 0u) {
-        // Empty result: any INC is fine; pick 0 if present.
-        std::vector<uint32_t> all;
-        for (uint32_t i = 0; i < topo.inc_count; ++i) all.push_back(i);
-        return all;
-    }
-    std::vector<uint8_t> mask(topo.inc_count, 1);
-    for (uint32_t j = 0; j < r.contribution_count; ++j) {
-        const auto &lc = logical.contributions[r.contribution_begin + j];
-        std::vector<uint8_t> local(topo.inc_count, 0);
-        const uint32_t b = topo.worker_inc_offsets[lc.contributor_rank];
-        const uint32_t e = topo.worker_inc_offsets[lc.contributor_rank + 1];
-        for (uint32_t i = b; i < e; ++i) {
-            const uint32_t inc = topo.worker_inc_indices[i];
-            if (inc < topo.inc_count) local[inc] = 1;
-        }
-        for (uint32_t i = 0; i < topo.inc_count; ++i) {
-            mask[i] = static_cast<uint8_t>(mask[i] & local[i]);
-        }
-    }
-    std::vector<uint32_t> out;
-    for (uint32_t i = 0; i < topo.inc_count; ++i) {
-        if (mask[i]) out.push_back(i);
-    }
-    return out;
-}
-
 } // namespace
 
 uint64_t ComputeExecutionDigest(const IncDcCompiledExecutionPlan &plan)
@@ -136,29 +102,19 @@ IncDcStatus CompileLogicalPlanToExecution(
     out->result_home_inc.assign(logical.result_count, 0);
     out->result_home_owner.assign(logical.result_count, 0);
 
-    const uint32_t owners_total =
-        topology.inc_count * topology.owner_count_per_inc;
+    const uint32_t owners_total = topology.owner_count_per_inc;
     std::vector<std::vector<uint32_t>> per_owner(owners_total);
     std::vector<std::vector<uint32_t>> per_owner_results(owners_total);
-    // Owner rotation is local to each home INC.  Using the global result id
-    // here couples owner coverage to gcd(inc_count, owner_count_per_inc):
-    // e.g. I=8/O=20 would exercise only five owners on each INC.  A local
-    // ordinal keeps every INC balanced for arbitrary rank/owner counts.
-    std::vector<uint32_t> next_owner_per_inc(topology.inc_count, 0u);
+    uint32_t next_owner = 0u;
 
     uint32_t sched_i = 0;
     for (uint32_t ri = 0; ri < logical.result_count; ++ri) {
         out->result_offsets[ri] = sched_i;
         const auto &r = logical.results[ri];
-        const auto commons = CommonReachableIncs(topology, logical, ri);
-        if (commons.empty()) {
-            rep->first_error = "no_common_reduction_inc";
-            return IncDcStatus::INVALID_ARGUMENT;
-        }
-        const uint32_t home_inc = commons[ri % commons.size()];
+        constexpr uint32_t home_inc = 0u;
         const uint32_t home_owner =
-            next_owner_per_inc[home_inc] % topology.owner_count_per_inc;
-        ++next_owner_per_inc[home_inc];
+            next_owner % topology.owner_count_per_inc;
+        ++next_owner;
         out->result_home_inc[ri] = home_inc;
         out->result_home_owner[ri] = home_owner;
 
@@ -203,12 +159,10 @@ IncDcStatus CompileLogicalPlanToExecution(
             out->schedule[sched_i] = cc;
             out->contribution_entry_indices[li] = sched_i;
 
-            const uint32_t owner_flat =
-                home_inc * topology.owner_count_per_inc + home_owner;
-            per_owner[owner_flat].push_back(sched_i);
-            if (per_owner_results[owner_flat].empty() ||
-                per_owner_results[owner_flat].back() != ri) {
-                per_owner_results[owner_flat].push_back(ri);
+            per_owner[home_owner].push_back(sched_i);
+            if (per_owner_results[home_owner].empty() ||
+                per_owner_results[home_owner].back() != ri) {
+                per_owner_results[home_owner].push_back(ri);
             }
             ++sched_i;
         }
@@ -368,8 +322,7 @@ IncDcStatus ValidateCompiledExecutionPlan(
         }
     }
 
-    const uint32_t owners_total =
-        plan.topology.inc_count * plan.topology.owner_count_per_inc;
+    const uint32_t owners_total = plan.topology.owner_count_per_inc;
     if (plan.owner_worklist_offsets.size() != owners_total + 1u) {
         return fail("owner_worklist_offsets_size");
     }

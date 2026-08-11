@@ -69,8 +69,8 @@ bool BuildNativeCombinePreparedWorkspace(
     const uint32_t workers = logical.worker_world_size;
     const uint32_t owners = resources.combine_inc_aiv;
     IncDcTopologyDescriptor topology{};
-    if (BuildExplicitAllToAllTopology(workers, 1u, owners, 0u, workers, 1u,
-                                      &topology) != IncDcStatus::OK) {
+    if (BuildSingleIncTopology(workers, owners, 0u, workers, 1u,
+                               &topology) != IncDcStatus::OK) {
         return false;
     }
     for (uint32_t rank = 0u; rank < workers; ++rank)

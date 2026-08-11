@@ -12,11 +12,9 @@ struct IncDcGroupConfig {
     uint32_t abi_version = kAbiVersion;
     uint32_t group_size = 0; // runtime 2..16
     int32_t local_rank = -1;
-    int32_t switch_rank = -1; // SHMEM PE of paired INC for this worker; single-INC = group_size
+    int32_t switch_rank = -1; // SHMEM PE of the single INC
     int32_t inc_logical_pe = -1;
     const int32_t *worker_pes = nullptr; // length=group_size
-    const int32_t *inc_pes = nullptr; // optional length=group_size (paired topology)
-    uint32_t num_inc = 0; // 1 single-INC, else group_size paired
     uint32_t num_global_experts = 0;
     const int32_t *expert_to_rank = nullptr; // length=num_global_experts
     uint32_t max_topk = 0;

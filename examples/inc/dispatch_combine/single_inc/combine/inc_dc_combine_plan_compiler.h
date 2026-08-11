@@ -14,7 +14,7 @@ namespace dc {
 
 struct IncDcCompiledContribution {
     uint32_t logical_contribution_index = 0;
-    uint32_t inc_index = 0;       // == result home_inc
+    uint32_t inc_index = 0;       // always 0: the single INC
     uint32_t owner_index = 0;     // == result home_owner
     uint32_t ingress_channel = 0; // from topology edge map
     uint32_t ingress_slot = 0;
@@ -26,10 +26,10 @@ struct IncDcCompiledContribution {
 struct IncDcCompiledExecutionPlan {
     IncDcTopologyDescriptor topology{};
     std::vector<IncDcCompiledContribution> schedule;
-    // Per-result unique home (scheme A single-stage reduce).
+    // Per-result unique home (single INC, one owner in its reduce cohort).
     std::vector<uint32_t> result_home_inc;
     std::vector<uint32_t> result_home_owner;
-    // CSR over owners: flattened owner id = inc * owners_per_inc + owner
+    // CSR over the single INC's owners.
     std::vector<uint32_t> owner_worklist_offsets; // size owners_total+1
     std::vector<uint32_t> owner_worklist_entries; // indices into schedule
     // Device CSR views for results
@@ -50,9 +50,9 @@ struct IncDcPlanCompileReport {
     std::string first_error;
 };
 
-// Compile LogicalPlan → single-stage home-INC execution plan.
+// Compile LogicalPlan → single-INC execution plan.
 // element_bytes = sizeof(input element); row_bytes = checked_mul(hidden, element_bytes).
-// Fail-closed with no_common_reduction_inc when contributors have empty INC intersection.
+// Fail-closed when any contributor cannot reach the single INC.
 IncDcStatus CompileLogicalPlanToExecution(
     const IncDcCombineLogicalPlanV2 &logical,
     const IncDcTopologyDescriptor &topology, uint32_t hidden,
