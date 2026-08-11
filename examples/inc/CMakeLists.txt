@@ -14,16 +14,12 @@ set(INC_DC_SINGLE_DISPATCH_DIR ${INC_DC_SINGLE_DIR}/dispatch)
 set(INC_DC_SINGLE_COMBINE_DIR ${INC_DC_SINGLE_DIR}/combine)
 set(INC_DC_SINGLE_PLANNING_DIR ${INC_DC_SINGLE_DIR}/planning)
 set(INC_DC_SINGLE_RUNTIME_DIR ${INC_DC_SINGLE_DIR}/runtime)
-set(INC_DC_MULTI_DIR ${INC_DC_DIR}/multi_inc)
-set(INC_DC_MULTI_PIPELINE_DIR ${INC_DC_MULTI_DIR}/pipeline)
-set(INC_DC_MULTI_TRANSPORT_DIR ${INC_DC_MULTI_DIR}/transport)
 set(INC_FUSION_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fusion_kernel/ascend)
 set(INC_DC_PUBLIC_INCLUDES
     ${INC_DC_COMMON_API_DIR} ${INC_DC_COMMON_PROTOCOL_DIR}
     ${INC_DC_COMMON_PLATFORM_DIR} ${INC_DC_SINGLE_DISPATCH_DIR}
     ${INC_DC_SINGLE_COMBINE_DIR} ${INC_DC_SINGLE_PLANNING_DIR}
-    ${INC_DC_SINGLE_RUNTIME_DIR} ${INC_DC_MULTI_PIPELINE_DIR}
-    ${INC_DC_MULTI_TRANSPORT_DIR} ${INC_FUSION_DIR})
+    ${INC_DC_SINGLE_RUNTIME_DIR} ${INC_FUSION_DIR})
 set(INC_HOST_INCLUDES
     ${PROJECT_SOURCE_DIR}/include ${INC_DC_PUBLIC_INCLUDES}
     ${PROJECT_SOURCE_DIR}/examples/utils ${PROJECT_SOURCE_DIR}/src/host)
@@ -257,32 +253,7 @@ target_link_libraries(inc_dc_native_full_example PRIVATE
     inc_dc_native_composite_backend inc_dc_native_inc_service)
 add_dependencies(inc_dc_native_full_example aclshmem_bootstrap_config_store)
 
-# Multi-INC destination-major persistent Dispatch.
-add_library(inc_dc_dn_ingress_transport_kernel SHARED
-    dispatch_combine/multi_inc/transport/inc_dc_dn_ingress_transport_kernel.cpp)
-inc_device_target(inc_dc_dn_ingress_transport_kernel)
-
-add_library(inc_dc_dn_pipeline_kernel SHARED
-    dispatch_combine/multi_inc/pipeline/inc_dc_dn_pipeline_kernel.cpp)
-inc_device_target(inc_dc_dn_pipeline_kernel)
-add_executable(inc_dc_dn_pipeline
-    dispatch_combine/multi_inc/pipeline/inc_dc_dn_pipeline_main.cpp)
-inc_host_target(inc_dc_dn_pipeline)
-target_link_libraries(inc_dc_dn_pipeline PRIVATE shmem
-    inc_dc_dn_pipeline_kernel inc_dc_dn_ingress_transport_kernel)
-add_dependencies(inc_dc_dn_pipeline aclshmem_bootstrap_config_store)
-
-add_library(inc_dc_dn_pipeline_overlap_kernel SHARED
-    dispatch_combine/multi_inc/pipeline/inc_dc_dn_pipeline_kernel.cpp)
-inc_device_target(inc_dc_dn_pipeline_overlap_kernel)
-add_executable(inc_dc_dn_pipeline_overlap
-    dispatch_combine/multi_inc/pipeline/inc_dc_dn_pipeline_main.cpp)
-inc_host_target(inc_dc_dn_pipeline_overlap)
-target_link_libraries(inc_dc_dn_pipeline_overlap PRIVATE shmem
-    inc_dc_dn_pipeline_overlap_kernel inc_dc_dn_ingress_transport_kernel)
-add_dependencies(inc_dc_dn_pipeline_overlap aclshmem_bootstrap_config_store)
-
-# Random token-plan generator used by the two retained sweeps.
+# Random token-plan generator used by the retained single-INC sweeps.
 add_executable(inc_dc_os_random_plan
     dispatch_combine/single_inc/tools/inc_dc_os_random_plan.cpp
     dispatch_combine/single_inc/combine/inc_dc_combine_logical_plan.cpp

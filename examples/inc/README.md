@@ -2,8 +2,7 @@
 
 本目录只保留两套正式交付：
 
-- `dispatch_combine/`：单 INC 与多 INC 的 Dispatch/Combine、公开 API、测试和
-  资格化脚本；
+- `dispatch_combine/`：单 INC Dispatch/Combine、公开 API、测试和资格化脚本；
 - `fusion_kernel/`：ABI 13 单 INC fusion kernel、prepared API、vLLM-Ascend
   接入层、测试与运行手册。
 
@@ -26,8 +25,7 @@ Fusion trace 解析入口见 [`fusion_kernel/tools/`](fusion_kernel/tools/README
 
 - Fusion 最终资格化：[报告](../../docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/README.md) · [CSV](../../docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/results.csv)；
 - ABI 13 sweep 与 vLLM 对照：[报告](../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md) · [CSV](../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/results.csv)；
-- 单/多 INC 状态：`docs/inc/report/single_inc_LIVE_STATUS.md` 和
-  `docs/inc/report/multi_inc_delivery_validation_gate.json`。
+- 单 INC 状态：[`single_inc_LIVE_STATUS.md`](../../docs/inc/report/single_inc_LIVE_STATUS.md)。
 
 ## New here? / 新人从这里开始
 
@@ -44,7 +42,7 @@ runtime wiring, how to run one case), read:
 [`dispatch_combine/single_inc/SWEEP_STATUS.md`](dispatch_combine/single_inc/SWEEP_STATUS.md)
 
 Then skim `dispatch_combine/README.md` for how `common/`, `single_inc/`,
-`multi_inc/`, `scripts/`, and `tests/` split ownership.
+`scripts/`, and `tests/` split ownership.
 
 Fusion 的协议、token-wave timeline、调用接口和 nb 复现命令分别见
 [`fusion_kernel/PRINCIPLES.md`](fusion_kernel/PRINCIPLES.md)、

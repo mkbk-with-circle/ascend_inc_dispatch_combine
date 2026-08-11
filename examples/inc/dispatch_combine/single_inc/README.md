@@ -14,10 +14,9 @@
 - Dispatch：worker 上传 → INC fan-out → 目标 worker 收齐。
 - Combine：各 worker 贡献 → INC 归约 → 结果 fan-back。
 
-### 为什么要有单 INC（而不是只有多 INC）？
+### 为什么使用单 INC？
 
 - 星型拓扑是当前资格化最完整、框架对接最清晰的路径（常驻 INC service + native backend）。
-- 与多 INC 共享 `../common/` 协议/平台，但 **不共享** runtime，避免两套数据面互相踩。
 
 ### 子目录
 
@@ -43,12 +42,10 @@ The **single-INC star topology** product: `W` workers + `1` INC.
 - Dispatch: worker upload → INC fan-out → destination workers.
 - Combine: contributions → INC reduce → result fan-back.
 
-### Why single-INC exists alongside multi-INC
+### Why single-INC
 
 - It is the most fully qualified path for framework integration (resident INC
   service + native backends).
-- It shares `../common/` protocol/platform policy but **not** the multi-INC
-  runtime, avoiding cross-coupling.
 
 ### Subdirectories
 

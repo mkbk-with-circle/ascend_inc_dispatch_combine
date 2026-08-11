@@ -1402,7 +1402,6 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                     ctrl->inc_count == 1u &&
                     ctrl->coalesced_chunk_bytes >
                         kIncDcPrivateMtePacketBytes;
-                const bool paired_rank_dedup_pipeline = false;
                 if (mn_rank_dedup_pipeline) {
                     // M:N bounded producer/consumer pipeline.  Most worker
                     // AIVs keep vector reduction throughput; a small cohort
@@ -1700,186 +1699,6 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                                             peer),
                                         sizeof(*peer));
                                 }
-                            }
-                        }
-                    }
-                } else if (paired_rank_dedup_pipeline) {
-                    // Split each pair into a reducer and a transport lane.
-                    // The reducer prepares chunk N+1 while its peer pushes
-                    // chunk N.  A one-credit generation handshake delays the
-                    // next visibility publication until the previous private
-                    // MTE has completed; no cache operation can invalidate an
-                    // in-flight source read.  Chunk ownership remains a pure
-                    // cyclic function of the runtime lane count.
-                    const uint32_t pair_count =
-                        ctrl->producer_lane_count / 2u;
-                    const bool transport_lane = lane >= pair_count;
-                    const uint32_t pair_index =
-                        transport_lane ? lane - pair_count : lane;
-                    const uint32_t pair_lane =
-                        transport_lane ? pair_index : pair_index + pair_count;
-                    __gm__ DynCsrProducerStats *peer_stats =
-                        reinterpret_cast<__gm__ DynCsrProducerStats *>(
-                            sym + ctrl->owner_stats_off +
-                            static_cast<uint64_t>(pair_lane) *
-                                sizeof(DynCsrProducerStats));
-                    pst->reserved[1] = 0u; // Reducer publication token.
-                    pst->reserved[3] = 0u; // Transport completion token.
-                    AscendC::PipeBarrier<PIPE_ALL>();
-                    DynDcci(reinterpret_cast<__gm__ uint8_t *>(pst),
-                            sizeof(*pst));
-
-                    uint32_t chunk_tiles =
-                        ctrl->tile_bytes == 0u
-                            ? 1u
-                            : ctrl->coalesced_chunk_bytes / ctrl->tile_bytes;
-                    if (chunk_tiles == 0u) chunk_tiles = 1u;
-                    for (uint32_t inc = 0u;
-                         inc < ctrl->inc_count && producer_ok; ++inc) {
-                        const uint32_t group =
-                            inc * ctrl->worker_count + ctrl->this_worker_rank;
-                        const uint32_t begin = inc_group_offsets[group];
-                        const uint32_t end = inc_group_offsets[group + 1u];
-                        if (end <= begin || end > ctrl->contribution_count) {
-                            continue;
-                        }
-                        const uint32_t home_pe =
-                            owner_home_pes[inc * ctrl->owner_count];
-                        const uint32_t first_i = inc_group_entries[begin];
-                        if (first_i >= ctrl->contribution_count ||
-                            sources[first_i] != ctrl->this_worker_rank ||
-                            slots[first_i] >= ctrl->max_ingress_slots ||
-                            home_pes[first_i] != home_pe) {
-                            producer_ok = false;
-                            break;
-                        }
-                        const uint32_t first_slot = slots[first_i];
-                        const uint32_t group_size = end - begin;
-                        const uint32_t chunk_count = static_cast<uint32_t>(
-                            (static_cast<uint64_t>(group_size) + chunk_tiles -
-                             1u) /
-                            chunk_tiles);
-                        const uint32_t sequence_span =
-                            (chunk_count + pair_count - 1u) / pair_count + 1u;
-                        const uint32_t token_base =
-                            ctrl->generation * sequence_span;
-                        for (uint32_t chunk = pair_index; chunk < chunk_count;
-                             chunk += pair_count) {
-                            const uint32_t sequence =
-                                chunk / pair_count + 1u;
-                            const uint32_t token = token_base + sequence;
-                            const uint32_t local_offset = chunk * chunk_tiles;
-                            const uint32_t first = begin + local_offset;
-                            const uint32_t count =
-                                end - first < chunk_tiles ? end - first
-                                                          : chunk_tiles;
-                            const uint32_t slot = first_slot + local_offset;
-                            __gm__ uint8_t *tile =
-                                sym + ctrl->ingress_off +
-                                static_cast<uint64_t>(slot) * ctrl->tile_bytes;
-                            const uint32_t packet_bytes =
-                                count * ctrl->tile_bytes;
-
-                            if (!transport_lane) {
-                                const uint64_t reduce_t0 = GetSystemCycle();
-                                bool valid = true;
-                                for (uint32_t p = first; p < first + count;
-                                     ++p) {
-                                    const uint32_t i = inc_group_entries[p];
-                                    if (i >= ctrl->contribution_count ||
-                                        sources[i] != ctrl->this_worker_rank ||
-                                        slots[i] != first_slot + (p - begin) ||
-                                        slots[i] >= ctrl->max_ingress_slots ||
-                                        home_pes[i] != home_pe ||
-                                        DynPrepareRankDedupContribution(
-                                            sym, ctrl, slots, i, true) !=
-                                            kDynCsrFailNone) {
-                                        valid = false;
-                                        break;
-                                    }
-                                }
-                                local_reduce_cycles +=
-                                    GetSystemCycle() - reduce_t0;
-                                if (!valid) {
-                                    producer_ok = false;
-                                    break;
-                                }
-
-                                // Reduction of this chunk overlaps the peer's
-                                // previous push.  Drain that push only before
-                                // publishing the newly produced GM bytes.
-                                if (sequence > 1u) {
-                                    const uint32_t previous = token - 1u;
-                                    uint32_t spins = 0u;
-                                    while (peer_stats->reserved[3] != previous &&
-                                           spins < ctrl->ready_spin_cap) {
-                                        DynDcci(
-                                            reinterpret_cast<__gm__ uint8_t *>(
-                                                peer_stats),
-                                            sizeof(*peer_stats));
-                                        if ((spins & 1023u) == 0u &&
-                                            DynAbortRequested(
-                                                ctrl, ctrl->generation)) {
-                                            break;
-                                        }
-                                        ++spins;
-                                    }
-                                    if (peer_stats->reserved[3] != previous) {
-                                        producer_ok = false;
-                                        break;
-                                    }
-                                }
-                                AscendC::PipeBarrier<PIPE_ALL>();
-                                dcci_entire_cache();
-                                pst->reserved[1] = token;
-                                AscendC::PipeBarrier<PIPE_ALL>();
-                                DynDcci(
-                                    reinterpret_cast<__gm__ uint8_t *>(pst),
-                                    sizeof(*pst));
-                            } else {
-                                uint32_t spins = 0u;
-                                while (peer_stats->reserved[1] != token &&
-                                       spins < ctrl->ready_spin_cap) {
-                                    DynDcci(
-                                        reinterpret_cast<__gm__ uint8_t *>(
-                                            peer_stats),
-                                        sizeof(*peer_stats));
-                                    if ((spins & 1023u) == 0u &&
-                                        DynAbortRequested(ctrl,
-                                                          ctrl->generation)) {
-                                        break;
-                                    }
-                                    ++spins;
-                                }
-                                if (peer_stats->reserved[1] != token) {
-                                    producer_ok = false;
-                                    break;
-                                }
-                                const uint64_t transport_t0 = GetSystemCycle();
-                                if (pst->issued == 0u) {
-                                    pst->first_issue_cycle = GetSystemCycle();
-                                }
-                                aclshmemx_mte_put_nbi(
-                                    tile, tile, stream_ub[0], stream_ub_tile,
-                                    packet_bytes,
-                                    static_cast<int32_t>(home_pe), 0u);
-                                AscendC::SetFlag<
-                                    AscendC::HardEvent::MTE3_MTE2>(0u);
-                                AscendC::WaitFlag<
-                                    AscendC::HardEvent::MTE3_MTE2>(0u);
-                                aclshmemx_mte_quiet();
-                                pst->last_quiet_cycle = GetSystemCycle();
-                                pst->issued += count;
-                                DynPublishStreamReady(
-                                    sym, ctrl, slot,
-                                    static_cast<int32_t>(home_pe), pst);
-                                local_transport_cycles +=
-                                    GetSystemCycle() - transport_t0;
-                                pst->reserved[3] = token;
-                                AscendC::PipeBarrier<PIPE_ALL>();
-                                DynDcci(
-                                    reinterpret_cast<__gm__ uint8_t *>(pst),
-                                    sizeof(*pst));
                             }
                         }
                     }
@@ -2395,8 +2214,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                 pst->reserved[2] = static_cast<uint32_t>(
                     local_reduce_cycles > 0xffffffffull
                         ? 0xffffffffull : local_reduce_cycles);
-                if (!mn_rank_dedup_pipeline &&
-                    !paired_rank_dedup_pipeline) {
+                if (!mn_rank_dedup_pipeline) {
                     pst->reserved[3] = static_cast<uint32_t>(
                         local_transport_cycles > 0xffffffffull
                             ? 0xffffffffull : local_transport_cycles);

@@ -4,13 +4,13 @@
 
 ### 这个目录是干什么的？
 
-`common/` 只保存 **跨产品共享** 或 **对框架公开** 的代码：不放单 INC / 多 INC 的具体 kernel。  
+`common/` 只保存 **跨模块共享** 或 **对框架公开** 的代码，不放单 INC 的具体 kernel。
 公开符号统一使用 `inc_dc_` 前缀，以保持 ABI 兼容。
 
 ### 为什么要单独成层？
 
 - 框架（Megatron / vLLM / 融合算子）应只依赖稳定 C ABI 与协议头，而不是某个拓扑的 `.cpp`。
-- 协议与平台策略被单 INC、多 INC、测试、脚本共同引用；集中放置可避免复制漂移。
+- 协议与平台策略被单 INC、测试、脚本共同引用；集中放置可避免复制漂移。
 - 示例放在这里做 C11 编译门禁，防止公开头文件「C++ 化」后破坏 C 接入。
 
 ### 子目录
@@ -28,8 +28,8 @@
 
 ### What is this directory?
 
-`common/` holds only **cross-product** or **framework-facing** code. Topology-specific
-kernels live under `single_inc/` / `multi_inc/`. Public symbols keep the `inc_dc_`
+`common/` holds only **cross-module** or **framework-facing** code. Product kernels
+live under `single_inc/`. Public symbols keep the `inc_dc_`
 prefix for ABI compatibility.
 
 ### Why this layer exists

@@ -1,7 +1,7 @@
 # Single-INC Dispatch / Combine — 快速了解
 
 面向 **完全没接触过本仓库**、但需要在半天内建立正确心智模型的读者。  
-本文只讲 **单 INC 星型拓扑** 的主逻辑；多 INC 见 `../multi_inc/`。  
+本文只讲当前保留的 **单 INC 星型拓扑** 主逻辑。
 所有结论均可在下列路径核对（以源码与 CMake 为准，不以历史文件名为准）。
 
 | 角色 | 权威路径 |
@@ -45,7 +45,6 @@
 dispatch_combine/
   common/          ← 公开 C ABI、协议、平台原语（框架只应依赖这里）
   single_inc/      ← 本文主角：星型 Dispatch + Combine + runtime
-  multi_inc/       ← 另一套拓扑，不要和 single_inc runtime 混读
   scripts/         ← 真机唯一推荐入口
   tests/           ← host 门禁（可不占 NPU）
 ```
@@ -330,12 +329,11 @@ Host 逻辑回归（不占 NPU）：`../tests/common/`、`../tests/single_inc/`�
 ### 7. 常见误读（请避开）
 
 1. **以为本树还包含独立的「SwiGLU / expert 计算」阶段**——这里是通信库；expert GEMM 在框架或 `fusion_kernel/`（**不进** `examples/inc/CMakeLists.txt`）参考集成里。  
-2. **把 multi_inc 的 queue 模型套到 single_inc**——星型只有一个 INC PE=`W`。  
-3. **把 bw05 packed / 磁盘上的 `inc_dc_sv2_*` 未挂接副本当成 Easy 热路径或第二套必需源**——Native Combine 走 dyn-CSR；以 CMake 列表为准。  
-4. **把 `WorkerDirect` / bypass INC 当成可交付 Dispatch 路径**——违反 H1；资格化固定关闭。  
-5. **混淆多层 generation**：ABI 常量 / 每 op cacheline 信号 / Framework `operation_generation` 不是同一个变量。  
-6. **跳过 start-gate / ready 语义直接看 putmem**——同步点才是正确性核心。  
-7. **手跑二进制绕过 `scripts/single_inc/` 却把结果当正式证据**——会绕过拓扑与空闲门禁。
+2. **把 bw05 packed / 磁盘上的 `inc_dc_sv2_*` 未挂接副本当成 Easy 热路径或第二套必需源**——Native Combine 走 dyn-CSR；以 CMake 列表为准。
+3. **把 `WorkerDirect` / bypass INC 当成可交付 Dispatch 路径**——违反 H1；资格化固定关闭。
+4. **混淆多层 generation**：ABI 常量 / 每 op cacheline 信号 / Framework `operation_generation` 不是同一个变量。
+5. **跳过 start-gate / ready 语义直接看 putmem**——同步点才是正确性核心。
+6. **手跑二进制绕过 `scripts/single_inc/` 却把结果当正式证据**——会绕过拓扑与空闲门禁。
 
 ---
 
@@ -361,7 +359,7 @@ Qualification scripts currently allow **W ∈ {2,4,8}**. Logical PE ≠ physical
 
 ### 1. Three maps
 
-**Code**: `common/` (public ABI) · `single_inc/` (this doc) · `multi_inc/` (other topology) · `scripts/` (device entry) · `tests/` (host gates).
+**Code**: `common/` (public ABI) · `single_inc/` (this doc) · `scripts/` (device entry) · `tests/` (host gates).
 
 **Call chain**: `Inference → Easy → Framework vtable → composite(native_dispatch + native_combine) → NativeIncService + kernels`.
 
@@ -406,8 +404,8 @@ bypass topology/idle gates):
 
 ### 7. Misreadings to avoid
 
-No expert GEMM in this tree (`fusion_kernel/` is reference-only, not in
-`examples/inc/CMakeLists.txt`). Do not apply multi-INC queue models. Do not
+No expert GEMM in this tree; the separately built `fusion_kernel/` owns fused
+communication and FFN. Do not
 treat bw05 or unwired `inc_dc_sv2_*` copies as the Easy hot path. Do not treat
 `WorkerDirect` as deliverable (H1). Do not conflate generation layers. Do not
 skip start-gate/ready. Do not present raw-bin runs as qualification evidence.

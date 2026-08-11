@@ -77,7 +77,7 @@ useful_GB/s    = operator_bytes / makespan_us / 1000
 | 同上，CANN 8.5 历史 | 140.12 GB/s | **仅迁移对照**，不是当前 ACTIVE gate 锚点 |
 | `910b2c-nb` | 本机 put-only：W2 多打一 min≈**42.71**、W4 多打一 min≈**85.45** GB/s 等 | 每条 HCCS peer raw≈28 GB/s；W2/W4 同时用 2/4 条 → raw 聚合≈56/112；实测约 raw 的 76%。见 ENV_STATUS §3 |
 
-物理审计线「单方向 192 GB/s」是多 INC / 全平面叙事里的上限讨论；**不能**拿来当单 INC W2/W4 的 gate。
+整机「单方向 192 GB/s」不是单 INC W2/W4 的拓扑屋顶，**不能**拿来当这里的 gate。
 
 #### 2.3 性能 Gate 公式（共享；数字用本机锚点）
 

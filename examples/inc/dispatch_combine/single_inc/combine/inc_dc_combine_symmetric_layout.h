@@ -69,7 +69,6 @@ struct IncDcDeviceJobDesc {
     uint32_t pipeline_mode = 0;      // 0=wave, 1=persistent
     uint32_t local_hidden_rows = 0;  // combine source capacity (contributor-local rows)
     uint32_t max_tokens_per_rank = 0; // recv/egress row stride per rank
-    uint32_t topology_mode = 0;      // 0=single INC, 1=paired/multi INC
 };
 
 struct IncDcDeviceRecvEntry {

@@ -9,7 +9,7 @@
 
 ### 为什么要有这一层？
 
-- 单 INC / 多 INC / Combine 向量归约共享同一套能力上限与 gather 原语，避免各写一套 UB/MTE 约定。
+- 单 INC Dispatch/Combine 共享同一套能力上限与 gather 原语，避免各写一套 UB/MTE 约定。
 - AIV 分配策略与具体 case 解耦：换拓扑或换卡型时只改策略，不改每个 kernel 的魔法常数。
 - `external_start_gate` 服务 overlap 资格化，默认路径几乎无开销，正式安装包可裁剪。
 
@@ -25,7 +25,7 @@
 | `inc_dc_fp16_aicore.h` | Device FP16 转换 | kernel 内 cast/量化路径共用 | 原语 |
 | `inc_dc_ub_tile_aicore.h` | UB 分块辅助 | 统一 tile 吃 UB，避免各 kernel 手算 | 原语 |
 | `inc_dc_vector_reduce_aicore.h` | 通用向量归约原语 | Combine 加权归约底座 | 原语 |
-| `inc_dc_gather_mte_aicore.h` | MTE gather（GM→UB→GM） | Dispatch/Combine/Multi-INC 共用；禁止逐字节 AIV 循环 | 原语 |
+| `inc_dc_gather_mte_aicore.h` | MTE gather（GM→UB→GM） | Dispatch/Combine 共用；禁止逐字节 AIV 循环 | 原语 |
 
 ---
 
@@ -39,7 +39,7 @@ shape lookup tables belong in `resource_policy`.
 
 ### Why this layer exists
 
-- Single-INC, multi-INC, and Combine share one capability ceiling and gather
+- Single-INC Dispatch and Combine share one capability ceiling and gather
   contract instead of inventing per-kernel UB/MTE rules.
 - AIV allocation is topology/hardware-driven so cases stay reproducible.
 - The optional start gate supports overlap qualification with near-zero cost
@@ -57,4 +57,4 @@ shape lookup tables belong in `resource_policy`.
 | `inc_dc_fp16_aicore.h` | Device FP16 conversion | Shared cast path in kernels | Primitive |
 | `inc_dc_ub_tile_aicore.h` | UB tiling helpers | One tiling convention | Primitive |
 | `inc_dc_vector_reduce_aicore.h` | Vector reduction engine base | Combine weighted reduce | Primitive |
-| `inc_dc_gather_mte_aicore.h` | MTE gather GM→UB→GM | Shared by D/C/multi-INC; no byte loops | Primitive |
+| `inc_dc_gather_mte_aicore.h` | MTE gather GM→UB→GM | Shared by Dispatch/Combine; no byte loops | Primitive |

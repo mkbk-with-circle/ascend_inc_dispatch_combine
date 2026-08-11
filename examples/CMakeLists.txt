@@ -173,7 +173,7 @@ foreach(EXAMPLE
     add_subdirectory(${EXAMPLE})
 endforeach()
 
-# Single-/multi-INC dispatch-combine and the single-INC fusion kernel.
+# Single-INC dispatch-combine and fusion kernel.
 add_subdirectory(inc)
 
 if(SOC_TYPE STREQUAL "Ascend950"
