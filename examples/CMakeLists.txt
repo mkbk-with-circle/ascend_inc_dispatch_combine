@@ -173,6 +173,9 @@ foreach(EXAMPLE
     add_subdirectory(${EXAMPLE})
 endforeach()
 
+# Single-/multi-INC dispatch-combine and the single-INC fusion kernel.
+add_subdirectory(inc)
+
 if(SOC_TYPE STREQUAL "Ascend950"
    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/shmem_mega_moe/kernel/arch35/shmem_mega_moe_tiling.h"
    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/shmem_mega_moe/kernel/dispatch/quantize_functions.h"
