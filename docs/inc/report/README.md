@@ -10,6 +10,7 @@
 - [`nb-borrow/`](nb-borrow/README.md)：nb-borrow 专属结果；与 yuanmingyu 历史 sweep 分目录保存。
 - [Fusion Kernel 对比实验总入口](nb-borrow/FUSION_KERNEL_RESULTS.md)：当前 ABI 13、算子资格化、历史五路径和原始数据的直接链接。
 - [`fusion_kernel_release_20260810`](nb-borrow/fusion_kernel_release_20260810/README.md)：ABI 13 当前最优 `fused_inc` 的 W2/W4、16–1024 token sweep、native graph/eager、W8A8 参考、四路径状态和原始 JSON。
+- [`release_validation_20260811`](nb-borrow/release_validation_20260811/README.md)：移除旧实现与重复镜像后，单 INC/Fusion 的 fresh build、100 轮稳定性及 W2/W4 真机门禁。
 - `single_inc_final_stress_cann91_20260804.md`：最新 sweep/连续下发压测汇总。
 - `single_inc_nonpow2_sweep_cann91_20260805.md`：native D/C 非 2 次幂 token、128/256 MiB sweep，含启动失败复测。
 - `single_inc_final_regular_sweep_cann91_20260804.json`：最新可机读正则 sweep。
@@ -18,14 +19,5 @@
 - `ACTIVE_HW_PROFILE.md` 与 `env/ENV_STATUS_TEMPLATE.md`：环境指针/模板。
 - 仓库只保留结构化结果、资格化摘要和复现入口；launcher 日志、PID/READY 文件、
   profiler trace 与已失效的中间调参结果不进入当前交付。
-
-## Multi-INC
-
-总结文档位于 `../multi_inc_dispatch_combine_delivery_report.md`。本目录保留：
-
-- `multi_inc_delivery_validation_gate.json`：最新完整交付 gate。
-- `multi_inc_delivery_conditional_lock_status.json`：当前 conditional lock 状态。
-- `dispatch_transferred_bytes_metric_v2_gate.json`：最新 Dispatch 带宽分子口径。
-- `dispatch_150_160_candidate_gate.json`：最新 150–160 GB/s Dispatch 候选数据。
 
 清理后如需历史过程，应从测试脚本重新生成，不应再将中间快照当作当前结论。

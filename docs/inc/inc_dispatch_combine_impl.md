@@ -367,4 +367,3 @@ flowchart LR
 | Combine device flags | `examples/inc/dispatch_combine/inc_combine_device_flags.h` |
 | Combine 生产 profile | `examples/inc/dispatch_combine/scripts/inc_combine_profile.sh` |
 | 单 INC 带宽汇总 | `docs/inc/report/single_inc_bw_summary.json` / `single_inc_bw_compare.html` |
-| 多 INC 交付 gate | `docs/inc/report/multi_inc_delivery_validation_gate.json` |

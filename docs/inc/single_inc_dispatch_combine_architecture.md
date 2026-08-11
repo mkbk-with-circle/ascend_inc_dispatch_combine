@@ -3,7 +3,7 @@
 > U/G/T、P/R/E 各阶段的逐条数据流、generation 可见性协议和双算子并发方式，详见
 > `docs/inc/single_inc_dispatch_combine_pipeline.md`。
 
-本页只描述当前单 INC 后端；历史 paired/multi-INC 实现不作为正确性或性能依据。
+本页只描述当前单 INC 后端及其正确性、性能口径。
 
 ## 1. 拓扑与安全生命周期
 

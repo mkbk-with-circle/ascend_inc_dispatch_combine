@@ -57,6 +57,6 @@ measure 10 次；时延取同一 iteration 所有参与 PE 的 makespan。
 - scalar/parallel route-pack 对 CPU compiler 的 int32/int64 与 inactive-wave 检查；
 - 上表 W2/W4 全量 E2E golden、并发 D/C 与多 packet 回归。
 
-当前分支没有改变上述资格化源码，只把交付内容按开发逻辑拆分为单/多 INC、fusion 核心、
-vLLM 接入与构建接线四个提交；不需要额外选择运行时协议参数，也不包含本轮已经剔除的
+当前分支没有改变上述资格化源码，只把交付内容按开发逻辑拆分为单 INC、fusion 核心、
+vLLM 接入与构建接线；不需要额外选择运行时协议参数，也不包含本轮已经剔除的
 未提交优化分支。

@@ -172,7 +172,7 @@ gantt
 
 ## 发布边界
 
-- 保留：ABI 13 源码、单/多 INC 当前实现、结构化报告与 JSON、2026-08-09 历史正式矩阵。
+- 保留：ABI 13 源码、单 INC 当前实现、结构化报告与 JSON、2026-08-09 历史正式矩阵。
 - 删除/不归档：launcher stdout/stderr、PID/READY/control 文件、临时 profile、`.orig`、
   `__pycache__` 和失败进程转储。
 - 当前阻塞：native 数值不一致；direct-SHMEM/大容量 serial INC 的 vLLM lifecycle；

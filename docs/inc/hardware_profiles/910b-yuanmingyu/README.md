@@ -16,7 +16,7 @@
 ## 当前证据
 
 - `single_inc_ENV_STATUS.md`：本机 CANN/topology/AIV 与最新单 INC 结果。
-- 单/多 INC 可机读报告统一收敛在 `docs/inc/report/README.md` 列出的最小证据集。
+- 单 INC 可机读报告统一收敛在 `docs/inc/report/README.md` 列出的最小证据集。
 - 历史 `gates/` / `p5/` / `snapshots/` 和递归复制的 profile 已清理。
 
 ## 环境

@@ -16,7 +16,7 @@ source ${ASCEND_HOME_PATH}/set_env.sh
 ```
 
 - CANN: 9.1.0-beta.1（当前资格化环境）
-- SHMEM: 仓库 `version.info`；交付 run 的 git revision 见 `docs/inc/report/multi_inc_delivery_validation_gate.json`
+- SHMEM: 仓库 `version.info`；单 INC 当前状态见 `docs/inc/report/single_inc_LIVE_STATUS.md`
 
 ## 构建
 
@@ -31,9 +31,7 @@ bash scripts/build.sh -examples
 
 | 文件 | 用途 |
 |------|------|
-| `docs/inc/configs/9rank.env` | T1: 8W+1S |
-| `docs/inc/configs/16rank.env` | T2: 8W+8S |
-| `docs/inc/configs/8worker-baseline.env` | SHMEM-direct 8 worker |
+| `docs/inc/configs/9rank.env` | 8W+1INC（需按目标机器 profile 选择物理卡） |
 | `docs/inc/configs/910b-yuanmingyu.env` | 远程 910B profile（`INC_HW_PROFILE=910b-yuanmingyu`） |
 
 ## 多硬件 Profile
