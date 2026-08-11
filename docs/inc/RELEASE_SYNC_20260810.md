@@ -5,12 +5,12 @@
 - `examples/inc/dispatch_combine/`：当前单 INC Dispatch/Combine 实现、API、测试和脚本。
 - `examples/inc/fusion_kernel/`：ABI 13 Fusion kernel、Torch bridge、vLLM adapter、测试与运行手册。
 - `examples/CMakeLists.txt`：上述 target 的构建入口。
-- `docs/inc/`：当前设计、API、硬件 profile、历史正式结果和 2026-08-10 发布候选。
+- `docs/inc/`：当前设计、API、硬件 profile、最新资格化结果和发布候选。
 
 最新 Fusion 资格化入口是
 `docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/README.md`；扩展 sweep 位于
 `fusion_kernel_release_20260810/`，清理后的发布验证见
-`release_validation_20260811/`；2026-08-09 的完整四路径矩阵也保留用于历史对照。
+`release_validation_20260811/`。
 
 ## 不应同步
 

@@ -1,3 +1,0 @@
-environment,workers,tokens,hidden,intermediate,topk,activation_waves,measure,mean_us,median_us,cv_percent,dc_theoretical_max,dc_window_speedup,overlap_realized,status,log_dir
-910B2C-nb,2,32,256,512,2,2,2,605.970,605.970,0.437,1.67072,1.65981,0.990203,PASS,/tmp/inc-fusion-abi-v3-smoke-20260809/W2_T32_H256_I512_K2_A2
-910B2C-nb,4,32,256,512,2,2,2,848.610,848.610,1.337,1.79172,1.78103,0.992419,PASS,/tmp/inc-fusion-abi-v3-smoke-20260809/W4_T32_H256_I512_K2_A2

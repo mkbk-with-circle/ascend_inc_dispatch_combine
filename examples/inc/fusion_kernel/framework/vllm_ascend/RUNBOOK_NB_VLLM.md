@@ -2,7 +2,7 @@
 
 本文记录 ABI 13 发布候选的隔离环境、构建、验证和正式跑数方法。当前冻结路径为 BF16
 `fused_inc`；vLLM 默认 BF16 ND 的连续权重由 kernel 直接按 row-major B 消费，不在
-forward 中复制或转置。2026-08-09 的 ABI v9 五路径数据只作为历史对照保留。
+forward 中复制或转置。仓库报告只保留当前 ABI 13 数据。
 
 ## 1. 环境与拓扑
 
@@ -184,8 +184,8 @@ HCCL_IF_BASE_PORT=62141 python \
 追加 `--enforce-eager` 并将输出目录改为 `native_vllm_eager_w${W}_extended` 可得到执行模式
 参考，但生产 baseline 必须保留默认 graph 路径。发布报告中的扩展对比正是按上述命令在两个
 独立平面并行完成的；两个进程使用了不同 `HCCL_IF_BASE_PORT`。
-四路径历史矩阵仍可用 `MODE=serial_shmem|fused_shmem|serial_inc|fused_inc` 重放；当前
-direct-SHMEM 在 vLLM 0.19.1 启动生命周期中存在已知失联，失败不能冒充为性能样本。
+实验模式仍可用 `MODE=serial_shmem|fused_shmem|serial_inc|fused_inc` 重放；当前 direct-SHMEM
+在 vLLM 0.19.1 启动生命周期中存在已知失联，失败不能冒充为性能样本。
 
 ## 6. 成功判据与故障处理
 
@@ -202,5 +202,4 @@ direct-SHMEM 在 vLLM 0.19.1 启动生命周期中存在已知失联，失败不
 - OOM 应先降低 `gpu_memory_utilization` 或缩小容量；不要通过改变 hidden/intermediate、
   top-k、权重布局或计算 kernel 来伪造同一 baseline。
 
-当前结果索引见 `docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md`；历史完整
-四路径矩阵见 `docs/inc/report/nb-borrow/fusion_kernel_vllm_e2e_comparison_20260809/README.md`。
+当前结果索引见 `docs/inc/report/nb-borrow/FUSION_KERNEL_RESULTS.md`。

@@ -82,9 +82,9 @@ gantt
 - 完整 API 示例：[`examples/README.md`](examples/README.md)
 - case timeline 解析器：[`tools/README.md`](tools/README.md)
 - 端到端验证：[`ascend/tests/inc_fusion_e2e_main.cpp`](ascend/tests/inc_fusion_e2e_main.cpp)
-- nb 实测报告：[`../../../docs/inc/report/nb-borrow/fusion_kernel_20260809/README.md`](../../../docs/inc/report/nb-borrow/fusion_kernel_20260809/README.md)
-- nb vLLM 五路径正式结果：[`../../../docs/inc/report/nb-borrow/fusion_kernel_vllm_e2e_comparison_20260809/README.md`](../../../docs/inc/report/nb-borrow/fusion_kernel_vllm_e2e_comparison_20260809/README.md)
 - 当前 ABI 13 发布候选：[`../../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md`](../../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md)
+- 当前 ABI 13 算子资格化：[`../../../docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/README.md`](../../../docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/README.md)
+- 清理后发布验证：[`../../../docs/inc/report/nb-borrow/release_validation_20260811/README.md`](../../../docs/inc/report/nb-borrow/release_validation_20260811/README.md)
 - nb 可复现实验手册：[`framework/vllm_ascend/RUNBOOK_NB_VLLM.md`](framework/vllm_ascend/RUNBOOK_NB_VLLM.md)
 
 ## 对外 API 怎么选

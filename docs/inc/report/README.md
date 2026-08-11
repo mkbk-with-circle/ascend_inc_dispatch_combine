@@ -8,8 +8,8 @@
 - `single_inc_native_api_closure_cann91_20260804.md`：真实 Dispatch/Combine Framework/Easy provider、registered view、复用与同口径带宽证据。
 - `single_inc_overlap_theory_cann91_20260804.md`：CANN 9.1 双向理论与 overlap 结论。
 - [`nb-borrow/`](nb-borrow/README.md)：nb-borrow 专属结果；与 yuanmingyu 历史 sweep 分目录保存。
-- [Fusion Kernel 对比实验总入口](nb-borrow/FUSION_KERNEL_RESULTS.md)：当前 ABI 13、算子资格化、历史五路径和原始数据的直接链接。
-- [`fusion_kernel_release_20260810`](nb-borrow/fusion_kernel_release_20260810/README.md)：ABI 13 当前最优 `fused_inc` 的 W2/W4、16–1024 token sweep、native graph/eager、W8A8 参考、四路径状态和原始 JSON。
+- [Fusion Kernel 当前实验总入口](nb-borrow/FUSION_KERNEL_RESULTS.md)：当前 ABI 13 端到端、算子资格化和发布验证的直接链接。
+- [`fusion_kernel_release_20260810`](nb-borrow/fusion_kernel_release_20260810/README.md)：ABI 13 当前最优 `fused_inc` 的 W2/W4、16–1024 token sweep、当前 native graph/eager 与 W8A8 参考。
 - [`release_validation_20260811`](nb-borrow/release_validation_20260811/README.md)：移除旧实现与重复镜像后，单 INC/Fusion 的 fresh build、100 轮稳定性及 W2/W4 真机门禁。
 - `single_inc_final_stress_cann91_20260804.md`：最新 sweep/连续下发压测汇总。
 - `single_inc_nonpow2_sweep_cann91_20260805.md`：native D/C 非 2 次幂 token、128/256 MiB sweep，含启动失败复测。

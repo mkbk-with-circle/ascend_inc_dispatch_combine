@@ -22,10 +22,7 @@ INC 上 Dispatch/Combine 使用独立 AIV cohort，并由 INC 将完整归约结
   只证明各路径内部确定性，不证明与原生数值等价；接入真实推理前必须解决这一硬阻塞项。
 
 完整机读数据见 [results.csv](results.csv)，原始 JSON 位于 [raw](raw/)，文件完整性可用
-[MANIFEST.sha256](MANIFEST.sha256) 校验。旧的完整四路径
-矩阵保留在
-[fusion_kernel_vllm_e2e_comparison_20260809](../fusion_kernel_vllm_e2e_comparison_20260809/README.md)，
-没有被本轮覆盖。
+[MANIFEST.sha256](MANIFEST.sha256) 校验。
 
 ## 环境与口径
 
@@ -48,10 +45,9 @@ INC 上 Dispatch/Combine 使用独立 AIV cohort，并由 INC 将完整归约结
 | `serial_inc` | worker → INC → worker | D → FFN → C 严格串行 |
 | `fused_inc` | worker → INC → worker | token-wave 流水；当前最优交付路径 |
 
-`native_vllm` 是外部参考，不属于四格因子矩阵。当前四路径执行状态见
-[factorial_status.csv](factorial_status.csv)。2026-08-09 的四格在 W2/W4、128 token 上均有
-成功数据；本轮当前代码中，direct-SHMEM 两格在小/中/大容量都于模型加载后的 vLLM
-shared-memory RPC 阶段失联。精确 heap 查询显示 W4 全局容量 32/128/512 分别只需要
+`native_vllm` 是外部参考，不属于四格因子矩阵。本轮当前代码中，direct-SHMEM 两格在
+小/中/大容量都于模型加载后的 vLLM shared-memory RPC 阶段失联。精确 heap 查询显示
+W4 全局容量 32/128/512 分别只需要
 512/512/638 MiB 对称堆，因此该故障不是 HBM 不足或“任意数据量”协议限制。
 
 ## 当前最优路径 sweep
@@ -172,7 +168,7 @@ gantt
 
 ## 发布边界
 
-- 保留：ABI 13 源码、单 INC 当前实现、结构化报告与 JSON、2026-08-09 历史正式矩阵。
+- 保留：ABI 13 源码、单 INC 当前实现、结构化报告与当前 JSON。
 - 删除/不归档：launcher stdout/stderr、PID/READY/control 文件、临时 profile、`.orig`、
   `__pycache__` 和失败进程转储。
 - 当前阻塞：native 数值不一致；direct-SHMEM/大容量 serial INC 的 vLLM lifecycle；
