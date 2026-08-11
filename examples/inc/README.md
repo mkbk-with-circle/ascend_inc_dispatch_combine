@@ -20,10 +20,12 @@ MegaMoE/NVIDIA 参考源码、临时探针、构建产物和 launcher 日志均�
 
 Fusion trace 解析入口见 [`fusion_kernel/tools/`](fusion_kernel/tools/README.md)。
 
-最新结构化结果和硬件 profile 位于 `docs/inc/`：
+最新结构化结果和硬件 profile 位于 `docs/inc/`。Fusion 对比数据可从
+[`FUSION_KERNEL_RESULTS.md`](../../docs/inc/report/nb-borrow/FUSION_KERNEL_RESULTS.md)
+直接进入：
 
-- Fusion 最终资格化：`docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/`；
-- ABI 13 sweep 与 vLLM 对照：`docs/inc/report/nb-borrow/fusion_kernel_release_20260810/`；
+- Fusion 最终资格化：[报告](../../docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/README.md) · [CSV](../../docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/results.csv)；
+- ABI 13 sweep 与 vLLM 对照：[报告](../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md) · [CSV](../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/results.csv)；
 - 单/多 INC 状态：`docs/inc/report/single_inc_LIVE_STATUS.md` 和
   `docs/inc/report/multi_inc_delivery_validation_gate.json`。
 
