@@ -13,6 +13,61 @@ INC-Dispatch(token-wave i+1)
 带宽与 gate 基线。本实现用于验证把 D、FFN、C 放进同一 kernel 后的流水与真实 D∥C
 收益，并提供 prepared API 供推理框架接入。
 
+## 理想 token-wave timeline
+
+`Dᵢ`、`Fᵢ`、`Cᵢ` 分别表示 wave `i` 的 INC Dispatch、
+`GMM1 → SwiGLU → GMM2` 和 INC Combine，且严格满足 `Dᵢ → Fᵢ → Cᵢ`。
+图中每格是抽象时隙，不表示真实阶段等长。
+
+### 两个 token wave：只有填充/排空，尚无 D 与 C 同时重叠
+
+```mermaid
+gantt
+    title 两个 token wave 的理想流水
+    dateFormat X
+    axisFormat %L
+    section INC Dispatch cohort
+    D0 :d0, 0, 1
+    D1 :d1, 1, 1
+    section Worker FFN
+    F0 :f0, 1, 1
+    F1 :f1, 2, 1
+    section INC Combine cohort
+    C0 :c0, 2, 1
+    C1 :c1, 3, 1
+```
+
+两个 wave 只有填充/排空，不存在 `D(n+1) ∥ C(n-1)`，不能把总时延差全部归因于
+单 INC 上下行交叠。
+
+### 四个 token wave：进入 D、F、C 三段稳态交叠
+
+```mermaid
+gantt
+    title 四个 token wave 的理想流水
+    dateFormat X
+    axisFormat %L
+    section INC Dispatch cohort
+    D0 :d0, 0, 1
+    D1 :d1, 1, 1
+    D2 :d2, 2, 1
+    D3 :d3, 3, 1
+    section Worker FFN
+    F0 :f0, 1, 1
+    F1 :f1, 2, 1
+    F2 :f2, 3, 1
+    F3 :f3, 4, 1
+    section INC Combine cohort
+    C0 :c0, 2, 1
+    C1 :c1, 3, 1
+    C2 :c2, 4, 1
+    C3 :c3, 5, 1
+```
+
+若共有 `N` 个 wave，三阶段串行时间为 `N(D+F+C)`，理想流水时间近似
+`D+F+C+(N-1)·max(D,F,C)`；实际收益还会受 packet、credit、最慢 rank、AIC/AIV 争用和
+首尾排空影响。设备 trace 与墙钟必须同时报告，不能只凭示意图宣称收益。
+
 ## 代码入口
 
 - 设计与验收准则：[`PRINCIPLES.md`](PRINCIPLES.md)
@@ -24,11 +79,44 @@ INC-Dispatch(token-wave i+1)
 - 设备 dense-topk 路由打包：[`ascend/inc_fusion_route_pack.h`](ascend/inc_fusion_route_pack.h)
 - Torch NPU 原生桥接：[`framework/vllm_ascend/native/README.md`](framework/vllm_ascend/native/README.md)
 - worker/INC kernel：[`ascend/inc_fusion_kernel.cpp`](ascend/inc_fusion_kernel.cpp)
+- 完整 API 示例：[`examples/README.md`](examples/README.md)
+- case timeline 解析器：[`tools/README.md`](tools/README.md)
 - 端到端验证：[`ascend/tests/inc_fusion_e2e_main.cpp`](ascend/tests/inc_fusion_e2e_main.cpp)
 - nb 实测报告：[`../../../docs/inc/report/nb-borrow/fusion_kernel_20260809/README.md`](../../../docs/inc/report/nb-borrow/fusion_kernel_20260809/README.md)
 - nb vLLM 五路径正式结果：[`../../../docs/inc/report/nb-borrow/fusion_kernel_vllm_e2e_comparison_20260809/README.md`](../../../docs/inc/report/nb-borrow/fusion_kernel_vllm_e2e_comparison_20260809/README.md)
 - 当前 ABI 13 发布候选：[`../../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md`](../../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md)
 - nb 可复现实验手册：[`framework/vllm_ascend/RUNBOOK_NB_VLLM.md`](framework/vllm_ascend/RUNBOOK_NB_VLLM.md)
+
+## 对外 API 怎么选
+
+普通推理接入使用 `inc_fusion_worker_executor_*` 与 `inc_fusion_remote_service_*`。
+plan、workspace 和 INC service 只初始化一次；tensor、route、weight、stream 由调用方持有。
+
+| 位置 | 初始化/准备 | 热路径 | 释放 |
+|---|---|---|---|
+| 所有 PE | `inc_fusion_plan_desc_init` → `inc_fusion_prepared_plan_create` → `inc_fusion_prepared_plan_info` | 无 | `inc_fusion_prepared_plan_destroy` |
+| Worker | `inc_fusion_worker_executor_create` | `inc_fusion_worker_executor_enqueue` | `inc_fusion_worker_executor_destroy` |
+| 远端 INC | `inc_fusion_remote_service_create` → W+1 setup barrier → `inc_fusion_remote_service_start` | 常驻 service 从对称 descriptor ring 收请求，无逐请求 host launch | `inc_fusion_persistent_service_stop/destroy` |
+| 同进程实验 INC | `inc_fusion_persistent_service_create` | `submit` → `query` | `stop` → `destroy` |
+
+`inc_fusion_prepared_build_args/enqueue` 是更底层的零分配接口。`token_count` 表示容量，
+每次请求的实际 token 数由 `active_token_counts` 描述。
+
+## 解析一个真实 case 的 timeline
+
+当前 trace 只有整次 kernel 的角色 span、INC D/C 聚合窗口和相对 checkpoint，不能还原
+逐 wave 绝对甘特图。解析器会重算 overlap、理论上限和真实 window speedup。
+
+```bash
+python3 examples/inc/fusion_kernel/tools/parse_fusion_timeline.py \
+  /path/to/case/pe*.log \
+  --format markdown \
+  --strict \
+  -o /tmp/fusion_timeline.md
+```
+
+完整参数见 [`tools/README.md`](tools/README.md)。`actual_vs_theoretical_pct` 仅表示
+**D/C 聚合服务窗口效率**；端到端结论仍须比较所有 worker 的 makespan。
 
 ## 当前实现
 
