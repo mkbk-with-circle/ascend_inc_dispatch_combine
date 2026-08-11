@@ -1,0 +1,28 @@
+{
+  "dispatch": {
+    "passed_ranks": 3,
+    "expected_ranks": 3,
+    "correct": true,
+    "rank_us_max": 5472.64,
+    "physical_bytes": 134217728
+  },
+  "combine": {
+    "passed_ranks": 3,
+    "expected_ranks": 3,
+    "correct": true,
+    "rank_us_max": 5257.39,
+    "physical_bytes": 134217728
+  },
+  "tag": "combine_first_500us",
+  "workers": 2,
+  "topk": 2,
+  "dispatch_offset_us": 500,
+  "combine_offset_us": 0,
+  "pe_map": "0:1,1:2,2:0",
+  "correct": true,
+  "wall_s": 9.028252601623535,
+  "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W2/combine_first_500us",
+  "concurrent_makespan_us": 5972.64,
+  "overlap_us": 4757.39,
+  "true_overlap": true
+}

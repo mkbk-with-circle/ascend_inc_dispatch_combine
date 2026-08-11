@@ -1,0 +1,18 @@
+{
+  "dispatch": {
+    "passed_ranks": 3,
+    "expected_ranks": 3,
+    "correct": true,
+    "rank_us_max": 3407.66,
+    "physical_bytes": 134217728
+  },
+  "tag": "dispatch_solo_r1",
+  "workers": 2,
+  "topk": 2,
+  "dispatch_offset_us": 0,
+  "combine_offset_us": null,
+  "pe_map": "0:1,1:2,2:0",
+  "correct": true,
+  "wall_s": 8.85073208808899,
+  "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W2/dispatch_solo_r1"
+}

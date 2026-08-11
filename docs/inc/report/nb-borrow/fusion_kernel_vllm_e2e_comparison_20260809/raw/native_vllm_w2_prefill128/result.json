@@ -1,0 +1,27 @@
+{
+  "model": "/models/Qwen3-30B-A3B",
+  "tensor_parallel_size": 2,
+  "expert_parallel": true,
+  "fused_mc2": false,
+  "enforce_eager": true,
+  "warmup": 1,
+  "measure": 3,
+  "results": [
+    {
+      "name": "prefill_128_b1",
+      "input_len": 128,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.0721222534775734,
+        0.06841453909873962,
+        0.06734074279665947
+      ],
+      "mean_s": 0.06929251179099083,
+      "median_s": 0.06841453909873962,
+      "cv_percent": 2.9561458049558462,
+      "output_tokens_per_second": 14.431573833206267,
+      "interpretation": "batch TTFT proxy (full native prefill plus first token)"
+    }
+  ]
+}

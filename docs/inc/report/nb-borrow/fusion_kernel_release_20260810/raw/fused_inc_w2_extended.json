@@ -1,0 +1,198 @@
+{
+  "mode": "fused_inc",
+  "workers": 2,
+  "worker_devices": [
+    0,
+    1
+  ],
+  "inc_device": 2,
+  "model": "/models/Qwen3-30B-A3B",
+  "warmup": 2,
+  "measure": 5,
+  "tokens_per_wave": 64,
+  "activation_waves": 1,
+  "global_token_capacity": 1024,
+  "worker_token_capacity": 512,
+  "results": [
+    {
+      "name": "prefill_16_b1",
+      "input_len": 16,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.07095561549067497,
+        0.07150010392069817,
+        0.06947753205895424,
+        0.06909972429275513,
+        0.0694725289940834
+      ],
+      "mean_s": 0.07010110095143318,
+      "median_s": 0.06947753205895424,
+      "cv_percent": 1.349407209566423,
+      "output_tokens_per_second": 14.265111195511908,
+      "measured_token_ids": [
+        [
+          [
+            1008
+          ]
+        ],
+        [
+          [
+            1008
+          ]
+        ],
+        [
+          [
+            1008
+          ]
+        ],
+        [
+          [
+            1008
+          ]
+        ],
+        [
+          [
+            1008
+          ]
+        ]
+      ],
+      "output_stable": true
+    },
+    {
+      "name": "prefill_64_b1",
+      "input_len": 64,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.06893543526530266,
+        0.06887082755565643,
+        0.06888185441493988,
+        0.06873193010687828,
+        0.07955461740493774
+      ],
+      "mean_s": 0.070994932949543,
+      "median_s": 0.06888185441493988,
+      "cv_percent": 6.029120370720258,
+      "output_tokens_per_second": 14.085512281710482,
+      "measured_token_ids": [
+        [
+          [
+            13
+          ]
+        ],
+        [
+          [
+            13
+          ]
+        ],
+        [
+          [
+            13
+          ]
+        ],
+        [
+          [
+            13
+          ]
+        ],
+        [
+          [
+            13
+          ]
+        ]
+      ],
+      "output_stable": true
+    },
+    {
+      "name": "prefill_256_b1",
+      "input_len": 256,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.0982925221323967,
+        0.09811122342944145,
+        0.09797889739274979,
+        0.0980832427740097,
+        0.09815160557627678
+      ],
+      "mean_s": 0.09812349826097488,
+      "median_s": 0.09811122342944145,
+      "cv_percent": 0.1039702938175503,
+      "output_tokens_per_second": 10.19123877279979,
+      "measured_token_ids": [
+        [
+          [
+            4474
+          ]
+        ],
+        [
+          [
+            4474
+          ]
+        ],
+        [
+          [
+            4474
+          ]
+        ],
+        [
+          [
+            4474
+          ]
+        ],
+        [
+          [
+            4474
+          ]
+        ]
+      ],
+      "output_stable": true
+    },
+    {
+      "name": "prefill_1024_b1",
+      "input_len": 1024,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.21468568593263626,
+        0.2142779380083084,
+        0.21443388611078262,
+        0.21711012721061707,
+        0.2169533111155033
+      ],
+      "mean_s": 0.21549218967556955,
+      "median_s": 0.21468568593263626,
+      "cv_percent": 0.5868937574456178,
+      "output_tokens_per_second": 4.640539415862507,
+      "measured_token_ids": [
+        [
+          [
+            34
+          ]
+        ],
+        [
+          [
+            34
+          ]
+        ],
+        [
+          [
+            34
+          ]
+        ],
+        [
+          [
+            34
+          ]
+        ],
+        [
+          [
+            34
+          ]
+        ]
+      ],
+      "output_stable": true
+    }
+  ]
+}

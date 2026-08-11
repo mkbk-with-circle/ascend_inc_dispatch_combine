@@ -1,0 +1,62 @@
+{
+  "schema": "single_inc_topk_rank_stress_v1",
+  "date": "2026-08-04",
+  "environment": {
+    "cann": "/opt/Ascend-9.1/cann-9.1.0-beta.1",
+    "aiv_total": 48,
+    "inc_dispatch_aiv": 16,
+    "inc_combine_aiv": 32,
+    "worker_dispatch_aiv": {"W2": 8, "W4": 4, "W8": 2},
+    "worker_combine_aiv": {"W2": 24, "W4": 16, "W8": 12}
+  },
+  "dispatch": [
+    {"case":"W2_K9_bal","samples":10,"physical_bytes":134217728,"logical_bytes":603979776,"assignments":73728,"physical_rows":16384,"dedup_ratio":4.5,"gbps":122.929393,"cv_percent":0.621526,"correct":true},
+    {"case":"W2_K16_bal","samples":10,"physical_bytes":134217728,"logical_bytes":1073741824,"assignments":131072,"physical_rows":16384,"dedup_ratio":8.0,"gbps":122.845276,"cv_percent":0.664852,"correct":true},
+    {"case":"W4_K16_bal","samples":10,"physical_bytes":134217728,"logical_bytes":536870912,"assignments":65536,"physical_rows":16384,"dedup_ratio":4.0,"gbps":133.708097,"cv_percent":1.209166,"correct":true},
+    {"case":"W8_K8_bal_baseline","samples":10,"physical_bytes":134217728,"logical_bytes":134217728,"assignments":16384,"physical_rows":16384,"dedup_ratio":1.0,"gbps":133.264996,"cv_percent":0.517074,"correct":true},
+    {"case":"W8_K16_bal","samples":10,"physical_bytes":134217728,"logical_bytes":268435456,"assignments":32768,"physical_rows":16384,"dedup_ratio":2.0,"gbps":132.782176,"cv_percent":0.619263,"correct":true},
+    {"case":"W8_K16_half","samples":10,"physical_bytes":134217728,"logical_bytes":536870912,"assignments":65536,"physical_rows":16384,"dedup_ratio":4.0,"gbps":132.029440,"cv_percent":0.841374,"correct":true},
+    {"case":"W8_K64_bal","samples":10,"physical_bytes":134217728,"logical_bytes":1073741824,"assignments":131072,"physical_rows":16384,"dedup_ratio":8.0,"gbps":132.560562,"cv_percent":0.634501,"correct":true},
+    {"case":"W8_K64_all1","samples":10,"physical_bytes":134217728,"logical_bytes":8589934592,"assignments":1048576,"physical_rows":16384,"dedup_ratio":64.0,"gbps":115.885229,"cv_percent":0.608153,"correct":true},
+    {"case":"W8_K64_bal_soak100","samples":100,"physical_bytes":134217728,"logical_bytes":1073741824,"dedup_ratio":8.0,"gbps":132.742745,"cv_percent":0.742879,"correct":true},
+    {"case":"W8_K64_all1_soak100","samples":100,"physical_bytes":134217728,"logical_bytes":8589934592,"dedup_ratio":64.0,"gbps":115.205394,"cv_percent":0.707018,"correct":true}
+  ],
+  "combine": [
+    {"case":"W2_K16_bal_128M","epochs":10,"bytes_per_epoch":134217728,"gbps":125.247502,"formal_120_gate":"PASS","correct":true},
+    {"case":"W4_K16_bal_128M","epochs":10,"bytes_per_epoch":134217728,"gbps":123.925699,"formal_120_gate":"PASS","correct":true},
+    {"case":"W8_K8_bal_128M","epochs":10,"bytes_per_epoch":134217728,"gbps":116.176655,"formal_120_gate":"FAIL","correct":true},
+    {"case":"W8_K16_bal_128M","epochs":10,"bytes_per_epoch":134217728,"gbps":116.413454,"formal_120_gate":"FAIL","correct":true},
+    {"case":"W8_K64_bal_128M","epochs":10,"bytes_per_epoch":134217728,"gbps":116.160568,"formal_120_gate":"FAIL","correct":true},
+    {"case":"W8_K64_bal_128M_soak100","epochs":100,"bytes_per_epoch":134217728,"gbps":117.817528,"formal_120_gate":"FAIL","correct":true},
+    {"case":"W8_K8_bal_256M","epochs":10,"bytes_per_epoch":268435456,"gbps":126.862854,"formal_120_gate":"PASS","correct":true},
+    {"case":"W8_K16_bal_256M","epochs":10,"bytes_per_epoch":268435456,"gbps":127.052597,"formal_120_gate":"PASS","correct":true},
+    {"case":"W8_K64_bal_256M","epochs":10,"bytes_per_epoch":268435456,"gbps":127.766783,"formal_120_gate":"PASS","correct":true},
+    {"case":"W8_K16_half_128M","epochs":10,"bytes_per_epoch":134217728,"gbps":119.378927,"formal_120_gate":"FAIL","correct":true},
+    {"case":"W8_K16_ragged_136M","epochs":10,"bytes_per_epoch":142606336,"gbps":109.959392,"formal_120_gate":"FAIL","correct":true},
+    {"case":"W8_K16_two_rank_128M","epochs":10,"bytes_per_epoch":134217728,"gbps":63.404758,"formal_120_gate":"FAIL","topology_normalized_efficiency_percent":94.9,"correct":true},
+    {"case":"W8_K16_all1_128M","epochs":10,"bytes_per_epoch":134217728,"gbps":60.107807,"formal_120_gate":"FAIL","topology_normalized_efficiency_percent":96.0,"correct":true}
+  ],
+  "findings": {
+    "topk_gt_rank_correct": true,
+    "topk_gt_8_correct": true,
+    "dispatch_rank_dedup_correct": true,
+    "combine_default_rank_dedup": false,
+    "topk_performance_regression": false,
+    "open_128m_w8_combine_gap": true,
+    "open_ragged_combine_gap": true,
+    "raw_log_root": "/tmp/single-inc-topk-rank-stress-20260804-r1"
+  },
+  "overlap_k64_256m": [
+    {"route":"balanced","dispatch_solo_us":1988.336,"combine_solo_us":2100.980,"theoretical_lower_us":2100.980,"concurrent_makespan_us":2422.060,"ratio":0.5923,"lower_ratio":0.5138,"speedup":1.688,"gap_above_lower_percent":15.28,"concurrent_dispatch_gbps":115.321197,"concurrent_combine_gbps":114.451887,"correct":true,"resource_contract_pass":true},
+    {"route":"all_to_one","dispatch_solo_us":2320.366,"combine_solo_us":4899.590,"theoretical_lower_us":4899.590,"concurrent_makespan_us":5699.040,"ratio":0.7893,"lower_ratio":0.6786,"speedup":1.267,"gap_above_lower_percent":16.32,"concurrent_dispatch_gbps":95.379961,"concurrent_combine_gbps":47.101873,"correct":true,"resource_contract_pass":true}
+  ],
+  "boundary_and_host_gates": {
+    "dispatch_w2_k16_row8190_gbps": 121.623,
+    "dispatch_w2_k16_row8190_cv_percent": 0.83,
+    "combine_w2_k16_row8190_gbps": 126.430,
+    "row2_bytes_dispatch_correct": true,
+    "row2_bytes_combine_correct": true,
+    "runtime_host_gates_passed": 7,
+    "c_header_syntax_gate_passed": true
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "run_id": "inc_fusion_vllm_perf_20260810",
+  "environment": {
+    "machine": "910b2c-nb",
+    "container": "montyyin_inc_vllm_0191_planeb",
+    "cann": "8.5.1",
+    "npu": "910B2C",
+    "plane": "B",
+    "worker_devices": [8, 9, 10, 11],
+    "inc_device": 12,
+    "live_aiv": 48,
+    "live_aic": 24
+  },
+  "shape": {
+    "model": "Qwen3-30B-A3B",
+    "hidden": 2048,
+    "intermediate": 768,
+    "expert_count": 128,
+    "local_expert_count": 32,
+    "topk": 8,
+    "workers": 4,
+    "tokens_per_worker": 128,
+    "tokens_per_wave": 64,
+    "waves_per_layer": 2,
+    "activation_waves": 1,
+    "scenario": "prefill_512_b1",
+    "layers": 48
+  },
+  "metric_convention": {
+    "device_normalization": "disabled by user decision; PRINCIPLES 6.6.1 / 8.3 / 10 / 13 updated. INC's dedicated NPU is a cost of the method, never credited as gain. Wall-clock compared directly against the W=4 native baseline.",
+    "h11": "warmup>=3, measure>=10; CV relaxed to <=10% by user, prefer smaller"
+  },
+  "baseline_native_tp4": {
+    "mean_ms": 73.881,
+    "median_ms": 73.758,
+    "cv_percent": 4.617,
+    "n": 10,
+    "output_token": 3824
+  },
+  "progression_ms": [
+    {"tag": "v189 start", "mean_ms": 138.683, "note": "serial DCCI sweep in grouped cube path"},
+    {"tag": "DcciStripe gate_up", "mean_ms": 120.7},
+    {"tag": "combine dense DCCI stripe + drop redundant", "mean_ms": 106.481},
+    {"tag": "ENTIRE_DATA_CACHE replaces line sweeps", "mean_ms": 96.028},
+    {"tag": "dense reduce tile = whole row", "mean_ms": 95.405},
+    {"tag": "combine upload parallel per lane", "mean_ms": 89.532},
+    {"tag": "INC-side fencing + DCCI consolidation", "mean_ms": 86.097},
+    {"tag": "INC dispatch acquire -> DcciAll", "mean_ms": 83.868},
+    {"tag": "v214 RX gather: wait-all then single acquire", "mean_ms": 83.506, "verdict": "neutral, destroyed per-source pipelining"},
+    {"tag": "v215 RX gather: keep per-source pipeline, drop per-record barrier+Dcci", "mean_ms": 82.582, "cv_percent": 0.328, "verdict": "kept"},
+    {"tag": "v216 combine paths: ranged/per-record Dcci -> DcciAll (both dense and raw)", "mean_ms": 82.682, "cv_percent": 0.906, "verdict": "kept, neutral on dense path, removes real work from raw path"},
+    {"tag": "v217 L2-resident expert weights (CATLASS B cache hint)", "mean_ms": 87.099, "verdict": "REVERTED, 302 MB weight working set thrashes L2"},
+    {"tag": "v218 after revert", "mean_ms": 82.801, "cv_percent": 0.875, "verdict": "current"}
+  ],
+  "current": {
+    "mean_ms": 82.801,
+    "median_ms": 82.564,
+    "cv_percent": 0.875,
+    "n": 10,
+    "wall_clock_ratio_vs_native": 1.121,
+    "gap_ms": 8.92,
+    "gap_us_per_layer": 186
+  },
+  "layer_budget_us": {
+    "source": "device trace, tokens_per_wave=64",
+    "exposed_dispatch_fill_wave0": 190,
+    "ffn_two_weight_passes": 516,
+    "exposed_combine_tail_wave1": 191,
+    "total": 897,
+    "notes": "single FFN weight pass measured at 306 us (302 MB / ~987 GB/s, at HBM roofline). Second pass costs +210 us."
+  },
+  "transport_estimate": {
+    "method": "derived from protocol byte counts and PRINCIPLES 6.6.0 anchors (HCCS peer raw 28 GB/s, W4 put-only aggregate 85.45 GB/s)",
+    "inc_dispatch_ingress_mb_per_wave": 1.0,
+    "inc_dispatch_egress_mb_per_wave": 4.0,
+    "inc_combine_ingress_mb_per_wave": 4.0,
+    "inc_combine_egress_mb_per_wave": 1.0,
+    "transport_floor_us_per_wave": "~45-60 (two hops)",
+    "measured_exposed_us_per_wave": 190,
+    "inferred_fixed_overhead_us": "~120-130 per fill, i.e. ~3 sequential doorbell round trips at 20-40 us each",
+    "conclusion": "the exposed dispatch fill is latency-dominated, not bandwidth-dominated; reducing sequential round trips matters more than reducing bytes. The INC funnels 4 MB of dispatch egress through one card where native spreads the same traffic across 4 ranks' links in parallel, which is a structural cost of the W+1 topology."
+  },
+  "correctness": {
+    "gate": "H4 golden, inc_fusion_e2e W4 T128 H2048 I1024 K8 A2, plane B",
+    "v214_result": "pass=1 on all 4 workers, max_abs_error=0 (bit exact)",
+    "v218_result": "pass=1 on all 4 workers, max_abs_error=0 (bit exact)"
+  },
+  "design_deviations_flagged_to_user": [
+    "Model is Qwen3-30B-A3B (E=128, E_loc=32), not PRINCIPLES 6.2's OLMoE (E=64, E_loc=16). E_loc(32) > live_aic(24) forces the grouped_cube FFN path: GMM1-all -> global barrier -> SwiGLU-all -> global barrier -> GMM2-all, with no per-expert AIC/AIV software pipeline.",
+    "activation_waves (W_act) = 1 while PRINCIPLES 2.3 defaults to 2; on the grouped_cube path W_act is inert because SwiGLU already sits between two cohort barriers.",
+    "kEnableBulkDenseCombine = true: workers do the FP32 weighted pre-reduce, INC only sums W partials. User relaxed H15 but asked that the main reduction stay INC-side; the weighting currently happens worker-side. User asked that BOTH combine modes be supported and optimized.",
+    "serial_shmem hangs at init, so the PRINCIPLES 8.2 2x2 attribution matrix cannot be completed.",
+    "PRINCIPLES 6.6.0's D/C micro-benchmark at real message sizes was never run; transport numbers above are inferred, not measured."
+  ],
+  "user_constraints": [
+    "token wave must remain the outer loop; every token wave runs its own dispatch, compute and combine. Finer-grained pipelining is allowed only inside a wave.",
+    "FFN internals are free to change, subject to robustness, scalability and stability.",
+    "no device normalization; wall-clock against the 4-card native baseline is the bar."
+  ],
+  "rejected_options": {
+    "merged_two_wave_arena_single_ffn_pass": "Ruled out twice: recomputed expected value ranged from -3.9 ms to +1.8 ms because the merged expert-major arena forces the FFN to wait for both waves and removes combine overlap, degenerating to the measured tpw=128 shape (84.6 ms). Also violates the user's rule that every token wave owns its own dispatch/compute/combine.",
+    "expert_group_pipelining_as_main_schedule": "Would give single-pass weights and overlap simultaneously, but PRINCIPLES 1.2 bans expert-wave as the main scheduler and the user reaffirmed token-wave as the outer loop."
+  },
+  "known_issues": [
+    "serial_shmem mode hangs during init: 'No available shared memory broadcast block', AICore 0%, INC sidecar absent on NPU 12.",
+    "aclshmem_putmem_nbi for dispatch relay puts reproducibly hangs with the same shm_broadcast signature; reverted.",
+    "IncTraceLine has no per-slot storage, so multi-wave traces overwrite each other within a layer.",
+    "fused_inc and native produce different argmax tokens (442 vs 3824), and tpw=128 produces yet another (198); reduction grouping differs per configuration. Synthetic golden is bit-exact, so this is rounding-order sensitivity, not a protocol defect, but it deserves a documented tolerance."
+  ]
+}

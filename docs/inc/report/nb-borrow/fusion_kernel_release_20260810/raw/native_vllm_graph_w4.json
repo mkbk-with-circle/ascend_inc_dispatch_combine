@@ -1,0 +1,149 @@
+{
+  "model": "/models/Qwen3-30B-A3B",
+  "tensor_parallel_size": 4,
+  "expert_parallel": true,
+  "fused_mc2": false,
+  "enforce_eager": false,
+  "warmup": 2,
+  "measure": 5,
+  "results": [
+    {
+      "name": "prefill_32_b1",
+      "input_len": 32,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.0341627262532711,
+        0.031121578067541122,
+        0.030433490872383118,
+        0.030152007937431335,
+        0.029677413403987885
+      ],
+      "mean_s": 0.03110944330692291,
+      "median_s": 0.030433490872383118,
+      "cv_percent": 5.132471467706985,
+      "output_tokens_per_second": 32.14458034925575,
+      "measured_token_ids": [
+        [
+          [
+            198
+          ]
+        ],
+        [
+          [
+            198
+          ]
+        ],
+        [
+          [
+            198
+          ]
+        ],
+        [
+          [
+            198
+          ]
+        ],
+        [
+          [
+            198
+          ]
+        ]
+      ],
+      "output_stable": true,
+      "interpretation": "batch TTFT proxy (full native prefill plus first token)"
+    },
+    {
+      "name": "prefill_128_b1",
+      "input_len": 128,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.03450441360473633,
+        0.034562159329652786,
+        0.034426819533109665,
+        0.03401053696870804,
+        0.033889513462781906
+      ],
+      "mean_s": 0.034278688579797746,
+      "median_s": 0.034426819533109665,
+      "cv_percent": 0.8006419326567229,
+      "output_tokens_per_second": 29.172644620639108,
+      "measured_token_ids": [
+        [
+          [
+            11
+          ]
+        ],
+        [
+          [
+            11
+          ]
+        ],
+        [
+          [
+            11
+          ]
+        ],
+        [
+          [
+            11
+          ]
+        ],
+        [
+          [
+            11
+          ]
+        ]
+      ],
+      "output_stable": true,
+      "interpretation": "batch TTFT proxy (full native prefill plus first token)"
+    },
+    {
+      "name": "prefill_512_b1",
+      "input_len": 512,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.06343524158000946,
+        0.062379829585552216,
+        0.06584406644105911,
+        0.06197231262922287,
+        0.061360299587249756
+      ],
+      "mean_s": 0.06299834996461869,
+      "median_s": 0.062379829585552216,
+      "cv_percent": 2.5005069393873063,
+      "output_tokens_per_second": 15.873431614663287,
+      "measured_token_ids": [
+        [
+          [
+            82
+          ]
+        ],
+        [
+          [
+            82
+          ]
+        ],
+        [
+          [
+            82
+          ]
+        ],
+        [
+          [
+            82
+          ]
+        ],
+        [
+          [
+            82
+          ]
+        ]
+      ],
+      "output_stable": true,
+      "interpretation": "batch TTFT proxy (full native prefill plus first token)"
+    }
+  ]
+}

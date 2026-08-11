@@ -1,0 +1,13 @@
+environment,case,tokens,hidden,intermediate,topk,activation_waves,mode,measure,mean_us,median_us,cv_percent,dc_theoretical_max,dc_window_speedup,overlap_realized,status
+910B2C-nb,W2,32,256,512,2,2,concurrent,10,604.480,606.240,1.591,1.71594,1.69833,0.985523,PASS
+910B2C-nb,W2,32,256,512,2,2,strict_alternating,10,1105.838,1113.280,1.343,,,,PASS
+910B2C-nb,W4,32,256,512,2,2,concurrent,10,896.928,898.320,0.765,1.79441,1.78524,0.993536,PASS
+910B2C-nb,W4,32,256,512,2,2,strict_alternating,10,1916.448,1918.660,0.959,,,,PASS
+910B2C-nb,W2_bigrow,256,16384,128,2,2,concurrent,2,,7171.94,,1.88165,1.87951,0.998703,PASS_SAMPLED_GOLDEN
+910B2C-nb,W4_bigrow,256,16384,128,2,2,concurrent,2,,13521.8,,1.91837,1.91768,0.999609,PASS_SAMPLED_GOLDEN
+910B2C-nb,W2_slice_stream,32,256,512,2,2,concurrent,10,595.736,595.920,1.286,1.73285,1.71890,0.988921,PASS
+910B2C-nb,W4_slice_stream,32,256,512,2,2,concurrent,10,887.828,888.770,0.951,1.79332,1.78357,0.993109,PASS
+910B2C-nb,W2_tail_slice_stream,17,192,320,4,2,concurrent,2,730.680,730.680,0.036,1.59711,1.58867,0.991100,PASS
+910B2C-nb,W4_tail_slice_stream,17,192,320,8,2,concurrent,2,1488.760,1488.760,0.282,1.84368,1.83882,0.996870,PASS
+910B2C-nb,W2_multipacket_slice_stream,8,16384,128,2,2,concurrent,2,1536.920,1536.920,0.731,1.35759,1.35397,0.992519,PASS
+910B2C-nb,W4_multipacket_slice_stream,8,16384,128,2,2,concurrent,2,1684.220,1684.220,0.500,1.40807,1.40454,0.993840,PASS

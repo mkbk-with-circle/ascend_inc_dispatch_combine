@@ -1,0 +1,53 @@
+{
+  "mode": "fused_inc",
+  "workers": 4,
+  "worker_devices": [
+    8,
+    9,
+    10,
+    11
+  ],
+  "inc_device": 12,
+  "model": "/models/Qwen3-30B-A3B",
+  "warmup": 1,
+  "measure": 3,
+  "tokens_per_wave": 32,
+  "activation_waves": 1,
+  "global_token_capacity": 128,
+  "worker_token_capacity": 32,
+  "results": [
+    {
+      "name": "prefill_128_b1",
+      "input_len": 128,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.0702209584414959,
+        0.06875846534967422,
+        0.0684116743505001
+      ],
+      "mean_s": 0.0691303660472234,
+      "median_s": 0.06875846534967422,
+      "cv_percent": 1.1341665622897392,
+      "output_tokens_per_second": 14.465423187791215,
+      "measured_token_ids": [
+        [
+          [
+            11
+          ]
+        ],
+        [
+          [
+            11
+          ]
+        ],
+        [
+          [
+            11
+          ]
+        ]
+      ],
+      "output_stable": true
+    }
+  ]
+}

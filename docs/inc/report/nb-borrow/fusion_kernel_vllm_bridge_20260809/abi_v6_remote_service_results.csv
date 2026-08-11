@@ -1,0 +1,13 @@
+environment,protocol,workers,active_tokens,tokens,hidden,intermediate,topk,activation_waves,warmup,measure,mean_us,median_us,cv_percent,dc_theoretical_max,dc_window_speedup,overlap_realized,status,source_log_dir
+910B2C-nb,abi-v6-wire-ring2,2,"32,32",32,256,512,2,2,5,100,620.232,621.125,1.970,1.5409,1.54051,0.999532,PASS,/tmp/inc-fusion-remote-wire-stability-100-20260809/W2_T32_H256_I512_K2_A2
+910B2C-nb,abi-v6-wire-ring2,4,"32,32,32,32",32,256,512,2,2,5,100,709.542,708.773,2.182,1.5989,1.5982,0.99926,PASS,/tmp/inc-fusion-remote-wire-stability-100-20260809/W4_T32_H256_I512_K2_A2
+910B2C-nb,abi-v6-wire-ring2,2,"17,17",17,192,320,1,2,2,5,724.885,728.422,1.190,1.56989,1.56989,1.000000,PASS,/tmp/inc-fusion-remote-wire-shape-sweep-20260809/W2_T17_H192_I320_K1_A2
+910B2C-nb,abi-v6-wire-ring2,2,"64,64",64,1024,1024,4,2,2,5,1148.796,1157.000,1.254,1.81792,1.81789,0.999977,PASS,/tmp/inc-fusion-remote-wire-shape-sweep-20260809/W2_T64_H1024_I1024_K4_A2
+910B2C-nb,abi-v6-wire-ring2,2,"128,128",128,2048,1024,2,2,2,5,1621.560,1623.090,0.942,1.84679,1.84648,0.999800,PASS,/tmp/inc-fusion-remote-wire-shape-sweep-20260809/W2_T128_H2048_I1024_K2_A2
+910B2C-nb,abi-v6-wire-ring2,4,"17,17,17,17",17,192,320,1,2,2,5,798.356,791.503,2.778,1.58223,1.58105,0.998709,PASS,/tmp/inc-fusion-remote-wire-shape-sweep-20260809/W4_T17_H192_I320_K1_A2
+910B2C-nb,abi-v6-wire-ring2,4,"64,64,64,64",64,1024,1024,8,2,2,5,4166.370,4231.080,2.281,1.93461,1.93452,0.999954,PASS,/tmp/inc-fusion-remote-wire-shape-sweep-20260809/W4_T64_H1024_I1024_K8_A2
+910B2C-nb,abi-v6-wire-ring2,4,"128,128,128,128",128,2048,1024,2,2,2,5,2258.322,2255.280,1.025,1.86356,1.86349,0.999958,PASS,/tmp/inc-fusion-remote-wire-shape-sweep-20260809/W4_T128_H2048_I1024_K2_A2
+910B2C-nb,abi-v6-wire-ring2,2,"37,11",37,256,512,2,2,2,10,720.033,720.312,1.325,1.57083,1.57043,0.999551,PASS,/tmp/inc-fusion-remote-wire-uneven-w2-20260809/W2_T37_H256_I512_K2_A2
+910B2C-nb,abi-v6-wire-ring2,4,"37,29,17,5",37,256,512,2,2,2,10,852.248,854.071,2.079,1.59781,1.59760,0.999780,PASS,/tmp/inc-fusion-remote-wire-uneven-w4-20260809/W4_T37_H256_I512_K2_A2
+910B2C-nb,abi-v6-wire-ring2,2,"64,64",64,16384,128,2,2,1,3,1921.467,1922.330,0.407,1.68348,1.68333,0.999873,PASS,/tmp/inc-fusion-remote-wire-wide-hidden-20260809/W2_T64_H16384_I128_K2_A2
+910B2C-nb,abi-v6-wire-ring2,4,"64,64,64,64",64,16384,128,2,2,1,3,2350.417,2358.170,0.470,1.77049,1.77026,0.999827,PASS,/tmp/inc-fusion-remote-wire-wide-hidden-20260809/W4_T64_H16384_I128_K2_A2

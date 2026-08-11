@@ -1,0 +1,287 @@
+{
+  "schema": "inc.multi_inc.delivery.conditional_lock.v2",
+  "gate": "multi_inc_delivery_conditional_lock",
+  "generated_at": "2026-07-29T04:50:21.175627+00:00",
+  "delivery_verdict": "CONDITIONAL",
+  "priority_correction": {
+    "not_the_issue": [
+      "combine_bandwidth_tuning",
+      "overlap_retuning"
+    ],
+    "the_issue": [
+      "dispatch_KgtW_correctness",
+      "dispatch_short_message_retention_T16_T32"
+    ]
+  },
+  "do_not_rerun": [
+    "combine_core_full_matrix",
+    "combine_locked_full_matrix",
+    "overlap_full_matrix",
+    "overlap_soak100"
+  ],
+  "locked_run": {
+    "run_id": "deliv-full-20260728T151726Z-1088096",
+    "elapsed_sec": 4550.1,
+    "gate": "docs/inc/report/multi_inc_delivery_validation_gate.json",
+    "cases_jsonl": "docs/inc/report/multi_inc_delivery_validation_cases.jsonl",
+    "fail_catalog": "docs/inc/report/multi_inc_delivery_validation_fail_catalog.csv",
+    "bandwidth_csv": "docs/inc/report/multi_inc_delivery_validation_bandwidth.csv",
+    "raw_root": "docs/inc/report/multi_inc_delivery_validation_logs/deliv-full-20260728T151726Z-1088096",
+    "raw_manifest": "docs/inc/report/multi_inc_delivery_raw_manifest.json",
+    "delivery_report": "docs/inc/multi_inc_dispatch_combine_delivery_report.md",
+    "fail_raw_case": "docs/inc/report/multi_inc_delivery_validation_logs/deliv-full-20260728T151726Z-1088096/cases/DISP_W2_K8_T1024_A0_symmetric_uniform",
+    "combine_locked_raw_cases": [
+      "COMB_LOCKED_W8_K8_R512_H7168_E20_m1",
+      "COMB_LOCKED_COLD_W8_K8_R512_H7168_E20_c1",
+      "COMB_LOCKED_COLD_W8_K8_R512_H7168_E20_c2",
+      "COMB_LOCKED_COLD_W8_K8_R512_H7168_E20_c3"
+    ]
+  },
+  "evidence_sha256": {
+    "multi_inc_delivery_validation_gate.json": "1874836361223249e42f6c5845f525e3a9d7cbf55a67b222747ef403d1d3cbed",
+    "multi_inc_delivery_validation_cases.jsonl": "1c5256186ca86cdd7bd36f8ed5c0f81c65ec2dbae20c15948385e18d5584e904",
+    "multi_inc_delivery_raw_manifest.json": "0962eee1064ab63a407e0e6cf9c1750e31a620bff61ec0a341c42a7e08c1c97c",
+    "multi_inc_dispatch_combine_final_gate.json": "f344bc4e83cb10e42055fe44f9e1bdeaadccafc177fcb01996204be892b2a34e",
+    "dyn_persistent_multi_epoch_formal_gate.json": "f0f788fff622d676b06856987a22ca4738a3a5309eba264ccc4357ee798e6b31",
+    "canonical_overlap_dyn_persistent_k8_r512_owner14_current_gate.json": "692762022e1db6cef64caba25f14cdcf7cd673b098cb0568679397ba0a20de47",
+    "canonical_overlap_dyn_persistent_k8_r512_owner14_current_soak100_gate.json": "6110fe76d42d58a7a447c1349ba53563ed26aff55e396f4f8f6b19594deda6f6"
+  },
+  "tooling_sha256_at_lock": {
+    "parser_version": "delivery_validation.v1",
+    "run_multi_inc_delivery_validation_6h.py": "2791e1bc9a65c6f25c38a17afeafbe70a2d1005c50dbc6ab606fe079e5970724",
+    "run_multi_inc_delivery_dispatch_one.py": "680ce741cd6271b8d2c202b113bd90c61f1a0511174dfb407cabf4b2a70e2a58",
+    "multi_inc_delivery_validation_matrix.json": "d619af2a9eeb9f590fb7e037c140e3fc887ff5286a4c425f93e401b386d411cd",
+    "run_multi_inc_dispatch_cartesian_vs_native.py": "e1d3e5cce8e7da4c9309517cc5c1d53678bfa5bf018401e56869727bf7c4e8d3",
+    "note": "Subsequent agents must not reinterpret this run with a different runner/parser without a new run_id. If scripts change, keep these SHAs as the freeze of how this evidence was produced."
+  },
+  "lineage_locked": {
+    "combine_executable_sha256": "85e51e49e22427b22c0d95dfc4c531947287c198899c866ae5850753891e198a",
+    "combine_kernel_sha256": "c36afcb3c208e518a25b74b750db51a8dbfaae43376a8763711fd18730aef184",
+    "dispatch_overlap_executable_sha256": "f4083561ff07b3eeb94955d0844155e0a2e0bd31e22c675147cf5ce29b963a0b",
+    "dispatch_overlap_kernel_sha256": "bac0adb013b8fded83984f7061b50fc7744ed3c8fa2ce901b612048edb4ca440",
+    "p100_frozen_useful_gbps": 128.43509709,
+    "default_path_replaced": false
+  },
+  "strengths_frozen": {
+    "combine_core_pass": "105/105",
+    "combine_locked_live_min_gbps": 176.61263141748162,
+    "combine_locked_live_median_gbps": 185.0150324058466,
+    "overlap_live_gain": 1.438077866541447,
+    "overlap_attest_gain": 1.5437613784968847,
+    "overlap_soak100_median_gain": 1.4653247147202246,
+    "fault_and_recovery_pass": true,
+    "timeout_count": 0,
+    "physical_ceiling_invalid_count": 0
+  },
+  "blockers_for_framework": [
+    {
+      "id": "dispatch_kgtw_correctness",
+      "case": "DISP_W2_K8_T1024_A0_symmetric_uniform",
+      "summary": "K>W large-token correctness FAIL"
+    },
+    {
+      "id": "dispatch_comparable_retention95",
+      "summary": "W8 comparable retention only 7/20 >= 0.95; T16 is 0/12; worst ≈0.3715; T32 must be included in formal comparable set",
+      "worst_case": "DISP_W8_K1_T16_A0_symmetric_uniform"
+    },
+    {
+      "id": "combine_176to185_metric_attestation",
+      "summary": "Offline independent recompute required before accepting live 176–185 GB/s"
+    },
+    {
+      "id": "framework_device_backend_bridge",
+      "summary": "production_device_backend_bound=false; must not introduce implicit device sync"
+    }
+  ],
+  "acceptance_contracts": {
+    "DISP_W2_K8_T1024_A0": {
+      "repro_before_fix": {
+        "lineage": "original locked dispatch/binary lineage",
+        "repeats": 3,
+        "require": "3/3 reproduce FAIL or document non-repro with evidence",
+        "split_root_causes": [
+          "worker_exit_timeout",
+          "four_output_mismatch",
+          "KgtW_route_or_capacity",
+          "slot_generation_or_output_layout"
+        ]
+      },
+      "after_fix": {
+        "same_case_repeats": "at least 10/10 PASS",
+        "neighborhood_matrix": {
+          "W": [
+            2
+          ],
+          "K": [
+            6,
+            8
+          ],
+          "tokens": [
+            512,
+            1024,
+            2048
+          ],
+          "patterns": [
+            "uniform",
+            "ragged",
+            "single-hot"
+          ]
+        },
+        "also_required": [
+          "consecutive_repeat_stability",
+          "fault_then_recovery"
+        ],
+        "forbidden": [
+          "extend_case_timeout_to_hide_hang",
+          "raise_single_case_timeout_above_30s_as_pass_strategy"
+        ],
+        "case_timeout_sec": 30
+      }
+    },
+    "dispatch_retention95": {
+      "comparable_set_definition": {
+        "must_include_tokens": [
+          16,
+          32,
+          512,
+          1024
+        ],
+        "note": "全部正式可比点至少覆盖此前要求的 T16、T32；不得只用 T512/T1024 冒充全员达标",
+        "world": "W8 formal comparable cells (native-eligible)",
+        "K_cover": [
+          1,
+          2,
+          4,
+          6,
+          8
+        ],
+        "skew_cover_min": [
+          "symmetric_uniform",
+          "hot80_or_ragged",
+          "single-hot"
+        ]
+      },
+      "pairing_rules": [
+        "native and INC use identical input artifact (same shape_dir/manifest/sha)",
+        "same session / same launch orchestration contract",
+        "same timing window / makespan definition: max(rank_us)",
+        "useful_bytes identical between native and INC"
+      ],
+      "samples_per_cell": 3,
+      "paired": true,
+      "metrics_recorded_per_cell": [
+        "min_retention",
+        "median_retention",
+        "each_sample_retention"
+      ],
+      "formal_gate_statistic": "min_retention_across_paired_samples",
+      "pass_line": 0.95,
+      "separate_judgements": [
+        "correctness_pass",
+        "timeout",
+        "retention_pass"
+      ],
+      "notes": [
+        "Do not fold timeout into retention fail without also marking timeout",
+        "Do not claim performance_pass when correctness_pass is false",
+        "Prioritize worst cell DISP_W8_K1_T16_A0 (~0.37)"
+      ]
+    },
+    "combine_176to185_metric_attestation": {
+      "rerun_npu": false,
+      "method": "offline_independent_recompute_from_locked_raw",
+      "inputs": [
+        "locked COMB_LOCKED_* rank_*.log under raw_root",
+        "lineage SHA256 of combine exe/so"
+      ],
+      "checks": [
+        "E20 useful_bytes consistency with contribution_count*hidden*2*epochs",
+        "epoch count = service_epochs (+warmup excluded from useful if applicable)",
+        "makespan = max(rank_us) over all ranks",
+        "timing window matches calibrated persistent deadline source",
+        "NOT (20-epoch useful_bytes) / (single-epoch time)",
+        "independent parser result matches original report within rounding"
+      ],
+      "accept_live_176_185_only_if": "independent_parser_agrees_and_metric_checks_pass",
+      "if_invalid": "fail-close; keep prior formal≈104–107 as promotion baseline; do not update p100_frozen"
+    }
+  },
+  "completion_standard": [
+    "W2/K8 correctness fixed and neighborhood matrix PASS (10/10 on index case; no timeout extension)",
+    "T16/T32 and all formal comparable dispatch cells retention >=95% by min paired sample",
+    "combine 176–185 GB/s independent recompute agrees with locked raw",
+    "device backend has no implicit synchronize",
+    "Megatron/vLLM multi-stream smoke PASS"
+  ],
+  "next_gate": "fix_dispatch_W2_K8_T1024_correctness_then_dispatch_comparable_retention95_gate_then_combine_176to185_metric_attestation_then_framework_device_backend_bridge_then_megatron_vllm_multistream_smoke",
+  "workplan": [
+    {
+      "step": 1,
+      "name": "lock_evidence",
+      "status": "done",
+      "includes": [
+        "run artifacts SHA",
+        "runner/parser SHA",
+        "raw manifest SHA",
+        "acceptance contracts v2"
+      ]
+    },
+    {
+      "step": 2,
+      "name": "fix_dispatch_W2_K8_T1024_correctness",
+      "status": "pending",
+      "contract": "acceptance_contracts.DISP_W2_K8_T1024_A0"
+    },
+    {
+      "step": 3,
+      "name": "dispatch_comparable_retention95_gate",
+      "status": "pending",
+      "contract": "acceptance_contracts.dispatch_retention95"
+    },
+    {
+      "step": 4,
+      "name": "combine_176to185_metric_attestation",
+      "status": "pending",
+      "contract": "acceptance_contracts.combine_176to185_metric_attestation"
+    },
+    {
+      "step": 5,
+      "name": "framework_device_backend_bridge",
+      "status": "pending",
+      "depends_on": [
+        "fix_dispatch_W2_K8_T1024_correctness",
+        "dispatch_comparable_retention95_gate",
+        "combine_176to185_metric_attestation"
+      ],
+      "pass_criteria": [
+        "production_device_backend_bound=true",
+        "no_implicit_aclrtSynchronizeDevice_on_enqueue_hot_path"
+      ]
+    },
+    {
+      "step": 6,
+      "name": "megatron_vllm_multistream_smoke",
+      "status": "pending",
+      "depends_on": [
+        "framework_device_backend_bridge"
+      ]
+    }
+  ],
+  "engineering_focus": {
+    "do": [
+      "dispatch K>W correctness",
+      "dispatch short-message retention (T16/T32 first)",
+      "combine metric offline attestation",
+      "real framework device backend without implicit sync"
+    ],
+    "do_not": [
+      "blind combine bandwidth tuning",
+      "blind overlap retuning",
+      "extend timeouts to paper over hangs",
+      "replace default_path / p100_frozen without dedicated gate",
+      "reinterpret locked run with changed parser/runner without new run_id"
+    ]
+  },
+  "handoff_note": "This lock is the next Agent starting point. No combine/overlap work needed now.",
+  "lock_document_sha256_excluding_self_field": null
+}

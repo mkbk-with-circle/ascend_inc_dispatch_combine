@@ -1,0 +1,3 @@
+environment,workers,tokens,hidden,intermediate,topk,activation_waves,measure,mean_us,median_us,cv_percent,dc_theoretical_max,dc_window_speedup,overlap_realized,status
+910B2C-nb,2,32,256,512,2,2,3,631.027,632.040,1.054,1.66239,1.65835,0.996322,PASS
+910B2C-nb,4,32,256,512,2,2,3,900.987,895.980,1.635,1.78725,1.77743,0.992981,PASS
