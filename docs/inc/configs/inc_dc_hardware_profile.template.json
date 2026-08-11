@@ -1,0 +1,26 @@
+{
+  "schema": "inc.dc.hardware_profile.v1",
+  "profile_id": "REPLACE_ME",
+  "hardware_generation": 1,
+  "soc_family": "future",
+  "cann_version": 90000,
+  "device_count": 1,
+  "aiv_count_per_device": 1,
+  "aic_count_per_device": 0,
+  "max_block_dim": 1,
+  "ub_bytes_per_aiv": 1,
+  "hbm_bytes_per_device": 0,
+  "workspace_alignment": 512,
+  "max_streams": 1,
+  "features": [],
+  "physical_link_gbps": null,
+  "measurement_margin_permille": 0,
+  "performance_promotion_allowed": false,
+  "evidence": {
+    "aiv_source": "REQUIRED_VENDOR_OR_RUNTIME_EVIDENCE",
+    "cann_source": "REQUIRED_RUNTIME_EVIDENCE",
+    "topology_source": "REQUIRED_NPU_SMI_OR_RUNTIME_EVIDENCE",
+    "physical_link_source": null,
+    "qualification_gate": null
+  }
+}

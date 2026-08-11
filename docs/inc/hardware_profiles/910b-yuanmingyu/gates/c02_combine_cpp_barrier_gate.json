@@ -1,0 +1,16 @@
+{
+  "stage": "c02_combine_cpp_barrier",
+  "git_revision": "e27f114cd313029e93ab699cca87930b0f5de9d1",
+  "run_id": "",
+  "host_contract_pass": false,
+  "device_correctness_pass": true,
+  "device_pipeline_pass": false,
+  "performance_valid": false,
+  "formal_pass": true,
+  "host_fallback_active": true,
+  "timing_window_clean": false,
+  "pass": true,
+  "bringup_only": true,
+  "presync_mode": "GROUP_BARRIER",
+  "cases": "n2_t1,n4_mixed"
+}

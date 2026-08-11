@@ -1,0 +1,8 @@
+{
+  "pass": true,
+  "stage": "c01_combine_contract_reference",
+  "git_revision": "unknown",
+  "tests": [
+    "inc_dc_combine_tests"
+  ]
+}

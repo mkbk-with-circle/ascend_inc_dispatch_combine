@@ -1,0 +1,43 @@
+{
+  "profile": "910c-local",
+  "topology": "paired",
+  "abi_version": 1,
+  "migration_complete": false,
+  "updated_at": "2026-07-09T11:05:00Z",
+  "git_revision": "38c7cc5",
+  "baseline_dual_topology": {
+    "single": "pass_line = native/N * 0.9",
+    "paired": "pass_line = native * 0.9 (no /N)"
+  },
+  "implementation": {
+    "dispatch_paired_ingress": "code_done",
+    "combine_dst_inc_routing": "code_done",
+    "paired_hot_path_no_barrier": "code_done",
+    "overlap_aiv_map": "code_done",
+    "overlap_concurrent": "code_done",
+    "dual_baseline_helpers": "code_done",
+    "legacy_host_paired_routing": "code_done",
+    "shape_driver_16rank_stall": "code_done"
+  },
+  "smoke": {
+    "rank_2": {"dispatch": "pending_local_910c", "combine": "pending_local_910c", "overlap": "pending_local_910c"},
+    "rank_4": {"dispatch": "pending_local_910c", "combine": "pending_local_910c", "overlap": "pending_local_910c"},
+    "rank_8": {"dispatch": "pending_local_910c", "combine": "pending_local_910c", "overlap": "pending_local_910c"}
+  },
+  "gates": {
+    "d03_paired_traversal": "pending_local_910c",
+    "c15b_paired_formal": "pending_local_910c",
+    "c12c_paired_bandwidth": "pending_local_910c",
+    "overlap_paired_bench": "pending_local_910c",
+    "overlap_nonblock_gate": "pending_local_910c",
+    "d03_single_traversal": "pending_local_910c",
+    "c15b_single_formal": "pending_local_910c"
+  },
+  "notes": [
+    "Pair-level INC_FIRST_PACKET sync; dc_ll_runner skips global barrier in PAIRED bench loop.",
+    "Combine routes by dst-rank paired INC; dispatch routes by source-rank paired INC.",
+    "inc_dc_overlap: concurrent dispatch+combine on same stream (overlap v1).",
+    "Shape matrix driver watches all 16 PE logs + boot grace for paired topology.",
+    "Validate on local 910c before setting migration_complete=true."
+  ]
+}

@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "inc.dc.hardware_profile.v1",
+  "title": "INC dispatch/combine hardware capability profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "profile_id",
+    "hardware_generation",
+    "soc_family",
+    "cann_version",
+    "device_count",
+    "aiv_count_per_device",
+    "max_block_dim",
+    "ub_bytes_per_aiv",
+    "workspace_alignment",
+    "max_streams",
+    "features",
+    "physical_link_gbps",
+    "evidence"
+  ],
+  "properties": {
+    "schema": {
+      "const": "inc.dc.hardware_profile.v1"
+    },
+    "profile_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "hardware_generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "soc_family": {
+      "enum": ["ascend310p", "ascend910", "ascend910b", "ascend910c", "future"]
+    },
+    "cann_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "major*10000 + minor*100 + patch"
+    },
+    "device_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "aiv_count_per_device": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "aic_count_per_device": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_block_dim": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ub_bytes_per_aiv": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "hbm_bytes_per_device": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "workspace_alignment": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_streams": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "features": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "device_event",
+          "stream_barrier",
+          "bf16",
+          "graph_capture",
+          "shmem_rdma",
+          "shmem_udma",
+          "absolute_device_cycle",
+          "persistent_kernel",
+          "dynamic_block_dim",
+          "external_stream"
+        ]
+      }
+    },
+    "physical_link_gbps": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "measurement_margin_permille": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "performance_promotion_allowed": {
+      "type": "boolean"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aiv_source", "cann_source", "topology_source"],
+      "properties": {
+        "aiv_source": {"type": "string", "minLength": 1},
+        "cann_source": {"type": "string", "minLength": 1},
+        "topology_source": {"type": "string", "minLength": 1},
+        "physical_link_source": {"type": ["string", "null"]},
+        "qualification_gate": {"type": ["string", "null"]}
+      }
+    }
+  }
+}
