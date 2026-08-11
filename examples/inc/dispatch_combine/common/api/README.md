@@ -26,6 +26,10 @@
 依赖关系：`Inference → Easy → Framework → backend vtable`；planner 被 Framework / backend 在 host 侧调用。  
 单 INC 真机 provider 注入时，vtable 通常是 **`native_composite_backend`**（内部再分发到 dispatch/combine），而不是 Framework 直接各挂一个裸 kernel。
 
+首次接入建议使用 `inc_dc_inference_api.h`，并从
+[`../examples/inference_api/inc_dc_inference_api_example.cpp`](../examples/inference_api/inc_dc_inference_api_example.cpp)
+复制完整生命周期。
+
 ---
 
 ## English

@@ -168,6 +168,10 @@ inc_host_target(inc_fusion_api_tests)
 target_compile_options(inc_fusion_api_tests PRIVATE -UNDEBUG)
 target_link_libraries(inc_fusion_api_tests PRIVATE inc_fusion_api)
 
+# Small public-C-API examples for integrators.  The directory owns its targets
+# so examples stay readable without growing this delivery manifest further.
+add_subdirectory(fusion_kernel/examples)
+
 # Single-INC Dispatch.
 add_library(inc_dc_single_inc_stream_kernel SHARED
     dispatch_combine/single_inc/dispatch/inc_dc_single_inc_stream_kernel.cpp)
@@ -305,6 +309,13 @@ foreach(pair IN ITEMS
     target_compile_options(${target} PRIVATE -UNDEBUG)
     target_link_libraries(${target} PRIVATE ${library})
 endforeach()
+
+# Runnable host-only single-INC lifecycle example.  The CPU mock backend keeps
+# the public API executable on development hosts without touching any NPU.
+add_executable(inc_dc_inference_api_example
+    dispatch_combine/common/examples/inference_api/inc_dc_inference_api_example.cpp)
+inc_host_target(inc_dc_inference_api_example)
+target_link_libraries(inc_dc_inference_api_example PRIVATE inc_dc_inference_api)
 
 add_custom_target(inc_dc_framework_c_header_tests
     COMMAND ${CMAKE_C_COMPILER} -std=c11 -fsyntax-only

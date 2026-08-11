@@ -1,44 +1,46 @@
-# Inference API example / 推理 API 示例
+# 单 INC Inference API 示例
 
-## 中文
+[`inc_dc_inference_api_example.cpp`](inc_dc_inference_api_example.cpp) 是一份可运行的完整程序，覆盖
+session/plan 预分配、Dispatch fan-out、模拟 expert 计算、Combine weighted reduction、
+结果校验和资源释放：
 
-### 这个目录是干什么的？
+```text
+backend/allocator → session → prepared plan → route
+  → dispatch_async → expert compute → combine_with_route_async
+  → golden 校验 → request/route/plan/session 释放
+```
 
-演示 **Inference API** 的推荐用法：创建 session → 为固定 `(tokens, topk)` bucket
-预分配 Dispatch/Combine plan → 在 scheduler 热路径异步提交 → 显式管理
-request、route handle、plan、session 生命周期。
+示例使用 CPU mock，因此不访问 NPU；构建仍需本仓库的 CANN/BiSheng toolchain。
+mock 只替代 backend、device allocator 和 stream，正式 API 生命周期与真机一致。
+真机把三者分别换成 `native_composite_backend`、ACL allocator 和 `aclrtStream`，
+bootstrap 参考 `inc_dc_native_full_example`。
 
-### 为什么要单独示例（而不是复用 Easy 示例）？
+> mock 在 `enqueue` 内完成计算，仅验证 API、数值和生命周期，不是 INC 性能或交叠证据。
 
-- Easy 示例偏「每次拼 op」；推理热路径需要 **prepare once, submit many**。
-- 同 plan 上 Dispatch 与 Combine 可同时 in-flight——这是 Inference 层的关键语义，必须有示例钉死。
-- 不进入运行库；可作为 SDK 示例随源码提供。
+### 使用 CMake 构建运行
 
-### 文件一览
+确保已加载 CANN 环境后，从源码目录执行：
 
-| 文件 | 用途 | 为什么要有 |
-|---|---|---|
-| `inference_loop.c` | 唯一示例：session/plan 预分配 + 热路径异步提交 + 生命周期销毁 | 钉死推理 scheduler 接入契约；C11 编译门禁 |
+```bash
+cmake -S . -B build -DUSE_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target inc_dc_inference_api_example -j
+build/bin/inc_dc_inference_api_example
+```
 
----
+成功时末尾应看到：
 
-## English
+```text
+[6/8] 正确性校验 PASS
+[8/8] route/plan/session 全部释放，workspace alloc/free=2/2
+示例执行成功。
+```
 
-### What is this directory?
+同一个 prepared plan 有独立的 Dispatch/Combine slot，可在两个 stream 上保留一组
+D/C 并发；同一 operation 的多并发请求应使用小型 plan pool。
 
-The recommended **Inference API** usage: create a session, prepare Dispatch and
-Combine plans for a fixed `(tokens, topk)` bucket, submit asynchronously from a
-scheduler hot path, and manage request/route/plan/session lifetimes explicitly.
+## 文件
 
-### Why a separate sample from Easy?
-
-- Easy samples build ops ad hoc; inference needs **prepare once, submit many**.
-- One plan may have Dispatch and Combine in flight together—that semantic must
-  be demonstrated.
-- Not runtime library code; suitable as an SDK source sample.
-
-### Files
-
-| File | Purpose | Why it exists |
-|---|---|---|
-| `inference_loop.c` | Sole sample: prepare session/plans, async submit, destroy | Pins the scheduler contract; C11 compile gate |
+| 文件 | 用途 |
+|---|---|
+| `inc_dc_inference_api_example.cpp` | 完整、可运行的 CPU mock 生命周期与数值示例 |
+| `inference_loop.c` | scheduler adapter 的轻量 C11 示例 |
