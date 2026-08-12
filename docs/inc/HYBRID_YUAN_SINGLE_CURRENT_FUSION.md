@@ -37,3 +37,29 @@ correctness for this assembled source tree.
 
 The recorded nb smoke result is under
 `docs/inc/report/nb-borrow/hybrid_yuan_single_current_fusion_smoke_20260813/`.
+
+## Fresh-clone preparation
+
+The CATLASS checkout is intentionally not committed to this repository.  A
+fresh clone is prepared from the pinned upstream commit and the tracked patch:
+
+```bash
+examples/inc/fusion_kernel/tools/prepare_catlass_dependency.sh
+```
+
+The command is idempotent and verifies both the patch and resulting header by
+SHA-256.  The correctness smoke invokes it automatically before configuring
+CMake.
+
+Only Git-tracked files need to be transferred to another host.  Do not copy
+`3rdparty/`, build directories, test output, device logs, or local Git bundles;
+they are generated or machine-local.  After transfer, verify the checkout with:
+
+```bash
+git status --short
+git rev-parse HEAD
+```
+
+The expected result for this delivery is a clean worktree on branch
+`hybrid-yuan-single-current-fusion-20260812`.  Use the repository preparation
+script on the destination before building the fusion target.

@@ -73,3 +73,13 @@ src/python/shmem/backends/
 src/python/shmem/scripts/
 
 .arts/
+
+# Local editor and test-run metadata
+.DS_Store
+*.swp
+*.swo
+*.orig
+*.rej
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
