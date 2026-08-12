@@ -2,7 +2,7 @@
 
 - Date: 2026-08-13
 - Host: `nb-borrow`
-- Tested main-repository commit: `92c9959f4cc6685873a3d6722a8ecf116c9bb3e7`
+- Tested main-repository commit: `784bc8201f33ca0c5183633a4611b96a95f18052`
 - Single-INC source: `e06ce80d875a3509c9660d20b7a2ec0f6ad68c2f`
 - Fusion source: `e06ce80d875a3509c9660d20b7a2ec0f6ad68c2f`
 - CATLASS source: `7d4c8401ae2b2aeb8a5786671e4fe7f53ca96c18`
@@ -16,6 +16,9 @@ The smoke rebuilt `inc_dc_single_inc_stream`,
 correctness cases. Dispatch K1/K2 and combine K1/K2 each completed with all
 three expected ranks passing and process return code 0. The W2 fusion case
 also reported `PASS`.
+
+This recorded run was repeated after the repository cleanup commit had been
+transferred to nb, so it also qualifies the clean remote-sync workflow.
 
 Any timing printed incidentally by the smoke is not a performance result and
 must not replace the qualified yuanmingyu single-INC sweep data.

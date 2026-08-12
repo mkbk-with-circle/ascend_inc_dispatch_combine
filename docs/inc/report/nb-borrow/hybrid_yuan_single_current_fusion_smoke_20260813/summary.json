@@ -1,6 +1,6 @@
 {
   "schema": "yuan_single_current_fusion_smoke_v1",
-  "source_commit": "92c9959f4cc6685873a3d6722a8ecf116c9bb3e7",
+  "source_commit": "784bc8201f33ca0c5183633a4611b96a95f18052",
   "single_inc_source_commit": "e06ce80d875a3509c9660d20b7a2ec0f6ad68c2f",
   "fusion_source_commit": "e06ce80d875a3509c9660d20b7a2ec0f6ad68c2f",
   "catlass_commit": "7d4c8401ae2b2aeb8a5786671e4fe7f53ca96c18",
