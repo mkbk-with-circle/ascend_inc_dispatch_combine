@@ -34,3 +34,6 @@ It does not run a throughput sweep and does not update performance gates.
 The yuanmingyu Phase-A data remains the performance reference for single-INC;
 nb only establishes buildability, topology placement, launch, and all-rank
 correctness for this assembled source tree.
+
+The recorded nb smoke result is under
+`docs/inc/report/nb-borrow/hybrid_yuan_single_current_fusion_smoke_20260813/`.

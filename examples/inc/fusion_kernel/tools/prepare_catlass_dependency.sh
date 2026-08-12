@@ -11,6 +11,17 @@ PATCH=$ROOT/examples/inc/fusion_kernel/third_party_patches/catlass_grouped_matmu
 PATCHED_FILE=include/catlass/gemm/kernel/grouped_matmul_slice_m.hpp
 PATCHED_FILE_SHA256=8d6c8b11a0826abac95974364012ff84b90042961c840c58a30dd75558d7cebb
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    echo "neither sha256sum nor shasum is available" >&2
+    return 127
+  fi
+}
+
 [[ -f "$PATCH" ]] || { echo "missing CATLASS patch: $PATCH" >&2; exit 2; }
 
 if [[ ! -d "$CATLASS_DIR/.git" ]]; then
@@ -32,7 +43,7 @@ if [[ "$head" != "$CATLASS_COMMIT" ]]; then
   git -C "$CATLASS_DIR" checkout --detach "$CATLASS_COMMIT"
 fi
 
-actual_file_sha256=$(sha256sum "$CATLASS_DIR/$PATCHED_FILE" | awk '{print $1}')
+actual_file_sha256=$(sha256_file "$CATLASS_DIR/$PATCHED_FILE")
 if [[ "$actual_file_sha256" == "$PATCHED_FILE_SHA256" ]]; then
   : # The exact pinned patch is already present.
 elif [[ -n "$(git -C "$CATLASS_DIR" status --short --untracked-files=no)" ]]; then
@@ -46,22 +57,21 @@ else
   exit 2
 fi
 
-mapfile -t tracked_changes < <(
+tracked_changes=$(
   git -C "$CATLASS_DIR" status --short --untracked-files=no |
     sed -n '/^[ MARC][MDARC] /p'
 )
-if [[ "${#tracked_changes[@]}" -ne 1 ||
-      "${tracked_changes[0]}" != " M $PATCHED_FILE" ]]; then
+if [[ "$tracked_changes" != " M $PATCHED_FILE" ]]; then
   echo "unexpected CATLASS tracked state" >&2
-  printf '%s\n' "${tracked_changes[@]}" >&2
+  printf '%s\n' "$tracked_changes" >&2
   exit 2
 fi
 
 git -C "$CATLASS_DIR" diff --check
-actual_file_sha256=$(sha256sum "$CATLASS_DIR/$PATCHED_FILE" | awk '{print $1}')
+actual_file_sha256=$(sha256_file "$CATLASS_DIR/$PATCHED_FILE")
 if [[ "$actual_file_sha256" != "$PATCHED_FILE_SHA256" ]]; then
   echo "CATLASS patched file does not match the pinned content" >&2
   exit 2
 fi
 
-echo "CATLASS_READY commit=$CATLASS_COMMIT patch=$(sha256sum "$PATCH" | awk '{print $1}') dir=$CATLASS_DIR"
+echo "CATLASS_READY commit=$CATLASS_COMMIT patch=$(sha256_file "$PATCH") dir=$CATLASS_DIR"
