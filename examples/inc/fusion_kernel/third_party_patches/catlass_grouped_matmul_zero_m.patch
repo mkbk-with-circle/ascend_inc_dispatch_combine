@@ -1,0 +1,19 @@
+diff --git a/include/catlass/gemm/kernel/grouped_matmul_slice_m.hpp b/include/catlass/gemm/kernel/grouped_matmul_slice_m.hpp
+index be2598b..9af8136 100644
+--- a/include/catlass/gemm/kernel/grouped_matmul_slice_m.hpp
++++ b/include/catlass/gemm/kernel/grouped_matmul_slice_m.hpp
+@@ -147,0 +148,10 @@ public:
++            // Sparse MoE group lists legitimately contain repeated prefixes.
++            // Feeding M=0 to the identity scheduler is undefined on Atlas A2
++            // and can produce a phantom tile that overwrites the following
++            // expert row.  The B pointer must still advance because every
++            // logical expert owns one dense weight matrix.
++            if (currentM == 0u) {
++                gmGroupOffsetB += static_cast<int64_t>(
++                    params.problemShape.k()) * params.problemShape.n();
++                continue;
++            }
+@@ -216 +226 @@ public:
+-#endif // CATLASS_GEMM_KERNEL_GROUPED_MATMUL_HPP
+\ No newline at end of file
++#endif // CATLASS_GEMM_KERNEL_GROUPED_MATMUL_HPP
