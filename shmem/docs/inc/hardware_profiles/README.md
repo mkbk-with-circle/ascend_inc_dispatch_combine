@@ -9,8 +9,9 @@
 
 ## 活跃 profile
 
-历史 ACTIVE 指针仍是 **910b-yuanmingyu**；在 npu-borrow 上运行时必须显式选择
-`910b2c-nb`，不能把候选环境数据写回旧 profile：
+当前 [`ACTIVE_HW_PROFILE.md`](../report/ACTIVE_HW_PROFILE.md) 指向
+**910b2c-nb**。在 npu-borrow 上运行时显式加载对应配置，且不能把 nb 的双平面
+数据写回旧 yuanmingyu profile：
 
 ```bash
 source docs/inc/configs/910b2c-nb.env

@@ -19,6 +19,18 @@ The main-repository commits happen to be the same today, so no source-level
 cherry-pick is required. The important assembly fix is making the previously
 implicit CATLASS dependency and its sparse zero-M guard reproducible.
 
+## Public entry points
+
+- Standalone Single-INC application code includes only
+  `examples/inc/dispatch_combine/common/api/inc_dc_single_inc.hpp` and follows
+  `create -> dispatch -> compute -> combine -> destroy`.
+- Its only maintained runnable example is
+  `examples/inc/dispatch_combine/common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp`.
+- Fusion uses `examples/inc/fusion_kernel/ascend/inc_fusion_api.h` directly.
+
+Framework/Easy/Inference remain internal V1 runtime and regression dependencies;
+they are not alternative integration APIs.
+
 ## Correctness-only validation
 
 On an idle nb host:

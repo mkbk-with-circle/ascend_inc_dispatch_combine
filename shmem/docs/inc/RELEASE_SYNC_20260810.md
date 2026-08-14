@@ -7,6 +7,11 @@
 - `examples/CMakeLists.txt`：上述 target 的构建入口。
 - `docs/inc/`：当前设计、API、硬件 profile、最新资格化结果和发布候选。
 
+同步后的 Single-INC 公开入口只有
+`examples/inc/dispatch_combine/common/api/inc_dc_single_inc.hpp`，唯一学习示例为
+`common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp`。旧 Easy/Inference
+示例和 SingleInc async/request/query/cancel/plan/stats 接口不属于当前交付面。
+
 最新 Fusion 资格化入口是
 `docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/README.md`；扩展 sweep 位于
 `fusion_kernel_release_20260810/`，清理后的发布验证见

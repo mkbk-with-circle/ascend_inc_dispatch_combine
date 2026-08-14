@@ -6,8 +6,9 @@
 Fusion 数据统一入口：[`FUSION_KERNEL_RESULTS.md`](FUSION_KERNEL_RESULTS.md)。
 
 - [`single_inc_inline_v2_dispatch_20260814`](single_inc_inline_v2_dispatch_20260814/README.md)：
-  V2 complete-token inline-route Dispatch；INC 无 token-plan 预知、24/48 AIV，
-  W2/W4 大消息 20 次稳定性与通用路由回归。
+  暂停开发的 V2 complete-token inline-route Dispatch 实验数据；INC 无 token-plan
+  预知、24/48 AIV，W2/W4 大消息 20 次稳定性与通用路由回归。它不是当前公开
+  `SingleInc` V1 API 的默认 backend，也不覆盖/替代 V1 结果。
 - `single_inc_overlap_20260808T113214Z/`：W2/W4、单算子 128 MiB 的单 INC
   交叠资格化测试，包含单独运行、同时启动和错峰 500 微秒三种时序。
 - [`fusion_kernel_release_20260810`](fusion_kernel_release_20260810/README.md)：当前 ABI 13 发布候选；冻结的 `fused_inc`

@@ -16,8 +16,8 @@
 | 层次 | 覆盖 | 结果 |
 |---|---|---|
 | 残留审计 | 已删除实现的文件名、CMake target、文档关键词与旧配置 | 无残留 |
-| 从零构建 | 公共 C/C++ API、单 INC D/C、native runtime、Fusion plan/API/compute/e2e、两个示例 | 全部通过 |
-| Host 正确性 | 9 个单 INC API/plan/runtime 测试、Fusion plan/benchmark/API | 全部通过 |
+| 从零构建 | 最短 C++ API、内部 C bridge、单 INC D/C、native runtime、Fusion plan/API/compute/e2e | 全部通过 |
+| Host 正确性 | 单 INC API/plan/runtime 内部门禁、唯一公开示例、Fusion plan/benchmark/API | 全部通过 |
 | 设备计算正确性 | BF16 grouped GEMM、融合 FFN、独立 activation | 全部通过 |
 | 重复稳定性 | 单 INC API/完整示例/D+C plan、Fusion plan/API，100 轮 | 100/100 通过 |
 | 真机端到端 | W2/W4 Dispatch、Combine、Fusion 2-wave/4-wave | 全部 PE 通过 |
@@ -54,7 +54,8 @@
 cmake -S . -B /tmp/shmem-release -DUSE_EXAMPLES=ON \
   -DCMAKE_BUILD_TYPE=Release -DSOC_TYPE=Ascend910B
 cmake --build /tmp/shmem-release --target \
-  inc_dc_inference_api_tests inc_dc_inference_api_example \
+  inc_dc_inference_api_tests inc_dc_single_inc_c_header_tests \
+  inc_dc_single_inc_api_example \
   inc_dc_single_inc_stream inc_dc_sv2_dyn_csr_combine \
   inc_fusion_plan_tests inc_fusion_api_tests inc_fusion_compute_tests \
   inc_fusion_e2e inc_fusion_plan_smoke inc_fusion_runtime_skeleton -j4
