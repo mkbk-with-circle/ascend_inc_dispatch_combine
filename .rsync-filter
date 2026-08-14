@@ -1,0 +1,30 @@
+# rsync 同步样机工作区时排除（用法: rsync -av --filter='merge .rsync-filter' ...）
+# 保留 report/ 根下 gate JSON、audit md、trace csv；勿传 build/log/golden/bin
+
+- shmem/build/
+- **/build/
+- **/CMakeFiles/
+- *.o
+- *.log
+- *rank_*.log
+- driver.log
+- launcher
+- shmem/docs/inc/report/d03_dc_ll_logs/
+- shmem/docs/inc/report/*_logs/
+- shmem/docs/inc/report/c12c_logs/
+- shmem/docs/inc/report/c12c_bw_tune_logs/
+- shmem/docs/inc/report/c12c_tuned_logs/
+- shmem/docs/inc/report/p5/native_baseline_logs/
+- shmem/docs/inc/report/multi_inc_bw_matrix_*/
+- shmem/docs/inc/report/d03_dc_ll_logs/**/native/
+- shmem/docs/inc/report/d03_dc_ll_logs/**/golden/
+- shmem/docs/inc/report/d03_dc_ll_logs/**/*.bin
+- shmem/docs/inc/report/**/*_logs/**/native/
+- shmem/docs/inc/report/**/*_logs/**/golden/
+- shmem/docs/inc/report/**/*.bin
+- **/native/
+- **/golden/
+- .git/objects/
+- __pycache__/
+- *.pyc
+- /tmp/

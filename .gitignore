@@ -1,0 +1,110 @@
+# =============================================================================
+# ascend-样机 工具 / 代码管理准则（与 .rsync-filter、tmp_sync_*_upload.sh 对齐）
+#
+# 分层（上传/入库都按此取舍）：
+#   Tier A 关键代码（应传 / 应跟踪）~25–45 MB
+#     - shmem/{src,include,scripts,python,tests,CMake*,setup.py,version.info}
+#     - shmem/examples/{inc,dispatch,combine,dispatch_gmm_combine,utils,templates}
+#     - shmem/docs/inc/*.md, configs/, hardware_profiles/
+#     - shmem/docs/inc/report 下的 STATUS / KEY_RESULTS / ACTIVE_* / *gate*.json
+#     - 顶层 scripts/、.rsync-filter
+#   Tier B 可构建配套（按需）~+70 MB
+#     - shmem/3rdparty/、其余 examples、docs/inc/assets、docs/images
+#   Tier C 默认不同步 / 不入库
+#     - cann-packages/（~2.7G，远端单独装或 ASCEND_SYNC_INCLUDE_CANN=1）
+#     - build*/install/、二进制、日志、golden/native dump、大 sweep 原始产物
+#     - .local/、_quarantine/、IDE/cursor 缓存
+#
+# 原则：
+#   1. 源码与可复现配置进仓；大包与可再生实验结果不进仓。
+#   2. report 只留 gate / 状态摘要；*_logs、矩阵原始目录、shared_artifacts 本地留存。
+#   3. CANN 安装包与源码生命周期分离，避免每次代码同步拖 2GB+。
+#   4. rsync 上传默认跟随本文件精神（见 .rsync-filter）；需要 CANN 时显式开开关。
+# =============================================================================
+
+# --- Tier C：大包 / 本机环境 ---
+/cann-packages/
+.local/
+_quarantine/
+docker/
+/shmem-hybrid-yuan-single-current-fusion/
+/nsdi-同步论文/
+**/.git.nested-bak/
+
+# crash dumps
+core
+core.[0-9]*
+
+# IDE / OS
+.cursor/
+.vscode/
+.idea/
+.DS_Store
+._*
+.directory
+*.swp
+*~
+
+# --- 构建产物（含多 CANN 版本 out-of-tree build）---
+**/build/
+**/Build/
+**/cmake-build-*/
+**/CMakeFiles/
+shmem/build-*/
+shmem/install/
+*.o
+*.obj
+*.a
+*.la
+*.lo
+*.so
+*.dylib
+*.dll
+*.bin
+*.exe
+*.out
+a.out
+launcher
+
+# Python / 包
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+*.egg
+
+# 日志与驱动噪声
+*.log
+*rank_*.log
+driver.log
+
+# 基准/正确性 dump（可再生）
+**/native/
+**/golden/
+**/native_baseline_logs/
+
+# --- report：大体积原始产物（保留根目录 gate/STATUS/md，见下方否定规则不可用时靠目录排除）---
+shmem/docs/inc/report/**/*_logs/
+shmem/docs/inc/report/d03_dc_ll_logs/
+shmem/docs/inc/report/c12c_logs/
+shmem/docs/inc/report/c12c_bw_tune_logs/
+shmem/docs/inc/report/c12c_tuned_logs/
+shmem/docs/inc/report/p5/native_baseline_logs/
+shmem/docs/inc/report/multi_inc_bw_matrix_*/
+shmem/docs/inc/report/inc_dispatch_shared_artifacts/
+shmem/docs/inc/report/sv2_*/
+shmem/docs/inc/report/historical_*/
+shmem/docs/inc/report/**/*_freeze/
+shmem/docs/inc/report/**/*_candidate/
+shmem/docs/inc/report/**/*_raw/
+shmem/docs/inc/report/*.tmp.json
+shmem/docs/inc/report/**/*.csv
+shmem/docs/inc/report/**/*.jsonl
+
+# examples 附属文档生成物
+shmem/examples/docs/
+
+# 嵌套 git 对象（若整仓再套一层 git，勿提交 objects）
+.git/objects/
