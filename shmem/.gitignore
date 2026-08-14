@@ -1,0 +1,85 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+*.bin
+
+/.idea/
+/.vscode/
+/cmake-build-*/
+/build/
+/Build/
+/build*/
+/install/
+**/build/
+
+# CMake build artifacts (any nesting level)
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/Makefile
+**/*.dir/
+
+sync_config.jsonc
+/tests/examples/matmul_allreduce/__pycache__
+*__pycache__*
+
+3rdparty/
+install/
+oat_reports/
+log/
+
+# compile temp file
+ci/
+dist/
+package/
+src/python/shmem.egg-info/
+src/python/cann_shmem.egg-info/
+src/python/shmem/version.info
+src/python/shmem/VERSION
+src/python/shmem/include/
+src/python/shmem/bin/
+src/python/shmem/src/
+src/python/shmem/backends/
+src/python/shmem/scripts/
+
+.arts/
+
+# Local editor and test-run metadata
+.DS_Store
+*.swp
+*.swo
+*.orig
+*.rej
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
