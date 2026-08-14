@@ -1,0 +1,155 @@
+{
+  "mode": "fused_inc",
+  "workers": 4,
+  "worker_devices": [
+    8,
+    9,
+    10,
+    11
+  ],
+  "inc_device": 12,
+  "model": "/models/Qwen3-30B-A3B",
+  "warmup": 2,
+  "measure": 5,
+  "tokens_per_wave": 64,
+  "activation_waves": 1,
+  "global_token_capacity": 512,
+  "worker_token_capacity": 128,
+  "results": [
+    {
+      "name": "prefill_32_b1",
+      "input_len": 32,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.07296052947640419,
+        0.07230861485004425,
+        0.07253364846110344,
+        0.07238684967160225,
+        0.07267357781529427
+      ],
+      "mean_s": 0.07257264405488968,
+      "median_s": 0.07253364846110344,
+      "cv_percent": 0.3180567084223819,
+      "output_tokens_per_second": 13.779296772536753,
+      "measured_token_ids": [
+        [
+          [
+            450
+          ]
+        ],
+        [
+          [
+            450
+          ]
+        ],
+        [
+          [
+            450
+          ]
+        ],
+        [
+          [
+            450
+          ]
+        ],
+        [
+          [
+            450
+          ]
+        ]
+      ],
+      "output_stable": true
+    },
+    {
+      "name": "prefill_128_b1",
+      "input_len": 128,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.07812359929084778,
+        0.07218195125460625,
+        0.07213261350989342,
+        0.07252952083945274,
+        0.0725150853395462
+      ],
+      "mean_s": 0.07349655404686928,
+      "median_s": 0.0725150853395462,
+      "cv_percent": 3.1557011877893384,
+      "output_tokens_per_second": 13.606080080465988,
+      "measured_token_ids": [
+        [
+          [
+            67
+          ]
+        ],
+        [
+          [
+            67
+          ]
+        ],
+        [
+          [
+            67
+          ]
+        ],
+        [
+          [
+            67
+          ]
+        ],
+        [
+          [
+            67
+          ]
+        ]
+      ],
+      "output_stable": true
+    },
+    {
+      "name": "prefill_512_b1",
+      "input_len": 512,
+      "output_len": 1,
+      "batch_size": 1,
+      "latencies_s": [
+        0.08225465565919876,
+        0.08180709555745125,
+        0.08170901611447334,
+        0.08166032284498215,
+        0.08166252076625824
+      ],
+      "mean_s": 0.08181872218847275,
+      "median_s": 0.08170901611447334,
+      "cv_percent": 0.2742218393561884,
+      "output_tokens_per_second": 12.222141500773617,
+      "measured_token_ids": [
+        [
+          [
+            2220
+          ]
+        ],
+        [
+          [
+            2220
+          ]
+        ],
+        [
+          [
+            2220
+          ]
+        ],
+        [
+          [
+            2220
+          ]
+        ],
+        [
+          [
+            2220
+          ]
+        ]
+      ],
+      "output_stable": true
+    }
+  ]
+}

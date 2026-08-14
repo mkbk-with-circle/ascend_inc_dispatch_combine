@@ -1,0 +1,83 @@
+{
+  "schema": "single_inc_cross_environment_representative_replay_v1",
+  "environment": {
+    "profile": "910b2c-nb",
+    "host": "A03-R40-I48-253-0046364.JD.LOCAL",
+    "npu": "16x Ascend 910B2C",
+    "cann": "/usr/local/Ascend/cann-9.1.0-beta.3",
+    "build": "build-nb-cann91",
+    "inc_phy": 0,
+    "worker_phys": [1, 2, 3, 4],
+    "worker_inc_relations": ["HCCS", "HCCS", "HCCS", "HCCS"]
+  },
+  "policy": {
+    "validated_worker_scales_on_this_environment": [2, 4],
+    "w8_excluded": true,
+    "reason": "An 8-card HCCS plane cannot contain 8 workers plus one INC."
+  },
+  "reference_environment": {
+    "profile": "910b-yuanmingyu",
+    "npu": "Ascend 910B",
+    "cann": "/opt/Ascend-9.1/cann-9.1.0-beta.1",
+    "dispatch_W4_K8_256MiB_GBps": 130.57,
+    "combine_W4_K8_128MiB_GBps": 128.37,
+    "sources": [
+      "docs/inc/report/single_inc_k1_private_mte_optimization_cann91_20260804.md",
+      "docs/inc/report/single_inc_os_random_plan_campaign_cann91_20260804.md",
+      "docs/inc/hardware_profiles/910b-yuanmingyu/single_inc_ENV_STATUS.md"
+    ],
+    "source_sha256": {
+      "docs/inc/report/single_inc_k1_private_mte_optimization_cann91_20260804.md": "2b600c2968ab5e4bcfc58cb36a5d5b60f298678bc44b2ce53b62fa544bf797d3",
+      "docs/inc/report/single_inc_os_random_plan_campaign_cann91_20260804.md": "15732fcb999853195a64a95dc4fbf91225b9d243a978926a4cf3e99de0def686",
+      "docs/inc/hardware_profiles/910b-yuanmingyu/single_inc_ENV_STATUS.md": "8e637acc5cc614acc4d1b45c9c1971953845fbd23e73b40623cf2c522d64b37c"
+    }
+  },
+  "replay": {
+    "dispatch": {
+      "shape": "W4/K8, tokens_per_worker=2048, hidden_bytes=8192",
+      "physical_direction_bytes_per_epoch": 268435456,
+      "warmup_epochs": 3,
+      "measure_epochs": 10,
+      "transport_path": "single_inc_relay",
+      "passed_ranks": 5,
+      "expected_ranks": 5,
+      "correct": true,
+      "slow_rank_us": [4647.46, 4726.34, 4687.78, 4743.98, 4682.22, 4674.78, 4754.56, 4743.92, 4782.72, 4675.26],
+      "GBps_min": 56.12610731968419,
+      "GBps_mean": 56.97412921858498,
+      "GBps_max": 57.75960546190823,
+      "GBps_cv": 0.008852031514528859,
+      "current_environment_put_roofline_GBps": 85.649933,
+      "mean_roofline_efficiency": 0.665197594743937,
+      "log_dir": "dispatch_W4_K8_B268435456"
+    },
+    "combine": {
+      "shape": "W4/K8, results=256, hidden_elements=32768",
+      "physical_direction_bytes_per_epoch": 134217728,
+      "physical_direction_bytes_total": 1342177280,
+      "warmup_epochs": 3,
+      "measure_epochs": 10,
+      "transport_path": "single_inc_combine",
+      "passed_ranks": 5,
+      "expected_ranks": 5,
+      "correct": true,
+      "rank_us": [18102.6, 18025.9, 18202.1, 18244.6, 18256.4],
+      "slow_rank_us": 18256.4,
+      "GBps": 73.51817883043753,
+      "current_environment_put_roofline_GBps": 85.527132,
+      "roofline_efficiency": 0.859584284706145,
+      "mismatch_count": 0,
+      "nonfinite_count": 0,
+      "log_dir": "combine_W4_K8_B134217728"
+    }
+  },
+  "postcondition": {
+    "npu_idle_cards": 16,
+    "npu_total_cards": 16,
+    "exclusive_lock_free": true
+  },
+  "notes": [
+    "The first dispatch operator run itself returned success for all ranks. The outer tee process returned 1 because its side-log parent did not exist when tee opened it; the device logs are complete and retained.",
+    "No result from 910b-yuanmingyu was overwritten or copied into the 910b2c-nb measurement fields."
+  ]
+}

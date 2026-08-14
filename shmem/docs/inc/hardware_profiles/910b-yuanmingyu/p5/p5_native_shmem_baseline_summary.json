@@ -1,0 +1,12 @@
+{
+  "run_id": "20260708T145512Z-472785",
+  "git_revision": "unknown",
+  "baseline_128m_valid": false,
+  "baseline_128m_note": "aclshmem_malloc(shmem_window) returned nullptr on 128MiB e8 formal cases",
+  "frozen_32mib": {
+    "frozen": true,
+    "frozen_at": "20260708T145512Z-472785",
+    "note": "32MiB N=8 dispatch/combine baseline frozen for INC stage_goal derivation"
+  },
+  "cases": []
+}

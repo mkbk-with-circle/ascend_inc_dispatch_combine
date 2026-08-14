@@ -1,0 +1,31 @@
+{
+  "stage": "d03_dc_ll_host_contract_gate",
+  "git_revision": "unknown",
+  "run_id": "20260708T150135Z-495479",
+  "host_contract_pass": true,
+  "device_correctness_pass": false,
+  "device_pipeline_pass": false,
+  "performance_valid": false,
+  "formal_pass": true,
+  "host_fallback_active": false,
+  "timing_window_clean": true,
+  "pass": true,
+  "dc_ll_profile_rc": 0,
+  "dc_ll_layout_rc": 0,
+  "dc_ll_flag_rc": 0,
+  "dc_ll_channel_rc": 0,
+  "dc_ll_mask_rc": 0,
+  "engine": "dc_ll",
+  "gate_layer": "D03-contract",
+  "d03_dc_ll_progress": {
+    "host_contract": true,
+    "visibility": false,
+    "one_token": false,
+    "ring_cross_epoch": false,
+    "multi_aiv": false,
+    "hol_skew": false,
+    "profile_isolation": false,
+    "smoke_4m": false,
+    "perf_32m": false
+  }
+}

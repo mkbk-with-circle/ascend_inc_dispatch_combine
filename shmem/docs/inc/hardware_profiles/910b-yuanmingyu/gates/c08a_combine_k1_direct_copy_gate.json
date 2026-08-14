@@ -1,0 +1,17 @@
+{
+  "stage": "c08a_combine_k1_direct_copy",
+  "git_revision": "38c7cc5",
+  "run_id": "",
+  "host_contract_pass": false,
+  "device_correctness_pass": true,
+  "device_pipeline_pass": true,
+  "performance_valid": true,
+  "formal_pass": true,
+  "host_fallback_active": false,
+  "timing_window_clean": true,
+  "pass": true,
+  "k1_direct_copy_active": true,
+  "scalar_reduce_bypassed": true,
+  "scalar_gbps": "0.289805",
+  "fast_gbps": "0.292496"
+}

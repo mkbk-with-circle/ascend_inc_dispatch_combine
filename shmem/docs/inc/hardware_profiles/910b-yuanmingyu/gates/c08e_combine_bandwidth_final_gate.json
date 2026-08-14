@@ -1,0 +1,23 @@
+{
+  "stage": "c08e_combine_bandwidth_final",
+  "git_revision": "38c7cc5",
+  "run_id": "",
+  "host_contract_pass": false,
+  "device_correctness_pass": true,
+  "device_pipeline_pass": false,
+  "performance_valid": true,
+  "formal_pass": true,
+  "host_fallback_active": false,
+  "timing_window_clean": true,
+  "pass": true,
+  "best_profile": "custom:20,20",
+  "best_gbps": "0.331206",
+  "combine_comm_gbps": "2097.15",
+  "shmem_comm_baseline_gbps": "158.81",
+  "stage_goal_gbps": "19.85125",
+  "e2e_vs_stage_goal_ratio": "0.01668439015175367",
+  "diagnostic_pass": true,
+  "perf_stretch_pass": false,
+  "payload_verify": true,
+  "spin_timeout_count": 999
+}

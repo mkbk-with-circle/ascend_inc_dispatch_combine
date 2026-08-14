@@ -1,0 +1,20 @@
+{
+  "stage": "p4_device_presync_async",
+  "git_revision": "e27f114cd313029e93ab699cca87930b0f5de9d1",
+  "run_id": "",
+  "host_contract_pass": true,
+  "device_correctness_pass": true,
+  "device_pipeline_pass": true,
+  "performance_valid": false,
+  "formal_pass": true,
+  "host_fallback_active": false,
+  "timing_window_clean": true,
+  "pass": true,
+  "device_first_packet_bitmap": "kernel",
+  "host_upload_done_signal": false,
+  "host_poll_calls": 0,
+  "async_backend": true,
+  "sender_presync_barrier_count": 0,
+  "dispatch_first_packet": true,
+  "combine_first_packet": true
+}

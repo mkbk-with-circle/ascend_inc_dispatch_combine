@@ -1,0 +1,11 @@
+{
+  "cann_90_available": false,
+  "expected_path": "/home/ymy/Ascend/cann-9.0.0",
+  "action": "install_offline_cann_90_then_rerun",
+  "fail_on_85_stages": [
+    "c05d_precision_align",
+    "c07_combine_freeze",
+    "c08_combine_stage_roofline",
+    "p1_dc_device_stage_roofline"
+  ]
+}

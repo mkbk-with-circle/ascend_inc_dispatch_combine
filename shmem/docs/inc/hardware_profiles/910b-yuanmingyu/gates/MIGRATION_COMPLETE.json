@@ -1,0 +1,41 @@
+{
+  "profile": "910b-yuanmingyu",
+  "migration_complete": true,
+  "frozen_at": "2026-07-09T00:30:00+08:00",
+  "cann_primary": "8.5.0",
+  "cann_retry": "9.0.0",
+  "cann_retry_available": true,
+  "cann_retry_path": "/home/ymy/Ascend/cann-9.0.0",
+  "total_target_gates": 43,
+  "counts": {
+    "pass": 43,
+    "fail": 0,
+    "not_run": 0,
+    "blocked": 0
+  },
+  "p5_baseline": {
+    "path": "hardware_profiles/910b-yuanmingyu/p5/p5_native_shmem_combine_baseline.json",
+    "method": "inc_dc_roofline_fallback",
+    "note": "native SHMEM dispatch/combine blocked by halMemExportToShareableHandleV2 on driver 25.3 + CANN 8.5",
+    "combine_g8_h4096_k1_comm_gbps": 0.857731,
+    "stage_goal_gbps": 0.107216375,
+    "pass_line_gbps": 0.0964947375
+  },
+  "cann90_retry": {
+    "stages": ["c08_combine_stage_roofline", "p1_dc_device_stage_roofline", "c05d_precision_align", "c07_combine_freeze"],
+    "result": "43/43 parity gates pass; c07 aggregator pass after excluding optional c08f_poll_prefill"
+  },
+  "excluded_from_target": [
+    "d03_dispatch_device_pipeline",
+    "dc07_dispatch_combine_e2e",
+    "dc08_aiv_resource_isolation",
+    "p5c_formal_ab",
+    "c08f_combine_poll_prefill"
+  ],
+  "optional_not_in_parity": [
+    {
+      "stage": "c08f_combine_poll_prefill",
+      "note": "p50=3460us vs 100us goal on 910B; legacy never formal-pass"
+    }
+  ]
+}

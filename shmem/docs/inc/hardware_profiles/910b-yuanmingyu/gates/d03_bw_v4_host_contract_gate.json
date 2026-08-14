@@ -1,0 +1,26 @@
+{
+  "stage": "d03_bw_v4_host_contract_gate",
+  "git_revision": "unknown",
+  "run_id": "20260708T150141Z-495772",
+  "host_contract_pass": true,
+  "device_correctness_pass": false,
+  "device_pipeline_pass": false,
+  "performance_valid": false,
+  "formal_pass": true,
+  "host_fallback_active": false,
+  "timing_window_clean": true,
+  "pass": true,
+  "v4a_profile_rc": 0,
+  "v4a_layout_rc": 0,
+  "v4a_fsm_rc": 0,
+  "v4a_mask_rc": 0,
+  "engine": "bw_v4_token_slot",
+  "gate_layer": "V4-A",
+  "d03_progress": {
+    "v4a_host_contract": true,
+    "v4b_one_slot": false,
+    "v4c_independent_slots": false,
+    "v4d_multi_aiv": false,
+    "note": "D03 device pipeline in progress; full d03_dispatch_device_pipeline_gate.json after V4-B..H"
+  }
+}

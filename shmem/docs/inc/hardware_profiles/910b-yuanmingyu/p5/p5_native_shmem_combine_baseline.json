@@ -1,0 +1,28 @@
+{
+  "run_id": "20260708T145834Z-483300-inc_dc",
+  "git_revision": "unknown",
+  "baseline_128m_valid": false,
+  "baseline_128m_note": "native SHMEM baseline unavailable on 910B CANN8.5/driver; inc_dc_roofline fallback",
+  "frozen_32mib": {
+    "frozen": true,
+    "frozen_at": "20260708T145834Z-483300-inc_dc",
+    "note": "inc_dc roofline fallback baseline"
+  },
+  "cases": [
+    {
+      "pipeline": "combine",
+      "group": 8,
+      "hidden": 4096,
+      "topk": 1,
+      "target_mib": 32,
+      "formal": true,
+      "shape_key": "combine_g8_h4096_k1",
+      "tag": "combine_g8_h4096_k1",
+      "best_native_comm_gbps": {
+        "variant": "inc_dc_roofline",
+        "value": 0.857731
+      },
+      "stage_goal_gbps": 0.107216375
+    }
+  ]
+}

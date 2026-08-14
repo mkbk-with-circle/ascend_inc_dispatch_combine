@@ -1,0 +1,19 @@
+{
+  "stage": "d03_dc_ll_visibility_gate",
+  "git_revision": "unknown",
+  "run_id": "20260708T150139Z-495628",
+  "host_contract_pass": true,
+  "device_correctness_pass": false,
+  "device_pipeline_pass": false,
+  "performance_valid": false,
+  "formal_pass": true,
+  "host_fallback_active": false,
+  "timing_window_clean": true,
+  "pass": true,
+  "visibility_host_pass": true,
+  "visibility_device_pass": false,
+  "visibility_selected_mode": "putmem_signal_nbi",
+  "visibility_rounds": 1000,
+  "engine": "dc_ll",
+  "gate_layer": "D03-visibility"
+}

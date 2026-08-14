@@ -1,0 +1,18 @@
+{
+  "schema": "yuan_single_current_fusion_smoke_v1",
+  "source_commit": "784bc8201f33ca0c5183633a4611b96a95f18052",
+  "single_inc_source_commit": "e06ce80d875a3509c9660d20b7a2ec0f6ad68c2f",
+  "fusion_source_commit": "e06ce80d875a3509c9660d20b7a2ec0f6ad68c2f",
+  "catlass_commit": "7d4c8401ae2b2aeb8a5786671e4fe7f53ca96c18",
+  "catlass_patch_sha256": "cecef0cd3e6e64e63321bd2371ad9b136b852f990c7109dedf0ce05fe192f524",
+  "cann_home": "/usr/local/Ascend/cann-9.1.0-beta.3",
+  "performance_tested": false,
+  "cases": {
+    "dispatch_w2_k1": true,
+    "dispatch_w2_k2": true,
+    "combine_w2_k1": true,
+    "combine_w2_k2": true,
+    "fusion_w2": true
+  },
+  "pass": true
+}

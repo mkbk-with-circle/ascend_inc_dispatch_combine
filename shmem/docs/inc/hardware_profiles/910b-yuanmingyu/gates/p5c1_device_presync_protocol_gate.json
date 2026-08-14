@@ -1,0 +1,29 @@
+{
+  "stage": "p5c1_device_presync_protocol_gate",
+  "git_revision": "e27f114cd313029e93ab699cca87930b0f5de9d1",
+  "run_id": "20260703T035230Z-2296693",
+  "host_contract_pass": true,
+  "device_correctness_pass": true,
+  "device_pipeline_pass": true,
+  "performance_valid": false,
+  "formal_pass": true,
+  "host_fallback_active": false,
+  "timing_window_clean": true,
+  "pass": true,
+  "sender_presync_barrier_count": 0,
+  "host_signal": 0,
+  "host_poll": 0,
+  "host_stream_sync_in_timing": 0,
+  "missing_worker_deterministic_fail": true,
+  "fake_gate_open_count": 0,
+  "positive_rc": 0,
+  "negative_rc": 0,
+  "fault_gate_matrix": {
+    "missing_first_packet": true,
+    "delayed_worker": false,
+    "empty_rank": false,
+    "stale_seq": false,
+    "duplicate_first_packet": false,
+    "cross_epoch_seq": false
+  }
+}

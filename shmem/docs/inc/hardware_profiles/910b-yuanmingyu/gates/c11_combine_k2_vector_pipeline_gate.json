@@ -1,0 +1,16 @@
+{
+  "stage": "c11_combine_k2_vector_pipeline",
+  "git_revision": "38c7cc5",
+  "run_id": "",
+  "host_contract_pass": true,
+  "device_correctness_pass": true,
+  "device_pipeline_pass": true,
+  "performance_valid": false,
+  "formal_pass": true,
+  "host_fallback_active": false,
+  "timing_window_clean": true,
+  "pass": true,
+  "payload_verify": true,
+  "spin_timeout_count": 0,
+  "k2_p50_gbps": "17.9025"
+}

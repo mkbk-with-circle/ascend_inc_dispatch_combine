@@ -1,0 +1,29 @@
+{
+  "profile": "910b-yuanmingyu",
+  "timestamp": "2026-07-08T22:14:00Z",
+  "remote_host": "probing-real-worker-0",
+  "cann": "/usr/local/Ascend/cann-8.5.0",
+  "build": {
+    "status": "partial",
+    "note": "inc_dc_dispatch/inc_dc_combine built; make all exited 2 on optional targets",
+    "key_binaries": ["inc_dc_dispatch", "inc_dc_combine", "inc_dc_d03_tests"]
+  },
+  "gates": {
+    "s00_env_check": { "pass": true, "artifact": "snapshots/s00_env_check.json" },
+    "inc_run_existing_smoke": { "pass": true, "cases": ["notifywait_8pe", "perftest_put", "allgather_16pe"] },
+    "inc_dc_d03_tests": { "pass": true },
+    "inc_dc_combine_tests": { "pass": true },
+    "inc_dc_reference_tests": { "pass": true },
+    "c00_combine_semantic": { "pass": true, "formal_pass": true, "device_correctness_pass": false },
+    "c10_combine_persistent_ll": { "pass": true, "formal_pass": true, "device_correctness_pass": true },
+    "d02_dispatch_cpp_barrier": { "pass": true, "bringup_only": true, "host_fallback_active": true },
+    "d03_dispatch_device_pipeline": { "pass": false, "device_correctness_pass": true, "device_pipeline_pass": false }
+  },
+  "portability_conclusion": {
+    "host_semantics": "PASS — reference/contract tests portable to CANN 8.5.0 on 910B",
+    "combine_device_ll": "PASS — C10 LL persistent combine runs on 910B",
+    "dispatch_device_pipeline": "PARTIAL — D03 device correctness OK, pipeline gate not closed (needs tuning or CANN 9.0)",
+    "bandwidth": "NOT_RUN — requires 910B-local P5 baseline first"
+  },
+  "vs_legacy_910c": "Do not compare absolute Gbps to hardware_profiles/legacy-910c/"
+}

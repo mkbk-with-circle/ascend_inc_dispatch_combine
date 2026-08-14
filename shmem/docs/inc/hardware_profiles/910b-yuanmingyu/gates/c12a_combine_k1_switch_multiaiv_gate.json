@@ -1,0 +1,20 @@
+{
+  "stage": "c12a_combine_k1_switch_multiaiv",
+  "git_revision": "38c7cc5",
+  "run_id": "",
+  "host_contract_pass": true,
+  "device_correctness_pass": true,
+  "device_pipeline_pass": true,
+  "performance_valid": false,
+  "formal_pass": true,
+  "host_fallback_active": false,
+  "timing_window_clean": true,
+  "pass": true,
+  "payload_verify": true,
+  "spin_timeout_count": 0,
+  "best_switch_blocks": 1,
+  "best_worker_blocks": 1,
+  "best_egress_batch": 16,
+  "best_p50_gbps": "9.7219",
+  "c10a_baseline_gbps": "10.4"
+}

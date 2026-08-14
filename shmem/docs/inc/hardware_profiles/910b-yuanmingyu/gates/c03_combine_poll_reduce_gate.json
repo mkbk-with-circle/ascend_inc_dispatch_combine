@@ -1,0 +1,16 @@
+{
+  "stage": "c03_combine_poll_reduce",
+  "git_revision": "38c7cc57681569d20db470c9fb0d02d54ae316c0",
+  "run_id": "",
+  "host_contract_pass": true,
+  "device_correctness_pass": true,
+  "device_pipeline_pass": true,
+  "performance_valid": false,
+  "formal_pass": true,
+  "host_fallback_active": false,
+  "timing_window_clean": false,
+  "pass": true,
+  "legacy_reduce_pass": true,
+  "reduce_path": "combine_poll_multi_aiv",
+  "poll_block_dim": "profile"
+}

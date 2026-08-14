@@ -1,0 +1,364 @@
+{
+  "profile": "910b-yuanmingyu",
+  "total_target_gates": 43,
+  "counts": {
+    "pass": 43,
+    "fail": 0,
+    "not_run": 0,
+    "blocked": 0
+  },
+  "migration_complete": true,
+  "excluded_stages": [
+    "c08f_combine_poll_prefill",
+    "d03_dispatch_device_pipeline",
+    "dc07_dispatch_combine_e2e",
+    "dc08_aiv_resource_isolation",
+    "p5c_formal_ab"
+  ],
+  "gates": [
+    {
+      "stage": "c00_combine_semantic_contract",
+      "legacy_path": "docs/inc/report/c00_combine_semantic_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c00_combine_semantic_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c01_combine_contract_reference",
+      "legacy_path": "docs/inc/report/c01_combine_contract_reference_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c01_combine_contract_reference_gate.json",
+      "status": "pass",
+      "formal_pass": null,
+      "pass": true
+    },
+    {
+      "stage": "c01b_combine_realworld_shape",
+      "legacy_path": "docs/inc/report/c01b_combine_realworld_shape_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c01b_combine_realworld_shape_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c02_combine_cpp_barrier",
+      "legacy_path": "docs/inc/report/c02_combine_cpp_barrier_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c02_combine_cpp_barrier_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c03_combine_poll_reduce",
+      "legacy_path": "docs/inc/report/c03_combine_poll_reduce_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c03_combine_poll_reduce_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c04_combine_weighted_reduce",
+      "legacy_path": "docs/inc/report/c04_combine_weighted_reduce_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c04_combine_weighted_reduce_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c05_combine_bandwidth",
+      "legacy_path": "docs/inc/report/c05_combine_bandwidth_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c05_combine_bandwidth_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c06_combine_binding_contract",
+      "legacy_path": "docs/inc/report/c06_combine_binding_contract_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c06_combine_binding_contract_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c07_combine_freeze",
+      "legacy_path": "docs/inc/report/c07_combine_freeze_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c07_combine_freeze_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c08_combine_stage_roofline",
+      "legacy_path": "docs/inc/report/c08_combine_stage_roofline_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c08_combine_stage_roofline_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c08a_combine_k1_direct_copy",
+      "legacy_path": "docs/inc/report/c08a_combine_k1_direct_copy_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c08a_combine_k1_direct_copy_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c08b_combine_vector_reduce",
+      "legacy_path": "docs/inc/report/c08b_combine_vector_reduce_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c08b_combine_vector_reduce_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c08c_combine_result_major_layout",
+      "legacy_path": "docs/inc/report/c08c_combine_result_major_layout_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c08c_combine_result_major_layout_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c08d_combine_persistent_pipeline",
+      "legacy_path": "docs/inc/report/c08d_combine_persistent_pipeline_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c08d_combine_persistent_pipeline_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c08e_combine_bandwidth_final",
+      "legacy_path": "docs/inc/report/c08e_combine_bandwidth_final_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c08e_combine_bandwidth_final_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c08f_combine_spin_cap_ab",
+      "legacy_path": "docs/inc/report/c08f_combine_spin_cap_ab_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c08f_combine_spin_cap_ab_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c08f_combine_truth_repair",
+      "legacy_path": "docs/inc/report/c08f_combine_truth_repair_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c08f_combine_truth_repair_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c09_combine_seq_credit",
+      "legacy_path": "docs/inc/report/c09_combine_seq_credit_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c09_combine_seq_credit_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c10_combine_persistent_ll",
+      "legacy_path": "docs/inc/report/c10_combine_persistent_ll_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c10_combine_persistent_ll_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c10a_combine_k1_fastpath",
+      "legacy_path": "docs/inc/report/c10a_combine_k1_fastpath_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c10a_combine_k1_fastpath_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c11_combine_k2_vector_pipeline",
+      "legacy_path": "docs/inc/report/c11_combine_k2_vector_pipeline_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c11_combine_k2_vector_pipeline_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c12a_combine_k1_switch_multiaiv",
+      "legacy_path": "docs/inc/report/c12a_combine_k1_switch_multiaiv_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c12a_combine_k1_switch_multiaiv_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c12b_combine_k1_worker_multiaiv",
+      "legacy_path": "docs/inc/report/c12b_combine_k1_worker_multiaiv_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c12b_combine_k1_worker_multiaiv_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c12c_combine_k1_formal_bandwidth",
+      "legacy_path": "docs/inc/hardware_profiles/legacy-910c/gates/c12c_combine_k1_formal_bandwidth_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c12c_combine_k1_formal_bandwidth_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c13_combine_k1_batch",
+      "legacy_path": "docs/inc/report/c13_combine_k1_batch_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c13_combine_k1_batch_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c14_combine_k2_vector_formal",
+      "legacy_path": "docs/inc/report/c14_combine_k2_vector_formal_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c14_combine_k2_vector_formal_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c15a_combine_realworld_correctness",
+      "legacy_path": "docs/inc/report/c15a_combine_realworld_correctness_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c15a_combine_realworld_correctness_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "c15b_combine_formal_perf",
+      "legacy_path": "docs/inc/report/c15b_combine_formal_perf_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/c15b_combine_formal_perf_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "d02_dispatch_cpp_barrier",
+      "legacy_path": "docs/inc/report/d02_dispatch_cpp_barrier_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/d02_dispatch_cpp_barrier_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "d03_bw_v4_host_contract_gate",
+      "legacy_path": "docs/inc/report/d03_bw_v4_host_contract_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/d03_bw_v4_host_contract_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "d03_dc_ll_bandwidth_gate_v4",
+      "legacy_path": "docs/inc/hardware_profiles/legacy-910c/gates/d03_dc_ll_bandwidth_gate_v4.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/d03_dc_ll_bandwidth_gate_v4.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": null
+    },
+    {
+      "stage": "d03_dc_ll_host_contract_gate",
+      "legacy_path": "docs/inc/report/d03_dc_ll_host_contract_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/d03_dc_ll_host_contract_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "d03_dc_ll_visibility_gate",
+      "legacy_path": "docs/inc/report/d03_dc_ll_visibility_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/d03_dc_ll_visibility_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "d06_dispatch_inc_presync",
+      "legacy_path": "docs/inc/report/d06_dispatch_inc_presync_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/d06_dispatch_inc_presync_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "p0_dc_gate_numeric_contract",
+      "legacy_path": "docs/inc/report/p0_dc_gate_numeric_contract.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/p0_dc_gate_numeric_contract.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "p1_dc_device_stage_roofline",
+      "legacy_path": "docs/inc/report/p1_dc_device_stage_roofline.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/p1_dc_device_stage_roofline.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "p2_dispatch_persistent_pipeline",
+      "legacy_path": "docs/inc/report/p2_dispatch_persistent_pipeline_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/p2_dispatch_persistent_pipeline_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "p3_combine_persistent_pipeline",
+      "legacy_path": "docs/inc/report/p3_combine_persistent_pipeline_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/p3_combine_persistent_pipeline_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "p4_device_presync_async",
+      "legacy_path": "docs/inc/report/p4_device_presync_async_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/p4_device_presync_async_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "p5_bandwidth_closure",
+      "legacy_path": "docs/inc/report/p5_bandwidth_closure_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/p5_bandwidth_closure_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "p5c1_device_presync_protocol_gate",
+      "legacy_path": "docs/inc/report/p5/p5c1_device_presync_protocol_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/p5c1_device_presync_protocol_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "p5c2_true_persistent_dispatch_gate",
+      "legacy_path": "docs/inc/report/p5/p5c2_true_persistent_dispatch_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/p5c2_true_persistent_dispatch_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    },
+    {
+      "stage": "p5d0_bw_v3_contract_gate",
+      "legacy_path": "docs/inc/report/p5/p5d0_bw_v3_contract_gate.json",
+      "profile_path": "docs/inc/hardware_profiles/910b-yuanmingyu/gates/p5d0_bw_v3_contract_gate.json",
+      "status": "pass",
+      "formal_pass": true,
+      "pass": true
+    }
+  ]
+}

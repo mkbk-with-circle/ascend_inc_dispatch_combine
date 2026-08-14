@@ -1,0 +1,526 @@
+{
+  "schema": "single_inc_overlap_nb.v1",
+  "environment": "nb-borrow/910B2C/CANN-9.1.0-beta.3",
+  "created_utc": "2026-08-08T11:35:53.767549+00:00",
+  "build_dir": "/tmp/inc-nb-overlap-build.WXj6N2",
+  "cases": [
+    {
+      "dispatch": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 3407.9,
+        "physical_bytes": 134217728
+      },
+      "tag": "dispatch_solo_r0",
+      "workers": 2,
+      "topk": 2,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": null,
+      "pe_map": "0:1,1:2,2:0",
+      "correct": true,
+      "wall_s": 8.844241857528687,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W2/dispatch_solo_r0"
+    },
+    {
+      "combine": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 3519.26,
+        "physical_bytes": 134217728
+      },
+      "tag": "combine_solo_r0",
+      "workers": 2,
+      "topk": 2,
+      "dispatch_offset_us": null,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:0",
+      "correct": true,
+      "wall_s": 9.804034233093262,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W2/combine_solo_r0"
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 3407.66,
+        "physical_bytes": 134217728
+      },
+      "tag": "dispatch_solo_r1",
+      "workers": 2,
+      "topk": 2,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": null,
+      "pe_map": "0:1,1:2,2:0",
+      "correct": true,
+      "wall_s": 8.85073208808899,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W2/dispatch_solo_r1"
+    },
+    {
+      "combine": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 3396.67,
+        "physical_bytes": 134217728
+      },
+      "tag": "combine_solo_r1",
+      "workers": 2,
+      "topk": 2,
+      "dispatch_offset_us": null,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:0",
+      "correct": true,
+      "wall_s": 8.841612815856934,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W2/combine_solo_r1"
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 5809.54,
+        "physical_bytes": 134217728
+      },
+      "combine": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 5107.95,
+        "physical_bytes": 134217728
+      },
+      "tag": "simultaneous_r0",
+      "workers": 2,
+      "topk": 2,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:0",
+      "correct": true,
+      "wall_s": 9.013611555099487,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W2/simultaneous_r0",
+      "concurrent_makespan_us": 5809.54,
+      "overlap_us": 5107.95,
+      "true_overlap": true,
+      "sequential_solo_us": 6865.745,
+      "ratio": 0.8461630893661213,
+      "speedup": 1.1818052720180943
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 5775.3,
+        "physical_bytes": 134217728
+      },
+      "combine": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 5047.46,
+        "physical_bytes": 134217728
+      },
+      "tag": "simultaneous_r1",
+      "workers": 2,
+      "topk": 2,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:0",
+      "correct": true,
+      "wall_s": 9.055879831314087,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W2/simultaneous_r1",
+      "concurrent_makespan_us": 5775.3,
+      "overlap_us": 5047.46,
+      "true_overlap": true,
+      "sequential_solo_us": 6865.745,
+      "ratio": 0.8411760122171739,
+      "speedup": 1.1888118366145481
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 5816.1,
+        "physical_bytes": 134217728
+      },
+      "combine": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 5071.52,
+        "physical_bytes": 134217728
+      },
+      "tag": "simultaneous_r2",
+      "workers": 2,
+      "topk": 2,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:0",
+      "correct": true,
+      "wall_s": 9.037869453430176,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W2/simultaneous_r2",
+      "concurrent_makespan_us": 5816.1,
+      "overlap_us": 5071.52,
+      "true_overlap": true,
+      "sequential_solo_us": 6865.745,
+      "ratio": 0.8471185574180224,
+      "speedup": 1.180472309623287
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 5620.38,
+        "physical_bytes": 134217728
+      },
+      "combine": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 5168.92,
+        "physical_bytes": 134217728
+      },
+      "tag": "dispatch_first_500us",
+      "workers": 2,
+      "topk": 2,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": 500,
+      "pe_map": "0:1,1:2,2:0",
+      "correct": true,
+      "wall_s": 9.035845518112183,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W2/dispatch_first_500us",
+      "concurrent_makespan_us": 5668.92,
+      "overlap_us": 5120.38,
+      "true_overlap": true,
+      "sequential_solo_us": 6865.745,
+      "ratio": 0.8256816995096672,
+      "speedup": 1.2111204603345964
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 5472.64,
+        "physical_bytes": 134217728
+      },
+      "combine": {
+        "passed_ranks": 3,
+        "expected_ranks": 3,
+        "correct": true,
+        "rank_us_max": 5257.39,
+        "physical_bytes": 134217728
+      },
+      "tag": "combine_first_500us",
+      "workers": 2,
+      "topk": 2,
+      "dispatch_offset_us": 500,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:0",
+      "correct": true,
+      "wall_s": 9.028252601623535,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W2/combine_first_500us",
+      "concurrent_makespan_us": 5972.64,
+      "overlap_us": 4757.39,
+      "true_overlap": true,
+      "sequential_solo_us": 6865.745,
+      "ratio": 0.8699187051077487,
+      "speedup": 1.1495327024565352
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 1967.0,
+        "physical_bytes": 134217728
+      },
+      "tag": "dispatch_solo_r0",
+      "workers": 4,
+      "topk": 4,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": null,
+      "pe_map": "0:1,1:2,2:3,3:4,4:0",
+      "correct": true,
+      "wall_s": 9.009153366088867,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W4/dispatch_solo_r0"
+    },
+    {
+      "combine": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 1866.74,
+        "physical_bytes": 134217728
+      },
+      "tag": "combine_solo_r0",
+      "workers": 4,
+      "topk": 4,
+      "dispatch_offset_us": null,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:3,3:4,4:0",
+      "correct": true,
+      "wall_s": 7.6356589794158936,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W4/combine_solo_r0"
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 1937.96,
+        "physical_bytes": 134217728
+      },
+      "tag": "dispatch_solo_r1",
+      "workers": 4,
+      "topk": 4,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": null,
+      "pe_map": "0:1,1:2,2:3,3:4,4:0",
+      "correct": true,
+      "wall_s": 8.814783573150635,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W4/dispatch_solo_r1"
+    },
+    {
+      "combine": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 1678.39,
+        "physical_bytes": 134217728
+      },
+      "tag": "combine_solo_r1",
+      "workers": 4,
+      "topk": 4,
+      "dispatch_offset_us": null,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:3,3:4,4:0",
+      "correct": true,
+      "wall_s": 8.842976093292236,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W4/combine_solo_r1"
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 2914.14,
+        "physical_bytes": 134217728
+      },
+      "combine": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 2314.63,
+        "physical_bytes": 134217728
+      },
+      "tag": "simultaneous_r0",
+      "workers": 4,
+      "topk": 4,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:3,3:4,4:0",
+      "correct": true,
+      "wall_s": 10.237032175064087,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W4/simultaneous_r0",
+      "concurrent_makespan_us": 2914.14,
+      "overlap_us": 2314.63,
+      "true_overlap": true,
+      "sequential_solo_us": 3725.045,
+      "ratio": 0.7823100123622667,
+      "speedup": 1.278265628967723
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 2882.78,
+        "physical_bytes": 134217728
+      },
+      "combine": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 2226.66,
+        "physical_bytes": 134217728
+      },
+      "tag": "simultaneous_r1",
+      "workers": 4,
+      "topk": 4,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:3,3:4,4:0",
+      "correct": true,
+      "wall_s": 9.030880689620972,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W4/simultaneous_r1",
+      "concurrent_makespan_us": 2882.78,
+      "overlap_us": 2226.66,
+      "true_overlap": true,
+      "sequential_solo_us": 3725.045,
+      "ratio": 0.7738913221182563,
+      "speedup": 1.292171098731086
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 2897.9,
+        "physical_bytes": 134217728
+      },
+      "combine": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 2413.58,
+        "physical_bytes": 134217728
+      },
+      "tag": "simultaneous_r2",
+      "workers": 4,
+      "topk": 4,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:3,3:4,4:0",
+      "correct": true,
+      "wall_s": 10.22428035736084,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W4/simultaneous_r2",
+      "concurrent_makespan_us": 2897.9,
+      "overlap_us": 2413.58,
+      "true_overlap": true,
+      "sequential_solo_us": 3725.045,
+      "ratio": 0.7779503334859043,
+      "speedup": 1.2854291038338106
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 2620.88,
+        "physical_bytes": 134217728
+      },
+      "combine": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 2125.55,
+        "physical_bytes": 134217728
+      },
+      "tag": "dispatch_first_500us",
+      "workers": 4,
+      "topk": 4,
+      "dispatch_offset_us": 0,
+      "combine_offset_us": 500,
+      "pe_map": "0:1,1:2,2:3,3:4,4:0",
+      "correct": true,
+      "wall_s": 9.028650522232056,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W4/dispatch_first_500us",
+      "concurrent_makespan_us": 2625.55,
+      "overlap_us": 2120.88,
+      "true_overlap": true,
+      "sequential_solo_us": 3725.045,
+      "ratio": 0.7048371227730135,
+      "speedup": 1.4187674963341013
+    },
+    {
+      "dispatch": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 2604.74,
+        "physical_bytes": 134217728
+      },
+      "combine": {
+        "passed_ranks": 5,
+        "expected_ranks": 5,
+        "correct": true,
+        "rank_us_max": 2090.19,
+        "physical_bytes": 134217728
+      },
+      "tag": "combine_first_500us",
+      "workers": 4,
+      "topk": 4,
+      "dispatch_offset_us": 500,
+      "combine_offset_us": 0,
+      "pe_map": "0:1,1:2,2:3,3:4,4:0",
+      "correct": true,
+      "wall_s": 9.032440185546875,
+      "log_dir": "/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem/docs/inc/report/nb-borrow/single_inc_overlap_20260808T113214Z/W4/combine_first_500us",
+      "concurrent_makespan_us": 3104.74,
+      "overlap_us": 1590.19,
+      "true_overlap": true,
+      "sequential_solo_us": 3725.045,
+      "ratio": 0.8334771794703151,
+      "speedup": 1.1997928973118523
+    }
+  ],
+  "per_case_topology_theory": [
+    {"workers": 2, "tag": "simultaneous_r0", "theoretical_makespan_us": 5352.80625, "theoretical_gain": 0.22036046343113547, "actual_gain": 0.15383691063387883, "gain_realization": 0.6981148443715911},
+    {"workers": 2, "tag": "simultaneous_r1", "theoretical_makespan_us": 5352.80625, "theoretical_gain": 0.22036046343113547, "actual_gain": 0.15882398778282625, "gain_realization": 0.7207462959092029},
+    {"workers": 2, "tag": "simultaneous_r2", "theoretical_makespan_us": 5352.80625, "theoretical_gain": 0.22036046343113547, "actual_gain": 0.15288144258197767, "gain_realization": 0.6937789120676561},
+    {"workers": 2, "tag": "dispatch_first_500us", "theoretical_makespan_us": 5352.80625, "theoretical_gain": 0.22036046343113547, "actual_gain": 0.17431830049033292, "gain_realization": 0.791059783484295},
+    {"workers": 2, "tag": "combine_first_500us", "theoretical_makespan_us": 5352.80625, "theoretical_gain": 0.22036046343113547, "actual_gain": 0.1300812948922514, "gain_realization": 0.5903114055344275},
+    {"workers": 4, "tag": "simultaneous_r0", "theoretical_makespan_us": 2293.875, "theoretical_gain": 0.38420207004210694, "actual_gain": 0.21768998763773328, "gain_realization": 0.5666028494169106},
+    {"workers": 4, "tag": "simultaneous_r1", "theoretical_makespan_us": 2293.875, "theoretical_gain": 0.38420207004210694, "actual_gain": 0.2261086778817437, "gain_realization": 0.5885149912309509},
+    {"workers": 4, "tag": "simultaneous_r2", "theoretical_makespan_us": 2293.875, "theoretical_gain": 0.38420207004210694, "actual_gain": 0.22204966651409574, "gain_realization": 0.5779502085706099},
+    {"workers": 4, "tag": "dispatch_first_500us", "theoretical_makespan_us": 2293.875, "theoretical_gain": 0.38420207004210694, "actual_gain": 0.29516287722698653, "gain_realization": 0.7682490549690113},
+    {"workers": 4, "tag": "combine_first_500us", "theoretical_makespan_us": 2452.48, "theoretical_gain": 0.34162406091738495, "actual_gain": 0.16652282052968492, "gain_realization": 0.48744464919277214}
+  ],
+  "summaries": [
+    {
+      "workers": 2,
+      "dispatch_solo_median_us": 3407.7799999999997,
+      "combine_solo_median_us": 3457.965,
+      "concurrent_cases": 5,
+      "correct_cases": 9,
+      "total_cases": 9,
+      "true_overlap_cases": 5,
+      "simultaneous_resource_free_ratio": 0.5036547381238308,
+      "simultaneous_resource_free_gain_ceiling": 0.49634526187616923,
+      "simultaneous_resource_free_speedup_ceiling": 1.9854871289906055,
+      "topology_duplex_ingress_gbps": 37.614704229694034,
+      "topology_duplex_egress_gbps": 37.611410276618926,
+      "topology_down_bytes": 201326592,
+      "topology_up_bytes": 201326592,
+      "topology_theoretical_makespan_us": 5352.80625,
+      "topology_theoretical_ratio": 0.7796395365688645,
+      "topology_theoretical_gain": 0.22036046343113547,
+      "topology_theoretical_speedup": 1.2826440336785965,
+      "simultaneous_ratio_median": 0.8461630893661213,
+      "simultaneous_actual_gain_median": 0.15383691063387872,
+      "simultaneous_speedup_median": 1.1818052720180943,
+      "topology_gain_realization": 0.6981148443715911,
+      "simultaneous_resource_free_gain_realization": 0.3099393153313887
+    },
+    {
+      "workers": 4,
+      "dispatch_solo_median_us": 1952.48,
+      "combine_solo_median_us": 1772.565,
+      "concurrent_cases": 5,
+      "correct_cases": 9,
+      "total_cases": 9,
+      "true_overlap_cases": 5,
+      "simultaneous_resource_free_ratio": 0.524149372692142,
+      "simultaneous_resource_free_gain_ceiling": 0.475850627307858,
+      "simultaneous_resource_free_speedup_ceiling": 1.9078530894042447,
+      "topology_duplex_ingress_gbps": 74.9319988415547,
+      "topology_duplex_egress_gbps": 73.13919023486459,
+      "topology_down_bytes": 167772160,
+      "topology_up_bytes": 167772160,
+      "topology_theoretical_makespan_us": 2293.875,
+      "topology_theoretical_ratio": 0.6157979299576231,
+      "topology_theoretical_gain": 0.38420207004210694,
+      "topology_theoretical_speedup": 1.6239093237425755,
+      "simultaneous_ratio_median": 0.7779503334859043,
+      "simultaneous_actual_gain_median": 0.22204966651409574,
+      "simultaneous_speedup_median": 1.2854291038338106,
+      "topology_gain_realization": 0.5779502085706099,
+      "simultaneous_resource_free_gain_realization": 0.4666373306479592
+    }
+  ]
+}
