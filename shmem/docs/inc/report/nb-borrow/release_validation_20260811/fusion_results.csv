@@ -1,0 +1,5 @@
+environment,workers,tokens,hidden,intermediate,topk,token_waves,measure,mean_us,median_us,cv_percent,dc_theoretical_max,dc_window_speedup,overlap_realized,status
+910B2C-nb,2,17,192,320,2,2,2,388.030,388.030,0.920,1.70097,1.67526,0.978106,PASS
+910B2C-nb,4,17,192,320,2,2,2,406.360,406.360,1.083,1.69281,1.66661,0.977309,PASS
+910B2C-nb,2,31,256,513,2,4,2,504.990,504.990,0.295,1.62810,1.61101,0.983111,PASS
+910B2C-nb,4,31,256,513,2,4,2,532.540,532.540,0.541,1.64350,1.62377,0.981123,PASS

@@ -1,0 +1,5 @@
+model,architecture,weight_mode,native_vllm,fused_inc,status
+Qwen3-30B-A3B,Qwen3MoeForCausalLM,bf16_unquantized,PASS,PASS,正式支持与本轮主数据
+Qwen3-30B-A3B-w8a8,Qwen3MoeForCausalLM,w8a8_dynamic,PASS,UNSUPPORTED_FAIL_CLOSED,INC kernel 当前只资格化 BF16；未把量化路径混入基线
+DeepSeek-V3.2-w8a8-5layer,DeepSeekV3,w8a8,NOT_RUN,UNSUPPORTED,hidden/intermediate/expert 形状及量化语义均不同
+GLM-w8a8,GLM-MoE,w8a8,NOT_RUN,UNSUPPORTED,hidden/intermediate/expert 形状及量化语义均不同

@@ -1,0 +1,5 @@
+environment,commit,path,workers,tokens,hidden,intermediate,topk,activation_waves,warmup,measure,mean_us,median_us,cv_percent,dc_theoretical_max,dc_window_speedup,overlap_realized,golden_scope,status
+nb-borrow,780334b,fused_inc,2,32,256,512,2,2,3,10,342.798,342.840,1.804,1.61773,1.59622,0.978180,full,PASS
+nb-borrow,780334b,fused_inc,4,32,256,512,2,2,3,10,368.540,367.540,1.423,1.63447,1.60579,0.971855,full,PASS
+nb-borrow,780334b,fused_inc,2,8,16384,128,2,2,3,10,760.702,761.470,1.197,1.42511,1.41489,0.982995,full_multipacket,PASS
+nb-borrow,780334b,fused_inc,4,8,16384,128,2,2,3,10,799.092,797.730,0.798,1.48385,1.47411,0.986352,full_multipacket,PASS
