@@ -104,6 +104,11 @@ shmem/docs/inc/report/**/*_raw/
 shmem/docs/inc/report/*.tmp.json
 shmem/docs/inc/report/**/*.csv
 shmem/docs/inc/report/**/*.jsonl
+# fusion 资格化摘要表（README 直接引用）
+!shmem/docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/results.csv
+!shmem/docs/inc/report/nb-borrow/fusion_kernel_release_20260810/results.csv
+!shmem/docs/inc/report/nb-borrow/fusion_kernel_release_20260810/model_compatibility.csv
+!shmem/docs/inc/report/nb-borrow/release_validation_20260811/fusion_results.csv
 
 # examples 附属文档生成物
 shmem/examples/docs/
