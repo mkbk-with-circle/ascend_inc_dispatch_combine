@@ -2,7 +2,7 @@
 
 > **快速了解主逻辑（新人首读）→ [`QUICKSTART.md`](QUICKSTART.md)**  
 > **当前 sweep 进度 / 环境 / baseline 口径 → [`SWEEP_STATUS.md`](SWEEP_STATUS.md)**  
-> **公开推理 API 完整示例 → [`../common/examples/inference_api/`](../common/examples/inference_api/README.md)**
+> **最短 API 完整示例 → [`../common/examples/single_inc_api/`](../common/examples/single_inc_api/README.md)**
 > Quick mental model → [`QUICKSTART.md`](QUICKSTART.md) · Progress board → [`SWEEP_STATUS.md`](SWEEP_STATUS.md)
 
 ## 中文

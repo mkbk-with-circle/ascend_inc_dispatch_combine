@@ -4,23 +4,23 @@
 
 ### 这个目录是干什么的？
 
-`common/` 只保存 **跨模块共享** 或 **对框架公开** 的代码，不放单 INC 的具体 kernel。
-公开符号统一使用 `inc_dc_` 前缀，以保持 ABI 兼容。
+`common/` 保存最短 SingleInc API、跨模块协议和平台原语，不放具体 kernel。
+当前唯一公开入口是 `api/inc_dc_single_inc.hpp`。
 
 ### 为什么要单独成层？
 
-- 框架（Megatron / vLLM / 融合算子）应只依赖稳定 C ABI 与协议头，而不是某个拓扑的 `.cpp`。
+- 框架只依赖最短 SingleInc API 与必要协议头，而不是内部适配层。
 - 协议与平台策略被单 INC、测试、脚本共同引用；集中放置可避免复制漂移。
-- 示例放在这里做 C11 编译门禁，防止公开头文件「C++ 化」后破坏 C 接入。
+- 示例只演示一条 `create → dispatch → compute → combine → destroy` 主路径。
 
 ### 子目录
 
 | 子目录 | 用途 | 为什么要有 |
 |---|---|---|
-| `api/` | 推荐的 SingleInc facade、底层稳定 C ABI、共享 host planner | 普通调用只看 SingleInc；其余供高级集成 |
+| `api/` | 唯一公开的 SingleInc C++ 入口及内部 host 支撑 | 普通调用只看 `inc_dc_single_inc.hpp` |
 | `protocol/` | handle、route、packet、layout 等协议类型 | host/device 与跨模块契约，不能散落在实现里 |
 | `platform/` | 硬件能力、物理映射、AIV 策略、AIC 原语 | 可移植性与资源分配策略的唯一真相源 |
-| `examples/` | 仅编译验证的 C 接入示例 | 防止公开头文件漂移；不进入运行库 |
+| `examples/` | 最短调用的完整正确性示例 | 不进入运行库 |
 
 ---
 
@@ -28,23 +28,24 @@
 
 ### What is this directory?
 
-`common/` holds only **cross-module** or **framework-facing** code. Product kernels
-live under `single_inc/`. Public symbols keep the `inc_dc_`
-prefix for ABI compatibility.
+`common/` holds the minimal SingleInc API plus shared protocol and platform
+primitives. Product kernels live under `single_inc/`. The only public entry
+point is `api/inc_dc_single_inc.hpp`.
 
 ### Why this layer exists
 
-- Frameworks should depend on a stable C ABI and protocol headers, not on a
-  particular topology implementation.
+- Frameworks use the minimal SingleInc API and required protocol headers, not
+  internal adapter layers.
 - Protocol and platform policy are shared by backends, tests, and scripts; one
   home prevents copy-drift.
-- C examples act as C11 compile gates so public headers stay C-callable.
+- The example shows one `create -> dispatch -> compute -> combine -> destroy`
+  path.
 
 ### Subdirectories
 
 | Subdirectory | Role | Why it exists |
 |---|---|---|
-| `api/` | Recommended SingleInc facade, stable lower C ABI, host planners | Use SingleInc normally; lower layers are advanced integration points |
+| `api/` | Single public C++ facade plus internal host support | Read only `inc_dc_single_inc.hpp` for normal use |
 | `protocol/` | Handles, routes, packets, layouts | Host/device and cross-module contracts |
 | `platform/` | Capabilities, physical map, AIV policy, AIC primitives | Portability and resource policy source of truth |
-| `examples/` | Compile-checked C integration samples | Header drift guards; not runtime library code |
+| `examples/` | Complete minimal-call correctness example | Not runtime library code |

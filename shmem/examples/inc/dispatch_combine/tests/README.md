@@ -4,8 +4,8 @@
 
 ### 这个目录是干什么的？
 
-**不依赖真机 NPU** 的 host 侧回归：公共 C ABI、Easy/Inference、planner、单 INC
-plan/backend/layout。测试 **不进入运行库**，但是交付门禁，不建议从源码仓删除。
+**不依赖真机 NPU** 的 host 侧回归：最短 SingleInc API 以及内部
+Framework/Easy/Inference、planner、plan/backend/layout。内部测试不是调用示例。
 
 ### 为什么要有 host 测试（而不只靠真机 sweep）？
 
@@ -17,7 +17,7 @@ plan/backend/layout。测试 **不进入运行库**，但是交付门禁，不�
 
 | 子目录 | 用途 | 为什么要有 |
 |---|---|---|
-| `common/` | SingleInc facade + Framework/Easy/Inference + 共享 planner | 公共层交付门禁 |
+| `common/` | 最短 SingleInc facade + 内部 Framework/Easy/Inference + planner | Host 逻辑门禁 |
 | `single_inc/` | plan compiler、expert layout、composite backend | 单 INC provider 交付门禁 |
 
 ---
@@ -26,9 +26,9 @@ plan/backend/layout。测试 **不进入运行库**，但是交付门禁，不�
 
 ### What is this directory?
 
-**Host-side regressions** that do not require live NPUs: public C ABI,
-Easy/Inference, planners, and single-INC plan/backend/layout logic. Tests are
-not runtime code, but they are delivery gates and should stay in source.
+**Host-side regressions** that do not require live NPUs: the minimal SingleInc
+facade plus internal Framework/Easy/Inference, planners, and backend/layout
+logic. Internal tests are not usage examples.
 
 ### Why host tests besides device sweeps?
 
@@ -40,5 +40,5 @@ not runtime code, but they are delivery gates and should stay in source.
 
 | Subdirectory | Role | Why it exists |
 |---|---|---|
-| `common/` | SingleInc facade + Framework/Easy/Inference APIs + shared planners | Common-layer delivery gate |
+| `common/` | Minimal SingleInc facade + internal Framework/Easy/Inference + planners | Host logic gate |
 | `single_inc/` | Plan compilers, expert layout, composite backend | Single-INC provider delivery gate |

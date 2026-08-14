@@ -4,46 +4,44 @@
 本文只讲当前保留的 **单 INC 星型拓扑** 主逻辑。
 所有结论均可在下列路径核对（以源码与 CMake 为准，不以历史文件名为准）。
 
-## 最快接入：业务侧只保留 5 个动作
+## 最快接入：业务侧只保留 4 个动作
 
 新代码只包含
-[`inc_dc_single_inc_api.h`](../common/api/inc_dc_single_inc_api.h)，不要逐层调用
-Inference / Easy / Framework。部署阶段把 composite backend、设备 allocator、
-固定 shape 和 device token-plan 填入一次 `config`；真实 native worker 再调用一次
-`BindNativeSingleIncWorkerControl`，它会隐藏常驻 INC service 的 generation 握手。
+[`inc_dc_single_inc.hpp`](../common/api/inc_dc_single_inc.hpp)，不要逐层调用
+Inference / Easy / Framework。部署阶段仍把 native backend、设备 allocator、固定
+shape 填入一次 C `config`，route planner 则为本 rank 生成 `SingleIncRoute`；这些都
+不进入模型热路径。
 
 ```cpp
-NativeSingleIncWorkerControl control{dispatch_session, service_client};
-CHECK(BindNativeSingleIncWorkerControl(&control, &cfg));
-// control、dispatch_session、service_client 的生命周期覆盖 op。
+using namespace inc::dc;
+
+SingleIncRoute route{device_route, dispatch_rows, combine_rows};
+auto op = single_inc_create(config);
+
+auto batch = op.dispatch(
+    token_input,
+    expert_input,
+    route,
+    stream);
+
+run_grouped_gemm(expert_input, expert_output, stream);
+
+op.combine(
+    batch,
+    expert_output,
+    token_output,
+    stream);
+
+single_inc_destroy(op);
 ```
 
-```c
-inc_dc_single_inc_t *op = NULL;
-inc_dc_single_inc_route_t route = {0};
-inc_dc_single_inc_config_t cfg;
-inc_dc_single_inc_config_init(&cfg);
-/* 一次性填写 cfg 的 world/rank/shape/backend/allocator/static_route。 */
-CHECK(inc_dc_single_inc_create(&cfg, &op));
-
-inc_dc_single_inc_io_t d, c;
-inc_dc_single_inc_io_init(&d);
-d.input = token_hbm; d.output = expert_input_hbm;
-d.stream = stream; d.operation_generation = generation;
-CHECK(inc_dc_single_inc_dispatch(op, &d, &route));
-
-run_grouped_gemm(expert_input_hbm, expert_output_hbm, stream);
-
-inc_dc_single_inc_io_init(&c);
-c.input = expert_output_hbm; c.output = token_output_hbm;
-c.stream = stream; c.operation_generation = generation;
-CHECK(inc_dc_single_inc_combine(op, &route, &c));
-CHECK(inc_dc_single_inc_route_release(op, &route));
-CHECK(inc_dc_single_inc_destroy(op));
-```
+`batch` 内部持有本次 Dispatch 的 generation 和精确 route；Combine 成功后自动
+释放，中途异常退出则由析构自动回收。当前版本故意不公开 async request、取消、
+plan/stats 等高级路径，避免干扰主协议学习。
+最短 C++ 层失败时抛出 `SingleIncError`，其 `status()` 保留原始 C 状态码。
 
 完整可运行、会打印 fan-out / reduction 结果并做 golden 检查的例子是
-[`../common/examples/inference_api/inc_dc_inference_api_example.cpp`](../common/examples/inference_api/inc_dc_inference_api_example.cpp)。
+[`../common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp`](../common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp)。
 这层只是零拷贝生命周期封装，不改变 V1 kernel、token-plan 语义或性能路径。
 
 | 角色 | 权威路径 |
@@ -52,7 +50,7 @@ CHECK(inc_dc_single_inc_destroy(op));
 | Dispatch ABI / kernel | `dispatch/inc_dc_single_inc_stream_abi.h`、`dispatch/inc_dc_single_inc_stream_kernel.cpp` |
 | Combine 逻辑计划 / 编译 / 设备 | `combine/inc_dc_combine_logical_plan.h`、`combine/inc_dc_combine_plan_compiler.h`、`combine/inc_dc_combine_kernel.cpp`、`combine/inc_dc_combine_runtime_abi.h` |
 | D↔C 正反向计划 | `planning/` |
-| 框架接线 | `../common/api/inc_dc_single_inc_api.h`（推荐）+ `runtime/`（部署适配） |
+| 调用入口 | `../common/api/inc_dc_single_inc.hpp`（唯一公开 API） |
 | 真机入口 | `../scripts/single_inc/` |
 | **当前 sweep 进度 / 环境 / baseline** | [`SWEEP_STATUS.md`](SWEEP_STATUS.md) |
 
@@ -98,21 +96,18 @@ dispatch_combine/
 | `dispatch/` | 设备上 Dispatch 怎么传？ |
 | `combine/` | 设备上 Combine 怎么归约？ |
 | `planning/` | host 如何把 route 编成有界 workspace，且 D/C 正反向一致？ |
-| `runtime/` | Framework/Easy 如何接到真实 ACLSHMEM kernel？ |
+| `runtime/` | 最短 API 如何接到真实 ACLSHMEM kernel？ |
 | `tools/` | 随机计划从哪来？（非运行库） |
 
-#### 1.2 调用地图（框架视角）
+#### 1.2 调用地图
 
-Framework 只看到 **合成后的** backend vtable；两个 native provider 先合成再注入：
+新人只需要理解下面这条主路径；中间兼容层属于内部实现，不是可选 API：
 
 ```text
-SingleInc API → Inference API → Easy API → Framework C API (backend vtable)
-                                      ↓
-                    native_composite_backend（合成后的单一 communicator）
-                         ↙                         ↘
-          native_dispatch_backend          native_combine_backend
-                         ↘                         ↙
-              常驻 NativeIncService（INC 侧） + worker 侧 enqueue kernel
+业务代码 → SingleInc API → native runtime
+                              ├─ Dispatch backend → Dispatch kernel
+                              ├─ Combine backend  → Combine kernel
+                              └─ 常驻 NativeIncService
 ```
 
 公开符号前缀是 `inc_dc_`。**不要**把内部的 `bw03` / `bw05` / `sv2` / `c0` 当成公开 API——它们是历史/二进制兼容名（CMake **target/exe** 仍可能叫 `sv2`，但编译源用稳定名，见 `combine/README.md`）。
@@ -400,20 +395,78 @@ Qualification scripts currently allow **W ∈ {2,4,8}**. Logical PE ≠ physical
 
 ### 1. Three maps
 
-**Code**: `common/` (public ABI) · `single_inc/` (this doc) · `scripts/` (device entry) · `tests/` (host gates).
+#### 1.1 Code map
 
-**Call chain**: `Inference → Easy → Framework vtable → composite(native_dispatch + native_combine) → NativeIncService + kernels`.
+```text
+dispatch_combine/
+  common/          <- public C ABI, protocol, and platform primitives
+  single_inc/      <- star-topology Dispatch + Combine + runtime
+  scripts/         <- the only recommended device qualification entry
+  tests/           <- host gates; most do not occupy an NPU
+```
 
-**Data**: Dispatch moves tokens to experts; Combine returns weighted outputs to source-token layout.
+Inside `single_inc/`:
+
+| Subdirectory | Question it answers |
+|---|---|
+| `dispatch/` | How does Dispatch move data on device? |
+| `combine/` | How does Combine reduce and return data? |
+| `planning/` | How is a route compiled into bounded D/C-consistent workspaces? |
+| `runtime/` | How does the public API reach the real ACLSHMEM kernels? |
+| `tools/` | Where are non-runtime token-plan utilities kept? |
+
+#### 1.2 Call map
+
+This is the only path a new reader needs. Compatibility layers in the
+implementation are not alternative public APIs:
+
+```text
+application -> SingleInc API -> native runtime
+                                  |-- Dispatch backend -> Dispatch kernel
+                                  |-- Combine backend  -> Combine kernel
+                                  `-- resident NativeIncService
+```
+
+#### 1.3 Data map
+
+```text
+token x top-k route
+        |
+        v
+   +---------+      upload/pack      +-----+      fan-out      +--------------+
+   | workers | --------------------> | INC | ----------------> | dest workers |
+   +---------+                       +-----+                   +------+-------+
+        ^                                                            |
+        |                       result fan-back                       | expert compute
+        |                                                            v
+        |          +-----+     weighted reduce     +-------------------------+
+        +----------| INC | <---------------------- | contribution uploaders  |
+                   +-----+                         +-------------------------+
+                    Combine
+```
+
+Dispatch decides where each token is computed; Combine restores weighted
+expert outputs to the source-token layout.
 
 ### 2. Dispatch (code-backed)
 
 Kernel entry `inc_dc_single_inc_stream_dispatch_kernel`:
 
-- `pe < workers` → `StreamWorker`
-- `pe == workers` → `StreamInc`
+```text
+pe <  workers  -> StreamWorker(...)
+pe == workers  -> StreamInc(...)
+```
 
-Learn ABI objects in `inc_dc_single_inc_stream_abi.h`: `StreamDispatchDesc`, `StreamDispatchTask`, `StreamRouteEntry`, `StreamExpertAssignment`, `generation`, lane counts.
+Key objects in `inc_dc_single_inc_stream_abi.h`:
+
+| Object | Role |
+|---|---|
+| `StreamDispatchDesc` | Source of truth for offsets, lanes, hidden size, top-k, and generation |
+| `StreamDispatchTask` | One packet from a published source tile to one destination worker |
+| `StreamRouteEntry` | Rank-local source row plus assignment slice; same-destination experts may share one hidden-row transfer |
+| `StreamExpertAssignment` | `expert_id / route_ordinal / weight_bits` |
+| `generation` | Cacheline signal value consumed by `StreamWaitGeneration` |
+| lanes | Worker `upload_lane_count`; INC `gather_lane_count + tx_lane_count`, derived from live AIV resources |
 
 Timeline: **start-gate** → **worker upload via INC** (`HasDirect` tile upload or `WorkerPack`; **not** `WorkerDirect` bypass—H1) → **INC gather + TX** → **completion**. Invariants: no work before `go`; INC must see `tile_ready`/chunk completion before reading; TX depends on gather; workers finish on completion generation.
 
@@ -421,13 +474,55 @@ Timeline: **start-gate** → **worker upload via INC** (`HasDirect` tile upload 
 
 Product path is **dyn-CSR** (`inc_dc_combine_kernel.cpp` / `DynCsrCtrl`). Names like `sv2` / `bw05` are legacy/binary labels, not the public API.
 
-Host pipeline: `IncDcCombineLogicalPlanV2` → topology → `CompileLogicalPlanToExecution` → `DynCsrCtrl` workspace. Framework reverse layout: `BuildCombineReverseLayout` in `planning/`.
+| Stable source name to read | Legacy/CMake name that may remain | Meaning |
+|---|---|---|
+| `inc_dc_combine_kernel.cpp` | target `inc_dc_sv2_dyn_csr_combine_kernel` | Product data path is dyn-CSR; target name is compatibility-only |
+| `inc_dc_combine_launcher.cpp` | exe `inc_dc_sv2_dyn_csr_combine` | Launched by `run_single_inc_dyn_case.sh` |
+| `inc_dc_combine_runtime_abi.h` | `DynCsrCtrl`, magic `'DYCS'` | Single host/device ABI source of truth |
+| `inc_dc_combine_logical_plan.*` | current logical-plan fields | Single logical-plan implementation |
 
-Device: producer upload (ready only after payload visibility) → INC owner CSR reduce (vector weighted FP16→FP32, fail-closed) → split TX fan-back → optional device completion.
+Host planning pipeline:
+
+```text
+IncDcCombineLogicalPlanV2          (topology-independent results/contributions)
+        |
+        v
+IncDcTopologyDescriptor            (explicit worker <-> single-INC reachability)
+        |
+        v
+CompileLogicalPlanToExecution      -> IncDcCompiledExecutionPlan
+        |                              (owners, channels/slots, worklist CSR)
+        v
+BuildNativeCombinePreparedWorkspace -> DynCsrCtrl + bounded symmetric heap
+```
+
+Framework reverse layout is built by `BuildCombineReverseLayout` in
+`planning/`, keeping Combine contributor order aligned with Dispatch physical
+rows and assignments.
+
+Device-role split:
+
+```text
+pe <  W  -> producer (contribution upload)
+pe == W  -> INC reducer + split TX fan-back lanes
+```
+
+Device timeline: producer upload (ready only after payload visibility) → INC
+owner CSR reduce (vector weighted FP16→FP32, fail-closed) → split TX fan-back
+→ optional device completion.
 
 ### 4. Runtime
 
-`native_*_backend` launches the kernels above; `NativeIncService` keeps the INC side resident and rendezvous on generations so workers are not forced through a heavy W+1 host barrier every op. Hot path does not allocate.
+| Component | File | Role |
+|---|---|---|
+| Dispatch provider | `runtime/inc_dc_native_dispatch_backend.*` | Enqueue the single-INC stream Dispatch kernel |
+| Combine provider | `runtime/inc_dc_native_combine_backend.*` | Select worker producer or INC Combine path |
+| Composite communicator | `runtime/inc_dc_native_composite_backend.*` | Present one backend to SingleInc/Inference/Easy |
+| Resident INC service | `runtime/inc_dc_native_inc_service.*` | Generation rendezvous without a heavy W+1 host barrier per op |
+| Combine workspace | `runtime/inc_dc_native_combine_workspace.*` | Bounded dyn-CSR heap plus immutable metadata |
+| Full-chain gate | `runtime/inc_dc_native_full_example_main.cpp` | Native composite/service smoke and fault gate |
+
+`native_*_backend` launches the kernels above; the hot path does not allocate.
 
 ### 5. Reading order
 
@@ -435,10 +530,27 @@ This doc → READMEs → stream ABI (full) → `StreamWorker`/`StreamInc` → pl
 
 ### 6. Minimal device run
 
-From the parent of `shmem/` run `cmake -S shmem -B build …` (or `cmake -S .`
-inside `shmem/`). Build targets `inc_dc_single_inc_stream` and
-`inc_dc_sv2_dyn_csr_combine`, then qualify **via launchers** (raw binaries
-bypass topology/idle gates):
+From the parent of `shmem/` (use `cmake -S .` instead when already inside
+`shmem/`):
+
+```bash
+cmake -S shmem -B build -DCMAKE_BUILD_TYPE=Release -DUSE_EXAMPLES=ON
+cmake --build build -j --target \
+  inc_dc_single_inc_stream inc_dc_sv2_dyn_csr_combine
+```
+
+Qualify **via launchers**; raw binaries bypass topology/idle gates and do not
+count as delivery evidence:
+
+```bash
+cd shmem/examples/inc/dispatch_combine/scripts/single_inc
+
+# Dispatch: W=4, tokens/worker=64, hidden=8192, top-k=2
+./run_single_inc_stream_dispatch_case.sh 4 64 8192 2 /tmp/dc_log
+
+# Combine dyn-CSR: W=4, top-k=2, results=256, hidden=4096, mode=0
+./run_single_inc_dyn_case.sh 4 2 256 4096 0 /tmp/dyn_log
+```
 
 - `scripts/single_inc/run_single_inc_stream_dispatch_case.sh`
 - `scripts/single_inc/run_single_inc_dyn_case.sh`

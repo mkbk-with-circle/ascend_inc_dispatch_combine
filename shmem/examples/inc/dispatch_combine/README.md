@@ -17,10 +17,10 @@
 [`single_inc/QUICKSTART.md`](single_inc/QUICKSTART.md)
 
 **应用直接调用（推荐唯一入口）：**
-[`common/api/inc_dc_single_inc_api.h`](common/api/inc_dc_single_inc_api.h)
+[`common/api/inc_dc_single_inc.hpp`](common/api/inc_dc_single_inc.hpp)
 
 **可运行的完整调用例子：**
-[`common/examples/inference_api/inc_dc_inference_api_example.cpp`](common/examples/inference_api/inc_dc_inference_api_example.cpp)
+[`common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp`](common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp)
 
 **当前 sweep 进度 / 环境 / baseline：**
 [`single_inc/SWEEP_STATUS.md`](single_inc/SWEEP_STATUS.md)

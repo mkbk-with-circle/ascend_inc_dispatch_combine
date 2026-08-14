@@ -14,7 +14,7 @@ MegaMoE/NVIDIA 参考源码、临时探针、构建产物和 launcher 日志均�
 
 | 功能 | 公开 API | 完整示例 |
 |---|---|---|
-| 单 INC Dispatch/Combine | [`inc_dc_single_inc_api.h`](dispatch_combine/common/api/inc_dc_single_inc_api.h) | [`inc_dc_inference_api_example.cpp`](dispatch_combine/common/examples/inference_api/inc_dc_inference_api_example.cpp) |
+| 单 INC Dispatch/Combine | [`inc_dc_single_inc.hpp`](dispatch_combine/common/api/inc_dc_single_inc.hpp) | [`inc_dc_single_inc_api_example.cpp`](dispatch_combine/common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp) |
 | 单 INC Fusion Kernel | [`inc_fusion_api.h`](fusion_kernel/ascend/inc_fusion_api.h) | [`fusion_kernel/examples/`](fusion_kernel/examples/README.md) |
 
 Fusion trace 解析入口见 [`fusion_kernel/tools/`](fusion_kernel/tools/README.md)。

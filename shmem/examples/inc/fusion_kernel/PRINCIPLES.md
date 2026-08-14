@@ -139,7 +139,7 @@ scatter-add(y * weight) → 该 mb 的 combine 输入
 - 方案 B 下复用单 INC 的协议语义、路由去重和归约口径，但 transport state machine
   内嵌在同一个 fusion kernel；独立单 INC 库仍负责 roofline/gate，不复制它的 host
   launcher 或按 shape 调参表；
-- 接入层用 **Inference API**（prepared、热路径不分配），plan 在 host 侧由 chunk planner 预编译；参考 `../dispatch_combine/common/api/` 与 [`QUICKSTART.md`](../dispatch_combine/single_inc/QUICKSTART.md)；
+- Fusion 接入层只使用自身的 **prepared API**（`inc_fusion_api.h`，热路径不分配）；独立单 INC 的公开入口只参考 [`inc_dc_single_inc.hpp`](../dispatch_combine/common/api/inc_dc_single_inc.hpp) 与 [`QUICKSTART.md`](../dispatch_combine/single_inc/QUICKSTART.md)；
 - Dispatch 语义按 H14：每个 token 的所有 expert assignment 都保留，对同一目的 rank 的多 expert 跨 HCCS 只发一份 hidden，由目标 worker 依 metadata 本地展开；
 - Combine 语义按 H15：默认每个 expert-instance 独立 push 到 INC，由 INC 做完整加权归约；rank-local pre-reduce 只能是显式 opt-in 的诊断路径。
 
@@ -331,7 +331,7 @@ mb i+1 :            INC-Dispatch ═══════════════�
 
 ### 6.3 接入层
 
-Inference API（prepared、热路径不分配）+ host 侧 chunk planner 预编译 plan。见 §2.5。
+Fusion prepared API（`inc_fusion_api.h`，热路径不分配）+ host 侧预编译 plan。见 §2.5。
 
 ### 6.4 buffer 生命周期
 

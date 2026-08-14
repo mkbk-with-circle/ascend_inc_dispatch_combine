@@ -4,9 +4,9 @@
 
 ### 这个目录是干什么的？
 
-针对 `../../common/api` 的 host 回归与 **纯 C11 头文件编译门禁**。
+针对 `../../common/api` 的内部 host 回归与头文件编译门禁；这里不是用户调用示例。
 
-### 为什么 Framework / Easy / Inference 既有 `.cpp` 又有 `.c`？
+### 为什么仍测试 Framework / Easy / Inference？
 
 - `.cpp`：测状态机、并发、错误码、生命周期等行为。
 - `.c`：证明对应公开头可被纯 C11 编译——ABI「C 可调用」硬门禁。
@@ -31,9 +31,9 @@
 
 ### What is this directory?
 
-Host regressions for `../../common/api` plus **pure-C11 header compile gates**.
+Internal host regressions for `../../common/api`; this directory is not a usage guide.
 
-### Why Framework / Easy / Inference have both `.cpp` and `.c`
+### Why Framework / Easy / Inference are still tested
 
 - `.cpp`: behavior—state machines, concurrency, errors, lifetimes.
 - `.c`: proves those public headers still compile as C11.
