@@ -2,11 +2,8 @@
 #define INC_DC_SINGLE_INC_API_H
 
 /*
- * Recommended application-facing API for the qualified single-INC V1 path.
- *
- * Deployment code creates one exact-shape operator.  Model code then only
- * supplies tensors/stream/generation to Dispatch and Combine.  The lower
- * Inference -> Easy -> Framework layers stay private implementation details.
+ * Small C bridge used by inc_dc_single_inc.hpp and the native controller.
+ * New C++ code should include inc_dc_single_inc.hpp instead.
  */
 
 #include "inc_dc_inference_api.h"
@@ -19,7 +16,6 @@ extern "C" {
 
 typedef struct inc_dc_single_inc inc_dc_single_inc_t;
 typedef inc_dc_infer_io_t inc_dc_single_inc_io_t;
-typedef inc_dc_infer_request_t inc_dc_single_inc_request_t;
 typedef inc_dc_infer_route_t inc_dc_single_inc_route_t;
 
 /* Optional deployment hooks, used by the native persistent INC controller. */
@@ -62,9 +58,6 @@ void inc_dc_single_inc_io_init(inc_dc_single_inc_io_t *io);
 inc_dc_fw_status_t inc_dc_single_inc_create(
     const inc_dc_single_inc_config_t *config,
     inc_dc_single_inc_t **single_inc);
-inc_dc_fw_status_t inc_dc_single_inc_create_from_context(
-    const inc_dc_single_inc_config_t *config, inc_dc_context_t *context,
-    inc_dc_single_inc_t **single_inc);
 
 /*
  * Simplest blocking path:
@@ -79,39 +72,8 @@ inc_dc_fw_status_t inc_dc_single_inc_combine(
     const inc_dc_single_inc_route_t *dispatch_route,
     const inc_dc_single_inc_io_t *io);
 
-/* Allocation-free asynchronous path for Dispatch/Combine overlap. */
-inc_dc_fw_status_t inc_dc_single_inc_dispatch_async(
-    inc_dc_single_inc_t *single_inc, const inc_dc_single_inc_io_t *io,
-    inc_dc_single_inc_request_t *request,
-    inc_dc_single_inc_route_t *route);
-inc_dc_fw_status_t inc_dc_single_inc_combine_async(
-    inc_dc_single_inc_t *single_inc,
-    const inc_dc_single_inc_route_t *dispatch_route,
-    const inc_dc_single_inc_io_t *io,
-    inc_dc_single_inc_request_t *request);
-
-inc_dc_fw_status_t inc_dc_single_inc_request_query(
-    inc_dc_single_inc_t *single_inc,
-    const inc_dc_single_inc_request_t *request, uint32_t *state);
-inc_dc_fw_status_t inc_dc_single_inc_request_wait(
-    inc_dc_single_inc_t *single_inc,
-    const inc_dc_single_inc_request_t *request, uint64_t timeout_ns);
-inc_dc_fw_status_t inc_dc_single_inc_request_cancel(
-    inc_dc_single_inc_t *single_inc,
-    const inc_dc_single_inc_request_t *request);
-inc_dc_fw_status_t inc_dc_single_inc_request_release(
-    inc_dc_single_inc_t *single_inc, inc_dc_single_inc_request_t *request);
-inc_dc_fw_status_t inc_dc_single_inc_request_wait_and_release(
-    inc_dc_single_inc_t *single_inc, inc_dc_single_inc_request_t *request,
-    uint64_t timeout_ns);
 inc_dc_fw_status_t inc_dc_single_inc_route_release(
     inc_dc_single_inc_t *single_inc, inc_dc_single_inc_route_t *route);
-
-inc_dc_fw_status_t inc_dc_single_inc_get_plan_info(
-    const inc_dc_single_inc_t *single_inc, inc_dc_infer_plan_info_t *info);
-inc_dc_fw_status_t inc_dc_single_inc_get_stats(
-    const inc_dc_single_inc_t *single_inc,
-    inc_dc_fw_context_stats_t *stats);
 
 /* Returns BUSY while a request or captured route is still live. */
 inc_dc_fw_status_t inc_dc_single_inc_destroy(

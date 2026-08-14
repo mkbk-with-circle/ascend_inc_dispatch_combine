@@ -1,4 +1,5 @@
 #include "inc_dc_single_inc_api.h"
+#include "inc_dc_single_inc.hpp"
 
 #include <cassert>
 #include <cstdlib>
@@ -14,35 +15,6 @@ struct Backend {
     uint64_t frees = 0u;
     uint64_t enqueues = 0u;
 };
-
-struct Control {
-    uint64_t before_dispatch = 0u;
-    uint64_t after_dispatch = 0u;
-    uint64_t before_combine = 0u;
-    uint64_t after_combine = 0u;
-};
-
-inc_dc_fw_status_t Before(void *opaque, uint32_t operation,
-                          uint64_t generation)
-{
-    auto *control = static_cast<Control *>(opaque);
-    assert(control != nullptr && generation != 0u);
-    if (operation == INC_DC_FW_OP_DISPATCH) ++control->before_dispatch;
-    else if (operation == INC_DC_FW_OP_COMBINE) ++control->before_combine;
-    else return INC_DC_FW_INVALID_ARGUMENT;
-    return INC_DC_FW_OK;
-}
-
-inc_dc_fw_status_t After(void *opaque, uint32_t operation,
-                         uint64_t generation)
-{
-    auto *control = static_cast<Control *>(opaque);
-    assert(control != nullptr && generation != 0u);
-    if (operation == INC_DC_FW_OP_DISPATCH) ++control->after_dispatch;
-    else if (operation == INC_DC_FW_OP_COMBINE) ++control->after_combine;
-    else return INC_DC_FW_INVALID_ARGUMENT;
-    return INC_DC_FW_OK;
-}
 
 Ticket *Find(Backend *backend, inc_dc_fw_backend_ticket_t ticket)
 {
@@ -260,55 +232,32 @@ int main()
     assert(backend.frees == 4u);
     assert(inc_dc_infer_session_destroy(session) == INC_DC_FW_OK);
 
-    // Recommended facade: exact-shape setup and one overlapping D/C pair.
-    Backend facade_backend{};
-    Control control{};
-    inc_dc_single_inc_config_t facade_config{};
-    inc_dc_single_inc_config_init(&facade_config);
-    facade_config.worker_world_size = 4u;
-    facade_config.worker_rank = 0u;
-    facade_config.hidden_size = 7168u;
-    facade_config.tokens = 128u;
-    facade_config.topk = 2u;
-    facade_config.backend = Ops(&facade_backend);
-    inc_dc_easy_route_device_init(
-        &facade_config.static_route,
-        INC_DC_FW_ROUTE_OPAQUE_DEVICE_PLAN, static_route,
-        sizeof(static_route), 42u, 1u);
-    facade_config.allocate_device = Allocate;
-    facade_config.free_device = Free;
-    facade_config.allocator_context = &facade_backend;
-    facade_config.before_enqueue = Before;
-    facade_config.after_enqueue = After;
-    facade_config.control_context = &control;
+    // The only public facade: create -> dispatch -> combine -> destroy.
+    Backend short_backend{};
+    inc_dc_single_inc_config_t short_config{};
+    inc_dc_single_inc_config_init(&short_config);
+    short_config.worker_world_size = 4u;
+    short_config.worker_rank = 0u;
+    short_config.hidden_size = 7168u;
+    short_config.tokens = 128u;
+    short_config.topk = 2u;
+    short_config.backend = Ops(&short_backend);
+    short_config.allocate_device = Allocate;
+    short_config.free_device = Free;
+    short_config.allocator_context = &short_backend;
 
-    inc_dc_single_inc_t *facade = nullptr;
-    assert(inc_dc_single_inc_create(&facade_config, &facade) == INC_DC_FW_OK);
-    inc_dc_single_inc_io_t facade_io{};
-    inc_dc_single_inc_io_init(&facade_io);
-    facade_io.input = input;
-    facade_io.output = output;
-    facade_io.stream = 1u;
-    facade_io.operation_generation = 1u;
-    inc_dc_single_inc_request_t facade_dispatch{}, facade_combine{};
-    inc_dc_single_inc_route_t facade_route{};
-    assert(inc_dc_single_inc_dispatch_async(
-               facade, &facade_io, &facade_dispatch, &facade_route) ==
-           INC_DC_FW_OK);
-    assert(inc_dc_single_inc_combine_async(
-               facade, &facade_route, &facade_io, &facade_combine) ==
-           INC_DC_FW_OK);
-    assert(inc_dc_single_inc_destroy(facade) == INC_DC_FW_BUSY);
-    assert(inc_dc_single_inc_request_wait_and_release(
-               facade, &facade_dispatch, 0u) == INC_DC_FW_OK);
-    assert(inc_dc_single_inc_request_wait_and_release(
-               facade, &facade_combine, 0u) == INC_DC_FW_OK);
-    assert(inc_dc_single_inc_destroy(facade) == INC_DC_FW_BUSY);
-    assert(inc_dc_single_inc_route_release(facade, &facade_route) ==
-           INC_DC_FW_OK);
-    assert(inc_dc_single_inc_destroy(facade) == INC_DC_FW_OK);
-    assert(control.before_dispatch == 1u && control.after_dispatch == 1u);
-    assert(control.before_combine == 1u && control.after_combine == 1u);
-    assert(facade_backend.allocations == facade_backend.frees);
+    inc::dc::SingleIncRoute short_route{};
+    inc_dc_easy_route_device_init(
+        &short_route.device, INC_DC_FW_ROUTE_OPAQUE_DEVICE_PLAN,
+        static_route, sizeof(static_route), 42u, 9u);
+    short_route.dispatch_output_rows = 256u;
+    short_route.combine_input_rows = 256u;
+
+    auto short_op = inc::dc::single_inc_create(short_config);
+    auto batch = short_op.dispatch(input, output, short_route, 1u);
+    short_op.combine(batch, input, output, 2u);
+    inc::dc::single_inc_destroy(short_op);
+    assert(short_backend.enqueues == 2u);
+    assert(short_backend.allocations == short_backend.frees);
     return 0;
 }

@@ -26,7 +26,7 @@ bool HeaderValid(const inc_dc_single_inc_config_t *config)
 }
 
 inc_dc_fw_status_t Create(
-    const inc_dc_single_inc_config_t *config, inc_dc_context_t *context,
+    const inc_dc_single_inc_config_t *config,
     inc_dc_single_inc_t **single_inc)
 {
     if (!HeaderValid(config) || single_inc == nullptr ||
@@ -69,10 +69,8 @@ inc_dc_fw_status_t Create(
     infer.allocator_context = config->allocator_context;
     infer.flags = config->flags;
 
-    inc_dc_fw_status_t status = context == nullptr
-        ? inc_dc_infer_session_create(&infer, &created->session)
-        : inc_dc_infer_session_create_from_context(
-              &infer, context, &created->session);
+    inc_dc_fw_status_t status = inc_dc_infer_session_create(
+        &infer, &created->session);
     if (status != INC_DC_FW_OK) {
         delete created;
         return status;
@@ -99,7 +97,7 @@ inc_dc_fw_status_t Create(
 
 inc_dc_fw_status_t AbortAndRelease(
     inc_dc_single_inc_t *single_inc,
-    inc_dc_single_inc_request_t *request,
+    inc_dc_infer_request_t *request,
     inc_dc_fw_status_t primary_status)
 {
     const inc_dc_fw_status_t cancel = inc_dc_infer_request_cancel(
@@ -116,13 +114,72 @@ inc_dc_fw_status_t AbortAndRelease(
 
 inc_dc_fw_status_t FinishBlocking(
     inc_dc_single_inc_t *single_inc,
-    inc_dc_single_inc_request_t *request)
+    inc_dc_infer_request_t *request)
 {
     const inc_dc_fw_status_t status = inc_dc_infer_request_wait(
         single_inc->plan, request, single_inc->default_timeout_ns);
     if (status != INC_DC_FW_OK)
         return AbortAndRelease(single_inc, request, status);
     return inc_dc_infer_request_release(single_inc->plan, request);
+}
+
+inc_dc_fw_status_t StartDispatch(
+    inc_dc_single_inc_t *single_inc, const inc_dc_single_inc_io_t *io,
+    inc_dc_infer_request_t *request, inc_dc_single_inc_route_t *route)
+{
+    if (single_inc == nullptr || io == nullptr || request == nullptr ||
+        route == nullptr) return INC_DC_FW_INVALID_ARGUMENT;
+    inc_dc_fw_status_t status = INC_DC_FW_OK;
+    if (single_inc->before_enqueue != nullptr) {
+        status = single_inc->before_enqueue(
+            single_inc->control_context, INC_DC_FW_OP_DISPATCH,
+            io->operation_generation);
+        if (status != INC_DC_FW_OK) return status;
+    }
+    status = inc_dc_infer_dispatch_async(single_inc->plan, io, request);
+    if (status != INC_DC_FW_OK) return status;
+    status = inc_dc_infer_route_capture(
+        single_inc->plan, request, io, route);
+    if (status != INC_DC_FW_OK)
+        return AbortAndRelease(single_inc, request, status);
+    single_inc->live_routes.fetch_add(1u, std::memory_order_relaxed);
+    if (single_inc->after_enqueue != nullptr) {
+        status = single_inc->after_enqueue(
+            single_inc->control_context, INC_DC_FW_OP_DISPATCH,
+            io->operation_generation);
+        if (status != INC_DC_FW_OK) {
+            (void)inc_dc_single_inc_route_release(single_inc, route);
+            return AbortAndRelease(single_inc, request, status);
+        }
+    }
+    return INC_DC_FW_OK;
+}
+
+inc_dc_fw_status_t StartCombine(
+    inc_dc_single_inc_t *single_inc,
+    const inc_dc_single_inc_route_t *dispatch_route,
+    const inc_dc_single_inc_io_t *io, inc_dc_infer_request_t *request)
+{
+    if (single_inc == nullptr || io == nullptr || request == nullptr)
+        return INC_DC_FW_INVALID_ARGUMENT;
+    inc_dc_fw_status_t status = INC_DC_FW_OK;
+    if (single_inc->before_enqueue != nullptr) {
+        status = single_inc->before_enqueue(
+            single_inc->control_context, INC_DC_FW_OP_COMBINE,
+            io->operation_generation);
+        if (status != INC_DC_FW_OK) return status;
+    }
+    status = inc_dc_infer_combine_with_route_async(
+        single_inc->plan, dispatch_route, io, request);
+    if (status != INC_DC_FW_OK) return status;
+    if (single_inc->after_enqueue != nullptr) {
+        status = single_inc->after_enqueue(
+            single_inc->control_context, INC_DC_FW_OP_COMBINE,
+            io->operation_generation);
+        if (status != INC_DC_FW_OK)
+            return AbortAndRelease(single_inc, request, status);
+    }
+    return INC_DC_FW_OK;
 }
 
 } // namespace
@@ -151,86 +208,15 @@ inc_dc_fw_status_t inc_dc_single_inc_create(
     const inc_dc_single_inc_config_t *config,
     inc_dc_single_inc_t **single_inc)
 {
-    return Create(config, nullptr, single_inc);
-}
-
-inc_dc_fw_status_t inc_dc_single_inc_create_from_context(
-    const inc_dc_single_inc_config_t *config, inc_dc_context_t *context,
-    inc_dc_single_inc_t **single_inc)
-{
-    if (context == nullptr) return INC_DC_FW_INVALID_ARGUMENT;
-    return Create(config, context, single_inc);
-}
-
-inc_dc_fw_status_t inc_dc_single_inc_dispatch_async(
-    inc_dc_single_inc_t *single_inc, const inc_dc_single_inc_io_t *io,
-    inc_dc_single_inc_request_t *request,
-    inc_dc_single_inc_route_t *route)
-{
-    if (single_inc == nullptr || io == nullptr || request == nullptr ||
-        route == nullptr)
-        return INC_DC_FW_INVALID_ARGUMENT;
-    inc_dc_fw_status_t status = INC_DC_FW_OK;
-    if (single_inc->before_enqueue != nullptr) {
-        status = single_inc->before_enqueue(
-            single_inc->control_context, INC_DC_FW_OP_DISPATCH,
-            io->operation_generation);
-        if (status != INC_DC_FW_OK) return status;
-    }
-    status = inc_dc_infer_dispatch_async(
-        single_inc->plan, io, request);
-    if (status != INC_DC_FW_OK) return status;
-    status = inc_dc_infer_route_capture(
-        single_inc->plan, request, io, route);
-    if (status != INC_DC_FW_OK)
-        return AbortAndRelease(single_inc, request, status);
-    single_inc->live_routes.fetch_add(1u, std::memory_order_relaxed);
-    if (single_inc->after_enqueue != nullptr) {
-        status = single_inc->after_enqueue(
-            single_inc->control_context, INC_DC_FW_OP_DISPATCH,
-            io->operation_generation);
-        if (status != INC_DC_FW_OK) {
-            (void)inc_dc_single_inc_route_release(single_inc, route);
-            return AbortAndRelease(single_inc, request, status);
-        }
-    }
-    return INC_DC_FW_OK;
-}
-
-inc_dc_fw_status_t inc_dc_single_inc_combine_async(
-    inc_dc_single_inc_t *single_inc,
-    const inc_dc_single_inc_route_t *dispatch_route,
-    const inc_dc_single_inc_io_t *io,
-    inc_dc_single_inc_request_t *request)
-{
-    if (single_inc == nullptr || io == nullptr)
-        return INC_DC_FW_INVALID_ARGUMENT;
-    inc_dc_fw_status_t status = INC_DC_FW_OK;
-    if (single_inc->before_enqueue != nullptr) {
-        status = single_inc->before_enqueue(
-            single_inc->control_context, INC_DC_FW_OP_COMBINE,
-            io->operation_generation);
-        if (status != INC_DC_FW_OK) return status;
-    }
-    status = inc_dc_infer_combine_with_route_async(
-        single_inc->plan, dispatch_route, io, request);
-    if (status != INC_DC_FW_OK) return status;
-    if (single_inc->after_enqueue != nullptr) {
-        status = single_inc->after_enqueue(
-            single_inc->control_context, INC_DC_FW_OP_COMBINE,
-            io->operation_generation);
-        if (status != INC_DC_FW_OK)
-            return AbortAndRelease(single_inc, request, status);
-    }
-    return INC_DC_FW_OK;
+    return Create(config, single_inc);
 }
 
 inc_dc_fw_status_t inc_dc_single_inc_dispatch(
     inc_dc_single_inc_t *single_inc, const inc_dc_single_inc_io_t *io,
     inc_dc_single_inc_route_t *route)
 {
-    inc_dc_single_inc_request_t request{};
-    inc_dc_fw_status_t status = inc_dc_single_inc_dispatch_async(
+    inc_dc_infer_request_t request{};
+    inc_dc_fw_status_t status = StartDispatch(
         single_inc, io, &request, route);
     if (status != INC_DC_FW_OK) return status;
     status = FinishBlocking(single_inc, &request);
@@ -244,51 +230,11 @@ inc_dc_fw_status_t inc_dc_single_inc_combine(
     const inc_dc_single_inc_route_t *dispatch_route,
     const inc_dc_single_inc_io_t *io)
 {
-    inc_dc_single_inc_request_t request{};
-    inc_dc_fw_status_t status = inc_dc_single_inc_combine_async(
+    inc_dc_infer_request_t request{};
+    inc_dc_fw_status_t status = StartCombine(
         single_inc, dispatch_route, io, &request);
     return status == INC_DC_FW_OK ? FinishBlocking(single_inc, &request)
                                   : status;
-}
-
-inc_dc_fw_status_t inc_dc_single_inc_request_query(
-    inc_dc_single_inc_t *single_inc,
-    const inc_dc_single_inc_request_t *request, uint32_t *state)
-{
-    return single_inc == nullptr ? INC_DC_FW_INVALID_ARGUMENT
-        : inc_dc_infer_request_query(single_inc->plan, request, state);
-}
-
-inc_dc_fw_status_t inc_dc_single_inc_request_wait(
-    inc_dc_single_inc_t *single_inc,
-    const inc_dc_single_inc_request_t *request, uint64_t timeout_ns)
-{
-    return single_inc == nullptr ? INC_DC_FW_INVALID_ARGUMENT
-        : inc_dc_infer_request_wait(single_inc->plan, request, timeout_ns);
-}
-
-inc_dc_fw_status_t inc_dc_single_inc_request_cancel(
-    inc_dc_single_inc_t *single_inc,
-    const inc_dc_single_inc_request_t *request)
-{
-    return single_inc == nullptr ? INC_DC_FW_INVALID_ARGUMENT
-        : inc_dc_infer_request_cancel(single_inc->plan, request);
-}
-
-inc_dc_fw_status_t inc_dc_single_inc_request_release(
-    inc_dc_single_inc_t *single_inc, inc_dc_single_inc_request_t *request)
-{
-    return single_inc == nullptr ? INC_DC_FW_INVALID_ARGUMENT
-        : inc_dc_infer_request_release(single_inc->plan, request);
-}
-
-inc_dc_fw_status_t inc_dc_single_inc_request_wait_and_release(
-    inc_dc_single_inc_t *single_inc, inc_dc_single_inc_request_t *request,
-    uint64_t timeout_ns)
-{
-    return single_inc == nullptr ? INC_DC_FW_INVALID_ARGUMENT
-        : inc_dc_infer_request_wait_and_release(
-              single_inc->plan, request, timeout_ns);
 }
 
 inc_dc_fw_status_t inc_dc_single_inc_route_release(
@@ -306,21 +252,6 @@ inc_dc_fw_status_t inc_dc_single_inc_route_release(
         }
     }
     return status;
-}
-
-inc_dc_fw_status_t inc_dc_single_inc_get_plan_info(
-    const inc_dc_single_inc_t *single_inc, inc_dc_infer_plan_info_t *info)
-{
-    return single_inc == nullptr ? INC_DC_FW_INVALID_ARGUMENT
-        : inc_dc_infer_plan_get_info(single_inc->plan, info);
-}
-
-inc_dc_fw_status_t inc_dc_single_inc_get_stats(
-    const inc_dc_single_inc_t *single_inc,
-    inc_dc_fw_context_stats_t *stats)
-{
-    return single_inc == nullptr ? INC_DC_FW_INVALID_ARGUMENT
-        : inc_dc_infer_session_get_stats(single_inc->session, stats);
 }
 
 inc_dc_fw_status_t inc_dc_single_inc_destroy(
