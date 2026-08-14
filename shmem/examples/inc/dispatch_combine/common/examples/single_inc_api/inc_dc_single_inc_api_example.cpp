@@ -11,7 +11,7 @@
  *                --Combine(weighted reduce)--> token output [3, 4]
  */
 
-#include "inc_dc_single_inc_api.h"
+#include "inc_dc_single_inc.hpp"
 #include "inc_dc_fp16_host.h"
 
 #include <array>
@@ -339,25 +339,8 @@ void PrintMatrix(const char *name, const uint16_t *matrix, uint64_t rows)
 
 int main()
 {
-    /* 所有资源先声明，便于任何失败路径都跳到统一 cleanup。 */
     CpuMockBackend backend{};
-    inc_dc_single_inc_t *single_inc = nullptr;
-    inc_dc_single_inc_route_t captured_route{};
-    bool route_live = false;
-    int exit_code = EXIT_FAILURE;
-    inc_dc_fw_status_t status = INC_DC_FW_OK;
-    uint64_t route_bytes = 0u;
-
     inc_dc_single_inc_config_t config{};
-    inc_dc_infer_plan_info_t plan_info{};
-    inc_dc_easy_token_plan_desc_t route_plan_desc{};
-    inc_dc_easy_token_plan_info_t route_info{};
-    inc_dc_single_inc_io_t dispatch_io{};
-    inc_dc_single_inc_io_t combine_io{};
-    inc_dc_fw_context_stats_t stats{};
-    std::vector<uint8_t> route_blob;
-
-    /* W2、每个 worker 两个 expert；每个 token 选择两个 expert。 */
     const std::array<int32_t, kAssignments> expert_ids = {
         0, 2,  /* token 0 -> worker 0 / worker 1 */
         1, 3,  /* token 1 -> worker 0 / worker 1 */
@@ -379,19 +362,6 @@ int main()
     std::array<uint16_t, kTokens * kHidden> combined_output{};
     std::array<float, kTokens * kHidden> expected_output{};
 
-#define CHECK_OK(expression)                                                   \
-    do {                                                                       \
-        status = (expression);                                                 \
-        if (status != INC_DC_FW_OK) {                                          \
-            std::fprintf(stderr, "失败: %s -> %s\n", #expression,             \
-                         inc_dc_fw_status_string(status));                     \
-            goto cleanup;                                                      \
-        }                                                                      \
-    } while (false)
-
-    std::printf("=== 单 INC 最简 API / CPU mock 完整示例 ===\n");
-
-    /* 1) 部署代码只配置一次；Easy/Framework 层不再暴露给模型代码。 */
     inc_dc_single_inc_config_init(&config);
     config.model_id = 7u;
     config.process_group_id = 11u;
@@ -405,144 +375,109 @@ int main()
     config.allocate_device = MockAllocate;
     config.free_device = MockFree;
     config.allocator_context = &backend;
-    CHECK_OK(inc_dc_single_inc_create(&config, &single_inc));
-    std::printf("[1/8] 单 INC operator 初始化完成\n");
-
-    /* 2) create 已为固定 (tokens, topk) bucket 准备持久 workspace。 */
-    CHECK_OK(inc_dc_single_inc_get_plan_info(single_inc, &plan_info));
-    std::printf(
-        "[2/8] plan 已准备: tokens=%llu, topk=%u, D workspace=%llu B, "
-        "C workspace=%llu B\n",
-        static_cast<unsigned long long>(plan_info.tokens), plan_info.topk,
-        static_cast<unsigned long long>(plan_info.dispatch_workspace_bytes),
-        static_cast<unsigned long long>(plan_info.combine_workspace_bytes));
 
     for (size_t index = 0u; index < token_input.size(); ++index) {
         token_input[index] = inc::FloatToFp16Bits(token_input_fp32[index]);
     }
 
-    /* 3) 构造一次 route plan。真机需要再把 route_blob 原样拷贝到 HBM。 */
-    inc_dc_easy_token_plan_desc_init(&route_plan_desc);
-    route_plan_desc.tokens = kTokens;
-    route_plan_desc.topk = kTopK;
-    route_plan_desc.worker_world_size = kWorldSize;
-    route_plan_desc.worker_rank = 0u;
-    route_plan_desc.experts_per_worker = kExpertsPerWorker;
-    route_plan_desc.expert_ids = expert_ids.data();
-    route_plan_desc.weights = route_weights.data();
-    route_plan_desc.generation = kRouteGeneration;
-    CHECK_OK(inc_dc_easy_token_plan_query(&route_plan_desc, &route_bytes));
-    route_blob.resize(static_cast<size_t>(route_bytes));
-    CHECK_OK(inc_dc_easy_token_plan_build(
-        &route_plan_desc, route_blob.data(), route_blob.size(), &route_info));
+    try {
+        auto require = [](inc_dc_fw_status_t status, const char *operation) {
+            if (status != INC_DC_FW_OK)
+                throw inc::dc::SingleIncError(operation, status);
+        };
 
-    /*
-     * mock 把 host 地址当作 device 地址；生产环境传 aclrtMalloc 得到的 HBM 地址。
-     */
-    inc_dc_single_inc_io_init(&dispatch_io);
-    dispatch_io.input = token_input.data();
-    dispatch_io.output = dispatched_rows.data();
-    dispatch_io.input_rows = kTokens;
-    dispatch_io.output_rows = kAssignments;
-    inc_dc_easy_token_plan_device_route_init(
-        &dispatch_io.route, route_blob.data(), &route_info);
-    dispatch_io.stream = 1u; /* mock stream；真机填 aclrtStream 的整数句柄。 */
-    dispatch_io.operation_generation = kRouteGeneration;
+        /* Route planning is setup work; the model hot path starts at create. */
+        inc_dc_easy_token_plan_desc_t plan{};
+        inc_dc_easy_token_plan_desc_init(&plan);
+        plan.tokens = kTokens;
+        plan.topk = kTopK;
+        plan.worker_world_size = kWorldSize;
+        plan.worker_rank = 0u;
+        plan.experts_per_worker = kExpertsPerWorker;
+        plan.expert_ids = expert_ids.data();
+        plan.weights = route_weights.data();
+        plan.generation = kRouteGeneration;
+        uint64_t route_bytes = 0u;
+        require(inc_dc_easy_token_plan_query(&plan, &route_bytes),
+                "token plan query");
+        std::vector<uint8_t> route_blob(static_cast<size_t>(route_bytes));
+        inc_dc_easy_token_plan_info_t route_info{};
+        require(inc_dc_easy_token_plan_build(
+                    &plan, route_blob.data(), route_blob.size(), &route_info),
+                "token plan build");
 
-    /* 4) 模型热路径只需一次 Dispatch；精确 route 由 facade 返回。 */
-    CHECK_OK(inc_dc_single_inc_dispatch(
-        single_inc, &dispatch_io, &captured_route));
-    route_live = true;
-    std::printf("[3/8] Dispatch 完成；route handle 已返回\n");
-    PrintMatrix("Dispatch fan-out", dispatched_rows.data(), kAssignments);
+        inc::dc::SingleIncRoute route{};
+        inc_dc_easy_token_plan_device_route_init(
+            &route.device, route_blob.data(), &route_info);
+        route.dispatch_output_rows = kAssignments;
+        route.combine_input_rows = kAssignments;
 
-    /* 5) 模拟每个 expert 对自己收到的行做计算。 */
-    for (uint64_t row = 0u; row < kAssignments; ++row) {
-        const float scale = ExpertScale(expert_ids[row]);
-        for (uint32_t hidden = 0u; hidden < kHidden; ++hidden) {
-            expert_output[row * kHidden + hidden] = inc::FloatToFp16Bits(
-                inc::Fp16BitsToFloat(dispatched_rows[row * kHidden + hidden]) *
-                scale);
-        }
-    }
-    std::printf("[4/8] expert compute 完成（示例算子: x * (1 + 0.1*expert_id)）\n");
-    PrintMatrix("Expert output", expert_output.data(), kAssignments);
+        std::printf("=== 单 INC 最短 API / CPU mock 完整示例 ===\n");
+        auto op = inc::dc::single_inc_create(config);
+        std::printf("[1/6] create 完成\n");
 
-    /* 6) 使用 Dispatch 捕获的 route 做 weighted reduction Combine。 */
-    inc_dc_single_inc_io_init(&combine_io);
-    combine_io.input = expert_output.data();
-    combine_io.output = combined_output.data();
-    combine_io.input_rows = kAssignments;
-    combine_io.output_rows = kTokens;
-    combine_io.stream = 2u;
-    /* routed Combine 必须沿用产生该 route 的 operation generation。 */
-    combine_io.operation_generation = kRouteGeneration;
-    CHECK_OK(inc_dc_single_inc_combine(
-        single_inc, &captured_route, &combine_io));
-    std::printf("[5/8] Combine 完成\n");
-    PrintMatrix("Combined token output", combined_output.data(), kTokens);
+        auto batch = op.dispatch(
+            token_input.data(), dispatched_rows.data(), route, 1u);
+        std::printf("[2/6] Dispatch 完成\n");
+        PrintMatrix("Dispatch fan-out", dispatched_rows.data(), kAssignments);
 
-    /* 7) 用独立 CPU 公式检查 fan-out + expert compute + reduction 的结果。 */
-    for (uint64_t token = 0u; token < kTokens; ++token) {
-        for (uint32_t slot = 0u; slot < kTopK; ++slot) {
-            const uint64_t row = token * kTopK + slot;
-            const float coefficient =
-                route_weights[row] * ExpertScale(expert_ids[row]);
+        for (uint64_t row = 0u; row < kAssignments; ++row) {
+            const float scale = ExpertScale(expert_ids[row]);
             for (uint32_t hidden = 0u; hidden < kHidden; ++hidden) {
-                expected_output[token * kHidden + hidden] +=
-                    coefficient * inc::Fp16BitsToFloat(
-                        token_input[token * kHidden + hidden]);
+                expert_output[row * kHidden + hidden] = inc::FloatToFp16Bits(
+                    inc::Fp16BitsToFloat(
+                        dispatched_rows[row * kHidden + hidden]) * scale);
             }
         }
-    }
-    for (size_t index = 0u; index < combined_output.size(); ++index) {
-        const float actual = inc::Fp16BitsToFloat(combined_output[index]);
-        if (std::fabs(actual - expected_output[index]) > 1.0e-2f) {
-            std::fprintf(
-                stderr, "正确性失败: index=%zu actual=%f expected=%f\n",
-                index, actual, expected_output[index]);
-            goto cleanup;
+        std::printf("[3/6] expert compute 完成\n");
+
+        op.combine(batch, expert_output.data(), combined_output.data(), 2u);
+        std::printf("[4/6] Combine 完成\n");
+        PrintMatrix("Combined token output", combined_output.data(), kTokens);
+
+        for (uint64_t token = 0u; token < kTokens; ++token) {
+            for (uint32_t slot = 0u; slot < kTopK; ++slot) {
+                const uint64_t row = token * kTopK + slot;
+                const float coefficient =
+                    route_weights[row] * ExpertScale(expert_ids[row]);
+                for (uint32_t hidden = 0u; hidden < kHidden; ++hidden) {
+                    expected_output[token * kHidden + hidden] +=
+                        coefficient * inc::Fp16BitsToFloat(
+                            token_input[token * kHidden + hidden]);
+                }
+            }
         }
-    }
-    std::printf("[6/8] 正确性校验 PASS\n");
+        for (size_t index = 0u; index < combined_output.size(); ++index) {
+            const float actual = inc::Fp16BitsToFloat(combined_output[index]);
+            if (std::fabs(actual - expected_output[index]) > 1.0e-2f) {
+                std::fprintf(
+                    stderr,
+                    "正确性失败: index=%zu actual=%f expected=%f\n",
+                    index, actual, expected_output[index]);
+                throw std::runtime_error("golden mismatch");
+            }
+        }
+        std::printf("[5/6] 正确性校验 PASS\n");
 
-    stats.struct_size = sizeof(stats);
-    stats.abi_version = INC_DC_FRAMEWORK_ABI_VERSION;
-    CHECK_OK(inc_dc_single_inc_get_stats(single_inc, &stats));
-    std::printf(
-        "[7/8] stats: dispatch=%llu, combine=%llu, completed=%llu\n",
-        static_cast<unsigned long long>(stats.dispatch_enqueued),
-        static_cast<unsigned long long>(stats.combine_enqueued),
-        static_cast<unsigned long long>(stats.completed));
-    exit_code = EXIT_SUCCESS;
+        inc::dc::single_inc_destroy(op);
+    } catch (const inc::dc::SingleIncError &error) {
+        std::fprintf(stderr, "单 INC 调用失败: %s\n", error.what());
+        return EXIT_FAILURE;
+    } catch (const std::exception &error) {
+        std::fprintf(stderr, "示例失败: %s\n", error.what());
+        return EXIT_FAILURE;
+    }
 
-cleanup:
-    /* 8) 只需先释放 route，再销毁 operator。 */
-    if (route_live) {
-        const inc_dc_fw_status_t cleanup_status =
-            inc_dc_single_inc_route_release(single_inc, &captured_route);
-        if (cleanup_status != INC_DC_FW_OK) exit_code = EXIT_FAILURE;
-    }
-    if (single_inc != nullptr) {
-        const inc_dc_fw_status_t cleanup_status =
-            inc_dc_single_inc_destroy(single_inc);
-        if (cleanup_status != INC_DC_FW_OK) exit_code = EXIT_FAILURE;
-        single_inc = nullptr;
-    }
-    if (exit_code == EXIT_SUCCESS && backend.allocations == backend.frees) {
-        std::printf(
-            "[8/8] route/plan/session 全部释放，workspace alloc/free=%llu/%llu\n",
-            static_cast<unsigned long long>(backend.allocations),
-            static_cast<unsigned long long>(backend.frees));
-        std::printf("示例执行成功。\n");
-    } else if (backend.allocations != backend.frees) {
+    if (backend.allocations != backend.frees) {
         std::fprintf(
             stderr, "资源泄漏: workspace alloc/free=%llu/%llu\n",
             static_cast<unsigned long long>(backend.allocations),
             static_cast<unsigned long long>(backend.frees));
-        exit_code = EXIT_FAILURE;
+        return EXIT_FAILURE;
     }
-
-#undef CHECK_OK
-    return exit_code;
+    std::printf("[6/6] destroy 完成，workspace alloc/free=%llu/%llu\n",
+                static_cast<unsigned long long>(backend.allocations),
+                static_cast<unsigned long long>(backend.frees));
+    std::printf("示例执行成功。\n");
+    return EXIT_SUCCESS;
 }

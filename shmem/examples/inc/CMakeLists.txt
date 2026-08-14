@@ -357,12 +357,10 @@ foreach(pair IN ITEMS
     target_link_libraries(${target} PRIVATE ${library})
 endforeach()
 
-# Runnable host-only single-INC lifecycle example.  The CPU mock backend keeps
-# the public API executable on development hosts without touching any NPU.
-# The source keeps its historical directory, while the target names the API
-# integrators should use today.
+# The single maintained application example.  Its CPU mock backend keeps the
+# short public API executable on development hosts without touching any NPU.
 add_executable(inc_dc_single_inc_api_example
-    dispatch_combine/common/examples/inference_api/inc_dc_inference_api_example.cpp)
+    dispatch_combine/common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp)
 inc_host_target(inc_dc_single_inc_api_example)
 target_link_libraries(inc_dc_single_inc_api_example PRIVATE inc_dc_single_inc_api)
 
@@ -382,16 +380,3 @@ add_custom_target(inc_dc_single_inc_c_header_tests
     COMMAND ${CMAKE_C_COMPILER} -std=c11 -fsyntax-only
         -I${INC_DC_COMMON_API_DIR}
         ${INC_DC_DIR}/tests/common/test_inc_dc_single_inc_c_header.c VERBATIM)
-add_custom_target(inc_dc_inference_examples_compile
-    COMMAND ${CMAKE_C_COMPILER} -std=c11 -fsyntax-only
-        -I${INC_DC_COMMON_API_DIR}
-        ${INC_DC_COMMON_DIR}/examples/inference_api/inference_loop.c VERBATIM)
-add_custom_target(inc_dc_easy_examples_compile
-    COMMAND ${CMAKE_C_COMPILER} -std=c11 -fsyntax-only
-        -I${INC_DC_COMMON_API_DIR}
-        -I${INC_DC_COMMON_DIR}/examples/easy_api
-        ${INC_DC_COMMON_DIR}/examples/easy_api/init_example.c
-        ${INC_DC_COMMON_DIR}/examples/easy_api/token_plan_example.c
-        ${INC_DC_COMMON_DIR}/examples/easy_api/dispatch_example.c
-        ${INC_DC_COMMON_DIR}/examples/easy_api/combine_example.c
-        ${INC_DC_COMMON_DIR}/examples/easy_api/full_example.c VERBATIM)
