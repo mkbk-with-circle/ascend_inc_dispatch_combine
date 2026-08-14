@@ -84,6 +84,8 @@ driver.log
 **/native/
 **/golden/
 **/native_baseline_logs/
+# fusion 的 vLLM-Ascend native 接入层是源码，不是 dump
+!shmem/examples/inc/fusion_kernel/framework/vllm_ascend/native/
 
 # --- report：大体积原始产物（保留根目录 gate/STATUS/md，见下方否定规则不可用时靠目录排除）---
 shmem/docs/inc/report/**/*_logs/
