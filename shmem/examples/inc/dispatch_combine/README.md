@@ -52,3 +52,65 @@ cmake --build build -j --target \
 
 真机资格化请走 `scripts/single_inc/`（裸跑 bin 会绕过拓扑/空闲门禁，不作交付证据）。  
 注意：exe/target 名可能仍带 `sv2`，**源文件以 CMake 列表中的稳定名为准**（见 `single_inc/combine/README.md`）。
+
+---
+
+## English
+
+### What is this directory?
+
+This is the maintained **INC Dispatch/Combine (INC DC)** tree.
+Semantically it is the two MoE communication stages:
+
+1. **Dispatch**: route tokens from workers to the expert's location (via INC).
+2. **Combine**: gather expert contributions, weighted-reduce them, and write
+   back into the source token layout.
+
+Historical AG/RS, phase gates, and experiments that never entered the product
+closure have been removed. The directory root intentionally has no sources, so
+ownership is the physical path rather than a filename prefix.
+
+**Fastest way to learn the single-INC Dispatch/Combine main path (start here):**
+[`single_inc/QUICKSTART.md`](single_inc/QUICKSTART.md)
+
+**Application call site (the only recommended entry):**
+[`common/api/inc_dc_single_inc.hpp`](common/api/inc_dc_single_inc.hpp)
+
+**Runnable complete example:**
+[`common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp`](common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp)
+
+**Current sweep progress / environments / baselines:**
+[`single_inc/SWEEP_STATUS.md`](single_inc/SWEEP_STATUS.md)
+
+### Directory boundary
+
+- Keep the **stable public ABI** (`common/`) separate from the **single-INC
+  implementation** (`single_inc/`). Frameworks depend only on the former.
+- Keep **qualification scripts/tests** out of the runtime library. Binary
+  packages can drop them; the source tree keeps the gates.
+
+### Subdirectories
+
+| Directory | Role | Why it exists | Delivery |
+|---|---|---|---|
+| `common/` | Stable C/C++ API, shared protocol, hardware policy, examples | Contract between frameworks and single-INC; ABI changes must be controlled | Production |
+| `single_inc/` | Single-INC Dispatch, Combine, resident service, plan compilation | Current star-topology product data plane | Production |
+| `scripts/` | Device case launchers and random token-plan sweeps | Force topology/idle protection; no private shells around the gates | Qualification |
+| `tests/` | Host API / planner / backend regression | Delivery gate; catches ABI drift without an NPU | Delivery gate |
+
+### Build entry
+
+The formal build entry is `examples/inc/CMakeLists.txt` (pulled in by the
+parent `shmem` build):
+
+```bash
+# From the parent of shmem/; if already in shmem/, use cmake -S .
+cmake -S shmem -B build -DCMAKE_BUILD_TYPE=Release -DUSE_EXAMPLES=ON
+cmake --build build -j --target \
+  inc_dc_single_inc_stream inc_dc_sv2_dyn_csr_combine
+```
+
+Device qualification must go through `scripts/single_inc/` (raw binaries skip
+topology/idle gates and are not delivery evidence).
+Executable/target names may still contain `sv2`; **source names in the CMake
+list are authoritative** (see `single_inc/combine/README.md`).

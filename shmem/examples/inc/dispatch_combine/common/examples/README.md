@@ -1,4 +1,6 @@
-# API 接入示例
+# API examples / API 接入示例
+
+## 中文
 
 示例不进入运行库，只负责展示当前唯一的最短 C++ 调用路径。
 
@@ -8,3 +10,17 @@
 
 首次接入只需阅读并运行
 [`single_inc_api/inc_dc_single_inc_api_example.cpp`](single_inc_api/inc_dc_single_inc_api_example.cpp)。
+
+---
+
+## English
+
+These examples are not part of the runtime library. They show the one remaining
+shortest C++ call path.
+
+| Directory | When to use it |
+|---|---|
+| `single_inc_api/` | **The only recommended** complete `inc_dc_single_inc.hpp` example; runnable with numeric checks |
+
+For a first integration, read and run
+[`single_inc_api/inc_dc_single_inc_api_example.cpp`](single_inc_api/inc_dc_single_inc_api_example.cpp).

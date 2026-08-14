@@ -162,3 +162,210 @@ analyze/prefix/emit；不维护模型 shape 调参表。nb 的 48 AIV 回归中�
 - 未完成：与 native 相同 prompt 的数值等价、W8A8、replay-safe native graph、当前
   direct-SHMEM vLLM lifecycle。细节和数据见
   [`fusion_kernel_release_20260810`](../../../../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md)。
+
+---
+
+## English
+
+# vLLM-Ascend integration and baseline contract
+
+> For the executable nb-borrow ABI 13 environment, build commands, release-candidate
+> runs, and result index, see [`RUNBOOK_NB_VLLM.md`](RUNBOOK_NB_VLLM.md).
+> The rest of this file keeps design contracts from development. ABI v3/v6/v9
+> paragraphs are evolution notes; the current release path is ABI 13 and the
+> `fusion_kernel_release_20260810` report.
+
+## Confirmed integration point
+
+The target is vLLM 0.19.1 / vLLM-Ascend 0.19.1 in the current container. Formal
+integration should add a `MoECommMethod` and consume, in
+`fused_experts(MoEFusedExpertsInput)`, what vLLM already produced:
+
+- `hidden_states`
+- `topk_ids` / `topk_weights`
+- this rank's `w1` / `w2`
+- `expert_map` / `log2phy`
+
+Do not replace all of `FusedMoE.forward`, and do not keep using
+`example/custom_moe.py`'s host `all_gather + .cpu() + argsort` route. That path
+stays only as an old functional prototype.
+
+`single_inc_comm_method.py` already adapts this interface and intentionally
+fails closed when the Torch op is unregistered, dtype is not BF16, weights are
+quantized, or the activation is not SwiGLU. It does not auto monkey-patch vLLM;
+after the device op lands, register a new enum in vLLM-Ascend
+`setup_moe_comm_method` instead of borrowing/overriding `FUSED_MC2`.
+
+`torch_registration.py` defines graph-visible `inc_fusion::moe` and a fake impl,
+but only registers when the loaded C++ bridge provides
+`inc_fusion_native::worker_moe_out`. Output is a mutable alias allocated at
+setup; forward does not call `empty_like`.
+
+`native/` provides and device-validates `inc_fusion_native::route_count_out`,
+scalar `route_pack_out`, and deterministic multi-AIV `route_pack_parallel_out`.
+`torch_route_runtime.py` preallocates protocol buffers per capacity bucket; the
+hot path only runs count, one EP metadata all-gather, and pack. The last
+all-gather column also carries each rank's active-token count and is packed on
+device into the contiguous source-length vector introduced in ABI v3 and still
+compatible in ABI v6. The prepared worker executor is done and passed W2/W4
+E2E: its argument ring allocates nothing and does no global sync on the hot
+path. The cross-process INC command ring is closed: one contiguous wire record
++ ready-last submit, all-worker readiness, exact packet credits, and wrap
+without zeroing all passed 100 times each on nb W2/W4 ring=2. Worker-side Torch
+lifetime exposes explicit `worker_prepare`, allocation-free `worker_moe_out`,
+and ordered `worker_destroy`. The ProcessGroup-external INC sidecar/bootstrap
+is wired through a standalone runner and ran on device in the vLLM-Ascend
+0.19.1 container for W2/W4 and 16–1024 tokens.
+
+A single-INC process does not join vLLM's TP/DP/EP process group and does not
+load weights/KV cache; it only joins the Fusion SHMEM world. The worker group
+is W; the Fusion SHMEM world is W+1.
+
+## Engine lifetime order
+
+The launcher mints one ACLSHMEM UID and distributes it over an independent
+rendezvous to W model workers plus one INC sidecar. Each process first selects
+its NPU, then creates a `FusionShmemSession` and same-size symmetric tensors.
+Workers create `PreparedTorchRoute + PreparedTorchExecutor`; the sidecar loads
+no model and only creates `PreparedIncService`. Then all W+1 PEs call
+`session.barrier()` once; after INC returns it calls `service.start()`, and
+workers may enter forward. Before SHMEM init, the launcher calls CPU
+`query_plan_info()` for each worker rank, checks
+`symmetric_bytes/wave_count/ABI/remote_service_bytes` match, then
+`SymmetricHeapPolicy` computes one heap size for every PE. Rank-local expert
+count and worker workspace may differ. `FusionPeMapping` stores PE→NPU
+explicitly and does not bake nb's 0/1/2/3/4 ids into the kernel or framework
+adapter.
+
+```text
+launcher: UID ────────────────┬──────── W workers
+                              └──────── INC sidecar
+all PE:    SHMEM init → symmetric alloc/zero → prepare mirror → barrier
+INC:                                                        └→ service.start
+worker:                                                      └→ route → moe_out
+```
+
+Teardown first stops accepting new batches and waits for in-flight engine
+forwards; workers close the executor, INC closes the service (ordered stop),
+all PEs barrier once more, then free symmetric tensors and finalize. Mid-failure
+must not treat barrier as cancel; a push-only request that was published must
+complete.
+
+`inc_sidecar.py` is a spawn entry and parent controller that does not depend on
+vLLM ProcessGroup. The control protocol is
+`PREPARED → READY → STOPPING → STOPPED`: after PREPARED the parent lets all
+workers finish prepare/setup barrier; after READY it allows inference; on stop
+it must stop the scheduler from taking new batches, drain in-flight forwards,
+then send STOP and let workers enter teardown barrier. Controller timeout only
+errors; it will not terminate the resident kernel process on its own.
+
+NPU graph capture/replay is explicitly unsupported. Ordinary `torch.compile`
+opaque custom-ops still enter host `worker_moe_out` each step and can mint a
+new ticket; capture/replay would replay old generation/ticket, so the native
+bridge hard-rejects it. First vLLM qualification must disable NPU graph until
+tickets become a graph-replay-aware device counter.
+
+`torch_weight_runtime.py` is a setup-only `PreparedWeightCache`. It distinguishes
+kernel ND `w13[E,2I,H]/w2[E,H,I]` from the logical transposed layout, and only
+accepts storage format ND(2) or FRACTAL_NZ(29). NZ is converted to ND once at
+model load; transpose also happens once. The forward resolver checks that the
+original vLLM weight device/data pointer was not replaced, then returns the
+cache with no format-cast, transpose, or allocation. Any other storage format
+is rejected.
+
+Core setup call graph (UID distribution and process creation stay with the
+real launcher):
+
+```python
+infos = query_all_worker_plan_info(key, config, owner, local)
+heap_bytes = SymmetricHeapPolicy().heap_bytes(infos[0])
+session = FusionShmemSession(
+    uid, pe, W + 1, heap_bytes, infos[0].symmetric_bytes, device)
+
+# worker: route = PreparedTorchRoute(...)
+# worker: executor = PreparedTorchExecutor.from_session(
+#                       route, config, worker_pes_tensor, session)
+# INC:    service = PreparedIncService(key, config, owner, local,
+#                                     worker_pes, session)
+session.barrier()
+# INC only: service.start(); workers may then enter forward.
+```
+
+## Five modes
+
+| mode | Communication | Schedule | Use |
+|---|---|---|---|
+| `native_vllm` | vLLM-Ascend native | native | end-to-end external baseline |
+| `serial_shmem` | worker-direct SHMEM | strict D→FFN→C | 2×2 cell |
+| `serial_inc` | worker→single INC→worker | strict D→FFN→C | 2×2 cell |
+| `fused_shmem` | worker-direct SHMEM | token-wave | 2×2 cell |
+| `fused_inc` | worker→single INC→worker | token-wave | delivery implementation |
+
+The first four must pass `inc_fusion_benchmark_validate_factorial_pair`. Native
+vLLM may report end-to-end speedup but must not mix into INC/fusion factor
+attribution.
+
+Resource accounting needs two columns: the main table fixes W compute workers
+(INC mode uses one extra card that loads no model) to isolate the communication
+mechanism; the system table normalizes throughput by total NPU count so W vs
+W+1 hardware cost is explicit. Do not report only the former and claim
+“same-cost” inference speedup, and do not swap native vLLM to a different W
+while claiming per-operator shape equivalence.
+
+## Hard gates before official numbers
+
+1. All four modes share the same `topk_ids/topk_weights`, expert placement, and
+   route digest.
+2. All four modes share the same GMM1/SwiGLU/GMM2 implementation and weight
+   layout digest. Do not compare vLLM grouped-GMM against another row's Catlass
+   kernel and attribute the delta to communication.
+3. Route packing happens on device and is included in per-step time;
+   setup/JIT/weight permute/workspace alloc are not.
+4. BF16 ND weights are consumed natively by the kernel. W8A8/NZ quant semantics
+   are unimplemented and must fail closed; do not transpose/format-cast every
+   step or mix a quant baseline into BF16 qualification.
+5. Engine setup, standalone INC sidecar, resident server, and ordered teardown
+   are closed; exception paths still must not treat barrier as cancel. After
+   failure, clean this control directory and confirm the NPU context is freed.
+6. Timing samples must take every worker's makespan; INC mode also reports the
+   INC service window.
+
+Operator microbenchmarks freeze and replay one router output. Real vLLM runs
+keep the router but freeze model, prompt, seed, schedule policy, EP placement,
+KV cache, and sampling. Prefill reports input tokens/s and TTFT; decode reports
+output tokens/s and TPOT, each with P50/P95/P99. Real-model hidden size is
+fixed by the checkpoint; cross-hidden scans belong to synthetic operator tests
+or different model configs.
+
+## Dynamic token counts
+
+`inc_moe_runtime.py`'s general prepared API may use capacity buckets, but one
+cross-process long-lived INC service must use a single fixed capacity equal to
+the engine max token count. Any 0..capacity token count reuses the
+active-token vector; it need not divide a microbatch. Only an explicit HBM
+budget may reject a request. `prepare()` runs only at warmup/setup; timed
+forward may only `lookup()`, so first alloc/JIT is not mixed into a backend.
+
+When actual tokens are below capacity, the tail wave is packed as a legal
+zero-token descriptor. Workers may also differ in token count: sync waves take
+the group's max active-token count, and INC ABI v6 uses each source's true
+length to zero, check, reduce, and write back, without fake output padding for
+short ranks.
+
+Route parallel lane count is taken from device `vector_core_num` at prepare.
+Forward only uses integer protocol work to pick scalar vs parallel: small
+inputs and top-k=1 fall back to scalar; large enough regroup work enters
+analyze/prefix/emit. There is no model-shape tuning table. On nb's 48-AIV
+regression, the 20-case matrix chosen by the policy had no perf regression;
+W4/T8192/K8 dropped from 10.19 ms scalar route to 3.75 ms.
+
+## Release-candidate status
+
+- Done: device route-pack, Torch NPU `out` bridge, prepared worker executor,
+  cross-process persistent INC, runner sidecar, setup/out/teardown, and W2/W4
+  device sweeps.
+- Frozen: ABI 13 BF16 `fused_inc` is the current custom best path; perf knobs
+  are no longer walked at runtime.
+- Not done: numeric match on the same prompts as native, W8A8, replay-safe
+  native graph, and the current direct-SHMEM vLLM lifecycle. Details and data:
+  [`fusion_kernel_release_20260810`](../../../../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md).

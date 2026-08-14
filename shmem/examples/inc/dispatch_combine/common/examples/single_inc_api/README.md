@@ -1,4 +1,6 @@
-# 单 INC 最简 API 示例
+# Single-INC API example / 单 INC 最简 API 示例
+
+## 中文
 
 [`inc_dc_single_inc_api_example.cpp`](inc_dc_single_inc_api_example.cpp) 是一份可运行的完整程序，覆盖
 operator 初始化、Dispatch fan-out、模拟 expert 计算、Combine weighted reduction、
@@ -38,8 +40,61 @@ build/bin/inc_dc_single_inc_api_example
 示例执行成功。
 ```
 
-## 文件
+### 文件
 
 | 文件 | 用途 |
 |---|---|
 | `inc_dc_single_inc_api_example.cpp` | 最短 C++ API 的完整、可运行 CPU mock 生命周期与数值示例 |
+
+---
+
+## English
+
+[`inc_dc_single_inc_api_example.cpp`](inc_dc_single_inc_api_example.cpp) is a complete,
+runnable program covering operator create, Dispatch fan-out, simulated expert
+compute, Combine weighted reduction, result checks, and teardown. The application
+surface is only:
+
+```text
+create → dispatch → expert compute → combine → destroy
+```
+
+The example uses `inc_dc_single_inc.hpp`. `batch` owns the generation and the
+captured Dispatch route, and Combine releases it on success. Internal session,
+workspace, and request objects are not part of the public API.
+
+It uses a CPU mock, so it does not touch an NPU; building still needs this
+tree's CANN/BiSheng toolchain. The mock replaces only the backend, device
+allocator, and stream. The public API lifetime matches the device path. On
+hardware, swap those three for `native_composite_backend`, an ACL allocator,
+and `aclrtStream`, then bind the resident INC service at worker init with
+`BindNativeSingleIncWorkerControl`. `inc_dc_native_full_example` is a
+lower-level qualification harness with fault injection; use it to check
+bootstrap resources, not as a template for application call order.
+
+> The mock finishes inside `enqueue`. It checks API, numerics, and lifetime
+> only; it is not INC bandwidth or overlap evidence.
+
+### Build and run with CMake
+
+Load the CANN environment, then from the source tree:
+
+```bash
+cmake -S . -B build -DUSE_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target inc_dc_single_inc_api_example -j
+build/bin/inc_dc_single_inc_api_example
+```
+
+A successful run ends with:
+
+```text
+[5/6] 正确性校验 PASS
+[6/6] destroy 完成，workspace alloc/free=2/2
+示例执行成功。
+```
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `inc_dc_single_inc_api_example.cpp` | Complete runnable CPU-mock lifetime and numeric example for the shortest C++ API |
