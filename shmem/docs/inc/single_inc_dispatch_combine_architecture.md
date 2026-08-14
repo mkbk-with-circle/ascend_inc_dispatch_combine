@@ -5,32 +5,30 @@
 
 本页只描述当前单 INC 后端及其正确性、性能口径。
 
+业务侧唯一入口是
+`examples/inc/dispatch_combine/common/api/inc_dc_single_inc.hpp`；本页以下内容是
+设备实现说明，不是额外的调用 API。
+
 ## 1. 拓扑与安全生命周期
 
-逻辑 worker 为 `[0,W)`，唯一 INC 为 rank `W`。验收规模为 W2/W4/W8，kernel
-和 ABI 不依赖这些固定值。当前实机的默认物理映射为：
+逻辑 worker 为 `[0,W)`，唯一 INC 为 rank `W`。W2/W4/W8 是跨环境验收规模，
+不是 kernel 或 ABI 的固定上限；物理 NPU 编号也不是协议的一部分。
 
-| 规模 | INC | workers |
-|---:|---:|---|
-| W2 | Phy0 | Phy2,4 |
-| W4 | Phy0 | Phy2,4,6,8 |
-| W8 | Phy0 | Phy2,3,4,5,6,7,8,9 |
+每次真机运行必须从当前 hardware profile 和 live topology 解析逻辑 rank 到物理
+NPU 的映射，并确认所选 worker→INC 链路满足该环境的等效性要求。`nb-borrow`
+是两个 8 卡 HCCS 平面，因此当前只资格化同一平面内的 W2/W4；8W+1INC 无法
+放进单个 8 卡平面，不应用跨平面结果冒充等效 W8。`yuanmingyu` 的星型映射和
+历史 W8 数据仍保存在它自己的 hardware profile 中。
 
-所有 worker 到 Phy0 均为 `HCCS_SW`，Phy1 是 SIO 同伴且禁止使用。W8 不只
-检查拓扑标签：八路同时上行实测为 18.30–18.56 GB/s，跨 worker 极差约
-1.4%。旧的 `2,4,6,8,10,12,14,3` 虽同为 `HCCS_SW`，同时打流极差约 23%，
-因此不再是默认映射。
-
-所有 live launcher 都持有 `/tmp/inc_single_inc_npu.lock`，下发前重新读取拓扑，
-等待全机 NPU 和算子进程空闲，结束后再次等待空闲。物理列表可通过
-`INC_SINGLE_INC_WORKER_PHYS` 覆盖，但必须数量匹配、唯一、避开 Phy0/1，且
-live topology 验证仍不可跳过。开发只使用已有 CANN、`shmem/build` 和 `/tmp`
-工具，没有安装系统包。
+具体映射、roofline 和环境 gate 以
+`docs/inc/report/ACTIVE_HW_PROFILE.md` 指向的 `single_inc_ENV_STATUS.md` 为准。
+launcher 下发前必须检查目标平面无其他进程并持有进程锁；拓扑或空闲检查失败
+时 fail closed，不能把任何环境的 Phy 列表写死到共享 API 或 kernel。
 
 ## 2. 单 INC dispatch
 
-入口为 `inc_dc_single_inc_stream_main.cpp`，kernel 为
-`inc_dc_single_inc_stream_kernel.cpp`。
+资格化入口为 `single_inc/dispatch/inc_dc_single_inc_stream_main.cpp`，kernel 为
+`single_inc/dispatch/inc_dc_single_inc_stream_kernel.cpp`。
 
 1. worker 将每个 source tile 仅上传一次到 INC staging；
 2. plan 按 `(source tile, destination)` 编排，tile-ready 即可触发下行，同时下一个

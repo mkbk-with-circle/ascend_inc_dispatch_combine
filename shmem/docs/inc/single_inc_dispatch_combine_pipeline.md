@@ -4,14 +4,18 @@
 
 核心文件：
 
-- Dispatch Host：`examples/inc/dispatch_combine/inc_dc_single_inc_stream_main.cpp`
-- Dispatch Kernel：`examples/inc/dispatch_combine/inc_dc_single_inc_stream_kernel.cpp`
+- 公开 API：`examples/inc/dispatch_combine/common/api/inc_dc_single_inc.hpp`
+- 唯一完整示例：`examples/inc/dispatch_combine/common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp`
+- Dispatch Host：`examples/inc/dispatch_combine/single_inc/dispatch/inc_dc_single_inc_stream_main.cpp`
+- Dispatch Kernel：`examples/inc/dispatch_combine/single_inc/dispatch/inc_dc_single_inc_stream_kernel.cpp`
 - Combine Host：`examples/inc/dispatch_combine/single_inc/combine/inc_dc_combine_launcher.cpp`
 - Combine Kernel：`examples/inc/dispatch_combine/single_inc/combine/inc_dc_combine_kernel.cpp`
 - 正式 sweep：`examples/inc/dispatch_combine/scripts/single_inc/run_single_inc_operator_sweep.sh`
 - 随机 token-plan sweep：`examples/inc/dispatch_combine/scripts/random_token_plan/run_single_inc_os_random_campaign.py`
 
 本文描述的是完整算子的生产路径。`inc_dc_single_inc_roofline_*`、ping-pong 和纯打流程序只测 push 传输上限，不参与生产算子的路由、归约和正确性协议。
+Framework/Easy/Inference 仅为当前 V1 的内部实现与回归依赖，不是另外三套调用
+路径；业务代码只走上面的公开 API。
 
 ## 1. 共同设计原则
 

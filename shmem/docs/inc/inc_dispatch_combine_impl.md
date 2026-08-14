@@ -1,5 +1,12 @@
 # INC Dispatch / Combine 实现说明
 
+> **历史实现快照，不是当前接入或运行说明。** 本文保留 dc_ll/ll_persistent
+> 阶段的设计与测量语境，内部文件名、固定 W8 映射和环境变量不再代表当前 V1
+> 公开路径。当前业务入口见 [`framework_integration_api.md`](framework_integration_api.md)，
+> 当前设备结构见
+> [`single_inc_dispatch_combine_architecture.md`](single_inc_dispatch_combine_architecture.md)
+> 和 [`single_inc_dispatch_combine_pipeline.md`](single_inc_dispatch_combine_pipeline.md)。
+
 > 代码根目录：`shmem/examples/inc/dispatch_combine/`  
 > 拓扑：8 个 **Worker PE**（rank 0–7）+ 1 个 **Switch INC PE**（rank 8，即 `group_size`）  
 > 本文「Host 侧」指 Worker rank 上的 AIV 行为；「INC 侧」指 Switch rank 上的 AIV 行为。CPU 上的规划/Staging 在初始化章节单独说明。
