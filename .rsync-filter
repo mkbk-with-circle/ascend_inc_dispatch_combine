@@ -24,7 +24,9 @@
 - shmem/docs/inc/report/**/*.bin
 - **/native/
 - **/golden/
-- .git/objects/
+# git 策略在 tmp_sync_nb_ascend_{download,upload}.sh：
+#   download 整棵忽略 .git；upload 同步 GitHub .git（含 objects）
+- **/.git.nested-bak/
 - __pycache__/
 - *.pyc
 - /tmp/
