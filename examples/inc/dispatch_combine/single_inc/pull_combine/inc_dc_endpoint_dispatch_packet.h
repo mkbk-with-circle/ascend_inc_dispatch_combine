@@ -58,6 +58,10 @@ struct ParsedEndpointDispatch {
     EndpointDispatchPacketHeader header{};
     std::vector<uint32_t> token_counts;
     std::vector<uint32_t> assignment_counts;
+    // Canonical source order, including tokens with zero assignments.  The
+    // destination views below intentionally omit such tokens, but the INC
+    // journal must retain them so Combine can return a zero row.
+    std::vector<EndpointDispatchTokenRecord> source_tokens;
     std::vector<std::vector<EndpointFanoutRow>> destination_rows;
 };
 

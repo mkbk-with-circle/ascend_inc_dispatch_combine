@@ -7,6 +7,7 @@ set(INC_DC_PULL_COMBINE_TEST_DIR
     ${CMAKE_CURRENT_LIST_DIR}/../../tests/single_inc)
 
 add_library(inc_dc_pull_combine_protocol STATIC
+    inc_dc_dynamic_journal.cpp
     inc_dc_endpoint_dispatch_packet.cpp
     inc_dc_pull_combine_dispatch.cpp
     inc_dc_pull_combine_plan.cpp
@@ -31,6 +32,13 @@ inc_host_target(inc_dc_endpoint_dispatch_packet_tests)
 target_compile_options(inc_dc_endpoint_dispatch_packet_tests PRIVATE
     -UNDEBUG)
 target_link_libraries(inc_dc_endpoint_dispatch_packet_tests PRIVATE
+    inc_dc_pull_combine_protocol)
+
+add_executable(inc_dc_dynamic_journal_tests
+    ${INC_DC_PULL_COMBINE_TEST_DIR}/test_inc_dc_dynamic_journal.cpp)
+inc_host_target(inc_dc_dynamic_journal_tests)
+target_compile_options(inc_dc_dynamic_journal_tests PRIVATE -UNDEBUG)
+target_link_libraries(inc_dc_dynamic_journal_tests PRIVATE
     inc_dc_pull_combine_protocol)
 
 # Correctness-first transport probe.  It intentionally calls the high-level

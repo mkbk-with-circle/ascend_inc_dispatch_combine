@@ -335,6 +335,7 @@ EndpointDispatchStatus ParseEndpointDispatchPacket(
     built.header = header;
     built.token_counts.resize(header.worker_count);
     built.assignment_counts.resize(header.worker_count);
+    built.source_tokens.reserve(header.token_count);
     built.destination_rows.resize(header.worker_count);
     std::memcpy(built.token_counts.data(), packet + header.counts_offset,
                 static_cast<size_t>(header.worker_count) * sizeof(uint32_t));
@@ -366,6 +367,7 @@ EndpointDispatchStatus ParseEndpointDispatchPacket(
             return Fail(EndpointDispatchStatus::DUPLICATE_TOKEN,
                         "duplicate token ID", error);
         }
+        built.source_tokens.push_back(token_record);
         std::vector<std::vector<EndpointDispatchAssignmentRecord>> grouped(
             header.worker_count);
         std::unordered_set<uint32_t> ordinals;

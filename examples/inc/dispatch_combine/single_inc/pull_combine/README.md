@@ -39,6 +39,12 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
 - 已完成：设备端严格 metadata 校验。digest、CSR 连续性、count 重算、范围、
   非有限权重和重复 ordinal 均在 fan-out 前 fail-closed；损坏包也发布负 ACK/
   completion，不会永久占住槽位。
+- 已完成：动态 per-wave journal 主机参考状态机。它只从各 source 的 endpoint
+  Dispatch packet 在线学习 token ID、原 owner/row 和 expected contributor bitmap；
+  不接收预构造 token plan。Combine 可按任意跨 rank 时序、任意合法 chunk 大小提交
+  `[token_ids, locally-reduced FP32 rows]`，整批先校验再原子消费，收齐 contributor
+  后才把结果放入 owner egress 队列。W2–W8 共 500 个随机 wave（含零路由 token）
+  已通过。
 - 已完成：空 wave、零路由 token、重复目的 rank、`topk > worker_count`、乱序到达、
   分块传输、提前 egress、ring 回压、负 ACK 与计划生命周期保护。
 - 已完成：910B 上高阶 SHMEM GET 正确性和 W2/W4 聚合带宽锚点。
@@ -57,7 +63,8 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
   在单调地址 pull 中长期空转；小于两个 chunk 时自动回退到零握手 owner-slice。
 - 已完成：descriptor 或 ready 超时均 fail-closed；成功 ACK 只在 source 已消费且
   egress 完成后发布，失败 ACK 的 `rows_consumed=0`，不会永久占住发送槽。
-- 未完成：持久化设备 server、Dispatch journal 驱动的稀疏 token-ID Combine、
+- 未完成：持久化设备 server、Dispatch journal 驱动的稀疏 token-ID Combine
+  **设备数据面**、
   跨 wave 端到端 Dispatch+Combine gate、公共 API 接入。当前 endpoint Dispatch
   是完整单 wave 算子，但 destination 侧 wire-view 筛选还只在 qualification
   harness 中校验，尚未与正式 expert packing kernel 融合。
