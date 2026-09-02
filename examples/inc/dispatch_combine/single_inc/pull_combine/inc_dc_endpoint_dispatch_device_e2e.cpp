@@ -20,7 +20,8 @@ extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
     uint8_t *inc_packets, uint8_t *commit_mailbox, uint8_t *recv_hidden,
     uint8_t *recv_rows, uint8_t *recv_assignments, uint8_t *recv_counts,
     uint8_t *ack_mailbox, uint8_t *completion_mailbox, uint8_t *cursors,
-    uint8_t *status_line, uint64_t ffts_addr, uint64_t slot_bytes,
+    uint8_t *hidden_staging, uint8_t *status_line, uint64_t ffts_addr,
+    uint64_t slot_bytes, uint64_t staging_bytes_per_destination,
     uint64_t row_capacity, uint64_t assignment_capacity, uint32_t hidden,
     uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
     int32_t inc_pe, uint64_t generation, uint32_t wave);
@@ -107,10 +108,10 @@ bool CopyFromDevice(std::vector<T> *host, uint8_t *device, uint64_t count)
 
 int main(int argc, char **argv)
 {
-    if (argc != 8) {
+    if (argc != 8 && argc != 9) {
         std::cerr << "usage: " << argv[0]
                   << " <workers> <pe> <ipport> <first_npu> <tokens>"
-                     " <hidden> <topk>\n";
+                     " <hidden> <topk> [aiv; 0=half of live AIV]\n";
         return 2;
     }
     const uint32_t workers = static_cast<uint32_t>(std::strtoul(
@@ -124,6 +125,8 @@ int main(int argc, char **argv)
         argv[6], nullptr, 10));
     const uint32_t topk = static_cast<uint32_t>(std::strtoul(
         argv[7], nullptr, 10));
+    const uint32_t requested_aiv = argc == 9
+        ? static_cast<uint32_t>(std::strtoul(argv[8], nullptr, 10)) : 0u;
     const uint32_t pes = workers + 1u;
     const int inc_pe = static_cast<int>(workers);
     g_npus = static_cast<int>(pes);
@@ -153,6 +156,9 @@ int main(int argc, char **argv)
         static_cast<uint64_t>(workers) * tokens * topk;
     const uint64_t counts_bytes =
         static_cast<uint64_t>(workers) * sizeof(uint32_t) * 4u;
+    constexpr uint64_t kMaxStagingBytesPerDestination = 4ull << 20;
+    const uint64_t staging_bytes_per_destination =
+        kMaxStagingBytesPerDestination;
 
     const int32_t device = pe + f_npu;
     aclrtStream stream = nullptr;
@@ -167,11 +173,24 @@ int main(int argc, char **argv)
     uint8_t *acks = nullptr;
     uint8_t *completions = nullptr;
     uint8_t *cursors = nullptr;
+    uint8_t *hidden_staging = nullptr;
     uint8_t *status_line = nullptr;
     double e2e_us = 0.0;
+    uint32_t dispatch_aiv = 0u;
 
     int status = aclInit(nullptr);
     if (status == 0) status = aclrtSetDevice(device);
+    int64_t live_aiv = 0;
+    if (status == 0) {
+        status = aclrtGetDeviceInfo(device, ACL_DEV_ATTR_VECTOR_CORE_NUM,
+                                    &live_aiv);
+    }
+    if (status == 0) {
+        const uint32_t half_aiv = static_cast<uint32_t>(live_aiv / 2);
+        dispatch_aiv = requested_aiv == 0u ? half_aiv : requested_aiv;
+        if (dispatch_aiv == 0u || dispatch_aiv > live_aiv)
+            status = 2;
+    }
     if (status == 0) status = aclrtCreateStream(&stream);
     if (status == 0) {
         aclshmemx_init_attr_t attr;
@@ -199,13 +218,19 @@ int main(int argc, char **argv)
         completions = static_cast<uint8_t *>(aclshmem_malloc(
             sizeof(EndpointDispatchReceiveCompletion) * workers));
         cursors = static_cast<uint8_t *>(aclshmem_malloc(
-            workers * sizeof(uint32_t) * 2u));
+            static_cast<uint64_t>(workers) * workers * 64u));
+        hidden_staging = staging_bytes_per_destination == 0u
+            ? nullptr
+            : static_cast<uint8_t *>(aclshmem_malloc(
+                  staging_bytes_per_destination * workers));
         status_line = static_cast<uint8_t *>(aclshmem_malloc(64u));
         if (source_packet == nullptr || inc_packets == nullptr ||
             commits == nullptr || recv_hidden == nullptr ||
             recv_rows == nullptr || recv_assignments == nullptr ||
             recv_counts == nullptr || acks == nullptr ||
             completions == nullptr || cursors == nullptr ||
+            (staging_bytes_per_destination != 0u &&
+             hidden_staging == nullptr) ||
             status_line == nullptr)
             status = 1;
     }
@@ -231,7 +256,11 @@ int main(int argc, char **argv)
         ZeroDevice(acks, sizeof(EndpointDispatchAck) * workers);
         ZeroDevice(completions,
                    sizeof(EndpointDispatchReceiveCompletion) * workers);
-        ZeroDevice(cursors, workers * sizeof(uint32_t) * 2u);
+        ZeroDevice(cursors,
+                   static_cast<uint64_t>(workers) * workers * 64u);
+        if (hidden_staging != nullptr)
+            ZeroDevice(hidden_staging,
+                       staging_bytes_per_destination * workers);
         ZeroDevice(status_line, 64u);
     }
     if (status == 0 && pe < inc_pe) {
@@ -249,9 +278,11 @@ int main(int argc, char **argv)
     if (status == 0) {
         const auto begin = std::chrono::steady_clock::now();
         launch_inc_dc_endpoint_dispatch_device_e2e(
-            1u, stream, source_packet, inc_packets, commits, recv_hidden,
+            dispatch_aiv, stream, source_packet, inc_packets, commits,
+            recv_hidden,
             recv_rows, recv_assignments, recv_counts, acks, completions,
-            cursors, status_line, shmemx_get_ffts_config(), slot_bytes,
+            cursors, hidden_staging, status_line, shmemx_get_ffts_config(),
+            slot_bytes, staging_bytes_per_destination,
             row_capacity,
             assignment_capacity, hidden,
             static_cast<uint32_t>(EndpointDataType::BF16), kExpertCount,
@@ -269,6 +300,38 @@ int main(int argc, char **argv)
                              sizeof(device_status),
                              ACL_MEMCPY_DEVICE_TO_HOST);
         correct = status == 0 && device_status == 0u;
+        for (uint32_t source = 0u; correct && source < workers; ++source) {
+            std::vector<uint8_t> expected_packet;
+            EndpointDispatchCommit expected_commit{};
+            std::string error;
+            const EndpointDispatchInput expected_input = MakeInput(
+                source, workers, tokens, hidden, topk);
+            correct = BuildEndpointDispatchPacket(
+                          expected_input, &expected_packet, &expected_commit,
+                          &error) == EndpointDispatchStatus::OK;
+            std::vector<uint8_t> actual_packet(expected_packet.size());
+            if (correct) {
+                status = aclrtMemcpy(
+                    actual_packet.data(), actual_packet.size(),
+                    inc_packets + static_cast<uint64_t>(source) * slot_bytes,
+                    actual_packet.size(), ACL_MEMCPY_DEVICE_TO_HOST);
+                correct = status == 0;
+            }
+            if (correct && actual_packet != expected_packet) {
+                size_t mismatch = 0u;
+                while (mismatch < actual_packet.size() &&
+                       actual_packet[mismatch] == expected_packet[mismatch])
+                    ++mismatch;
+                std::cerr << "[FAIL] INC packet source=" << source
+                          << " mismatch byte=" << mismatch
+                          << " actual="
+                          << static_cast<uint32_t>(actual_packet[mismatch])
+                          << " expected="
+                          << static_cast<uint32_t>(expected_packet[mismatch])
+                          << '\n';
+                correct = false;
+            }
+        }
     }
     if (correct && pe < inc_pe) {
         EndpointDispatchAck ack{};
@@ -362,8 +425,22 @@ int main(int argc, char **argv)
                            expected_hidden.size());
         if (copied && actual_counts != expected_counts)
             std::cerr << "[FAIL] pe=" << pe << " count reply mismatch\n";
-        if (copied && actual_hidden != expected_hidden)
-            std::cerr << "[FAIL] pe=" << pe << " hidden fanout mismatch\n";
+        if (copied && actual_hidden != expected_hidden) {
+            size_t mismatch = 0u;
+            while (mismatch < actual_hidden.size() &&
+                   mismatch < expected_hidden.size() &&
+                   actual_hidden[mismatch] == expected_hidden[mismatch])
+                ++mismatch;
+            std::cerr << "[FAIL] pe=" << pe
+                      << " hidden fanout mismatch byte=" << mismatch;
+            if (mismatch < actual_hidden.size() &&
+                mismatch < expected_hidden.size())
+                std::cerr << " actual="
+                          << static_cast<uint32_t>(actual_hidden[mismatch])
+                          << " expected="
+                          << static_cast<uint32_t>(expected_hidden[mismatch]);
+            std::cerr << '\n';
+        }
         correct = correct && copied && actual_counts == expected_counts &&
             actual_hidden == expected_hidden &&
             actual_rows.size() == expected_rows.size() &&
@@ -416,6 +493,7 @@ int main(int argc, char **argv)
 
     if (status == 0) aclshmem_barrier_all();
     if (status_line != nullptr) aclshmem_free(status_line);
+    if (hidden_staging != nullptr) aclshmem_free(hidden_staging);
     if (cursors != nullptr) aclshmem_free(cursors);
     if (completions != nullptr) aclshmem_free(completions);
     if (acks != nullptr) aclshmem_free(acks);
@@ -434,7 +512,7 @@ int main(int argc, char **argv)
     if (!correct) return Fail("device endpoint Dispatch", status);
     std::cout << "[PASS] pe=" << pe << " workers=" << workers
               << " tokens=" << tokens << " hidden=" << hidden
-              << " topk=" << topk;
+              << " topk=" << topk << " aiv=" << dispatch_aiv;
     if (pe == inc_pe && e2e_us > 0.0) {
         uint64_t fanout_rows = 0u;
         for (uint32_t source = 0u; source < workers; ++source) {
