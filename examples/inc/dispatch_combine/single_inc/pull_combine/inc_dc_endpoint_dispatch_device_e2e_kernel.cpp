@@ -2,6 +2,7 @@
 #include "shmem.h"
 
 #include "inc_dc_endpoint_dispatch_abi.h"
+#include "inc_dc_device_journal_abi.h"
 
 using namespace inc::dc::pull_combine;
 
@@ -252,11 +253,13 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     GM_ADDR source_packet, GM_ADDR inc_packets, GM_ADDR commit_mailbox,
     GM_ADDR recv_hidden, GM_ADDR recv_rows, GM_ADDR recv_assignments,
     GM_ADDR recv_counts, GM_ADDR ack_mailbox, GM_ADDR completion_mailbox,
-    GM_ADDR cursors, GM_ADDR hidden_staging, GM_ADDR status_line,
+    GM_ADDR cursors, GM_ADDR hidden_staging, GM_ADDR journal_header,
+    GM_ADDR status_line,
     uint64_t ffts_addr,
     uint64_t slot_bytes,
     uint64_t staging_bytes_per_destination,
-    uint64_t row_capacity, uint64_t assignment_capacity, uint32_t hidden,
+    uint64_t row_capacity, uint64_t assignment_capacity,
+    uint32_t hidden,
     uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
     int32_t inc_pe, uint64_t generation, uint32_t wave)
 {
@@ -407,12 +410,13 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     AscendC::SyncAll<true>();
     dcci_cacheline(status_line);
 
+    const uint32_t data_blocks = blocks;
     if (*global_status == kStatusOk) {
         const uint32_t pair_count = worker_count * worker_count;
-        const bool multiple_lanes = blocks >= pair_count;
+        const bool multiple_lanes = data_blocks >= pair_count;
         const uint32_t first_pair = multiple_lanes ? block % pair_count
                                                    : block;
-        const uint32_t pair_stride = multiple_lanes ? pair_count : blocks;
+        const uint32_t pair_stride = multiple_lanes ? pair_count : data_blocks;
         const uint32_t pair_limit = multiple_lanes ? first_pair + 1u
                                                    : pair_count;
         for (uint32_t pair = first_pair; pair < pair_limit;
@@ -421,7 +425,7 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
             const uint32_t destination = pair % worker_count;
             const uint32_t lane = multiple_lanes ? block / pair_count : 0u;
             const uint32_t lanes = multiple_lanes
-                ? (blocks + pair_count - 1u - pair) / pair_count : 1u;
+                ? (data_blocks + pair_count - 1u - pair) / pair_count : 1u;
             __gm__ uint8_t *packet = inc_packets +
                 static_cast<uint64_t>(source) * slot_bytes;
             __gm__ EndpointDispatchPacketHeader *header =
@@ -561,6 +565,37 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     dcci_cacheline(status_line);
 
     if (block == 0u) {
+        // The immutable INC-owned endpoint packets are the dynamic journal.
+        // Publish a compact header only after fan-out has joined; a later
+        // Combine/index kernel can parse the retained packets during expert
+        // compute without any pre-uploaded token plan.
+        uint64_t journal_tokens = 0u;
+        if (*global_status == kStatusOk) {
+            for (uint32_t source = 0u; source < worker_count; ++source) {
+                __gm__ uint8_t *packet = inc_packets +
+                    static_cast<uint64_t>(source) * slot_bytes;
+                __gm__ EndpointDispatchPacketHeader *packet_header =
+                    reinterpret_cast<__gm__
+                        EndpointDispatchPacketHeader *>(packet);
+                journal_tokens += packet_header->token_count;
+            }
+        }
+        __gm__ DeviceJournalHeader *header =
+            reinterpret_cast<__gm__ DeviceJournalHeader *>(journal_header);
+        header->magic = kDeviceJournalMagic;
+        header->abi_version = kDeviceJournalAbiVersion;
+        header->struct_bytes = sizeof(DeviceJournalHeader);
+        header->generation = generation;
+        header->wave = wave;
+        header->worker_count = worker_count;
+        header->token_count = journal_tokens;
+        header->status = *global_status;
+        header->flags = 0u;
+        header->reserved[0] = 0u;
+        header->reserved[1] = 0u;
+        header->reserved[2] = 0u;
+        dcci_cacheline(journal_header);
+
         // ACK publication is centralized after all destination owners finish,
         // so a source slot cannot be recycled while another AIV still reads
         // that source packet.
@@ -643,9 +678,11 @@ extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
     uint8_t *inc_packets, uint8_t *commit_mailbox, uint8_t *recv_hidden,
     uint8_t *recv_rows, uint8_t *recv_assignments, uint8_t *recv_counts,
     uint8_t *ack_mailbox, uint8_t *completion_mailbox, uint8_t *cursors,
-    uint8_t *hidden_staging, uint8_t *status_line, uint64_t ffts_addr,
+    uint8_t *hidden_staging, uint8_t *journal_header, uint8_t *status_line,
+    uint64_t ffts_addr,
     uint64_t slot_bytes, uint64_t staging_bytes_per_destination,
-    uint64_t row_capacity, uint64_t assignment_capacity, uint32_t hidden,
+    uint64_t row_capacity, uint64_t assignment_capacity,
+    uint32_t hidden,
     uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
     int32_t inc_pe, uint64_t generation, uint32_t wave)
 {
@@ -653,7 +690,9 @@ extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
         block_dim, nullptr, stream>>>(
         source_packet, inc_packets, commit_mailbox, recv_hidden, recv_rows,
         recv_assignments, recv_counts, ack_mailbox, completion_mailbox,
-        cursors, hidden_staging, status_line, ffts_addr, slot_bytes,
+        cursors, hidden_staging, journal_header, status_line,
+        ffts_addr,
+        slot_bytes,
         staging_bytes_per_destination, row_capacity,
         assignment_capacity, hidden, dtype,
         expert_count, worker_count, inc_pe, generation, wave);

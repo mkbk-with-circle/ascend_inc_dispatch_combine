@@ -45,6 +45,11 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
   `[token_ids, locally-reduced FP32 rows]`，整批先校验再原子消费，收齐 contributor
   后才把结果放入 owner egress 队列。W2–W8 共 500 个随机 wave（含零路由 token）
   已通过。
+- 已完成：设备 Dispatch 在 fan-out join 后发布独占 64B `DeviceJournalHeader`；
+  INC-owned endpoint packet 不被复制，直接作为本 wave 的不可变 journal。这样
+  worker 的发送槽可在 ACK 后复用，同时后续 Combine/index kernel 仍能从 INC
+  packet 在线恢复 token ID、owner row 和 contributor bitmap。64 MiB case 未出现
+  journal 构建导致的性能回退。
 - 已完成：空 wave、零路由 token、重复目的 rank、`topk > worker_count`、乱序到达、
   分块传输、提前 egress、ring 回压、负 ACK 与计划生命周期保护。
 - 已完成：910B 上高阶 SHMEM GET 正确性和 W2/W4 聚合带宽锚点。
@@ -130,6 +135,9 @@ hidden ingress 和去重后的 destination hidden egress；metadata/control 虽�
 | W4 | 16 MiB | 2048 token, hidden 4096, top-k 4 | 37.97 GB/s（3 轮均值，CV 0.246%） | PASS |
 | W2 | 64 MiB | 4096 token, hidden 8192, top-k 2 | 29.62 GB/s | PASS |
 | W4 | 64 MiB | 2048 token, hidden 16384, top-k 4 | 57.27 GB/s | PASS |
+
+加入设备 journal header 后复测同一 64 MiB case：W2=29.50 GB/s、W4=57.63 GB/s；
+数据面与前一稳定点一致，header 发布不在关键路径形成可见回退。
 
 这是当前稳定正确检查点，不代表最终 90% gate 已通过。nb 的 W2/W4 单向 raw
 参考分别为 56/112 GB/s，而完整 Dispatch 同时包含 ingress、在线路由和 fan-out，

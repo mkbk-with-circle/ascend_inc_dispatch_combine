@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -12,6 +13,7 @@
 #include "utils.h"
 
 #include "inc_dc_endpoint_dispatch_packet.h"
+#include "inc_dc_device_journal_abi.h"
 
 using namespace inc::dc::pull_combine;
 
@@ -20,9 +22,12 @@ extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
     uint8_t *inc_packets, uint8_t *commit_mailbox, uint8_t *recv_hidden,
     uint8_t *recv_rows, uint8_t *recv_assignments, uint8_t *recv_counts,
     uint8_t *ack_mailbox, uint8_t *completion_mailbox, uint8_t *cursors,
-    uint8_t *hidden_staging, uint8_t *status_line, uint64_t ffts_addr,
+    uint8_t *hidden_staging, uint8_t *journal_header,
+    uint8_t *status_line,
+    uint64_t ffts_addr,
     uint64_t slot_bytes, uint64_t staging_bytes_per_destination,
-    uint64_t row_capacity, uint64_t assignment_capacity, uint32_t hidden,
+    uint64_t row_capacity, uint64_t assignment_capacity,
+    uint32_t hidden,
     uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
     int32_t inc_pe, uint64_t generation, uint32_t wave);
 
@@ -237,6 +242,7 @@ int main(int argc, char **argv)
     uint8_t *completions = nullptr;
     uint8_t *cursors = nullptr;
     uint8_t *hidden_staging = nullptr;
+    uint8_t *journal_header = nullptr;
     uint8_t *status_line = nullptr;
     double e2e_us = 0.0;
     uint32_t dispatch_aiv = 0u;
@@ -286,6 +292,8 @@ int main(int argc, char **argv)
             ? nullptr
             : static_cast<uint8_t *>(aclshmem_malloc(
                   staging_bytes_per_destination * dispatch_aiv));
+        journal_header = static_cast<uint8_t *>(aclshmem_malloc(
+            sizeof(DeviceJournalHeader)));
         status_line = static_cast<uint8_t *>(aclshmem_malloc(64u));
         if (source_packet == nullptr || inc_packets == nullptr ||
             commits == nullptr || recv_hidden == nullptr ||
@@ -294,6 +302,7 @@ int main(int argc, char **argv)
             completions == nullptr || cursors == nullptr ||
             (staging_bytes_per_destination != 0u &&
              hidden_staging == nullptr) ||
+            journal_header == nullptr ||
             status_line == nullptr)
             status = 1;
     }
@@ -324,6 +333,7 @@ int main(int argc, char **argv)
         if (hidden_staging != nullptr)
             ZeroDevice(hidden_staging,
                        staging_bytes_per_destination * dispatch_aiv);
+        ZeroDevice(journal_header, sizeof(DeviceJournalHeader));
         ZeroDevice(status_line, 64u);
     }
     if (status == 0 && pe < inc_pe) {
@@ -344,7 +354,8 @@ int main(int argc, char **argv)
             dispatch_aiv, stream, source_packet, inc_packets, commits,
             recv_hidden,
             recv_rows, recv_assignments, recv_counts, acks, completions,
-            cursors, hidden_staging, status_line, shmemx_get_ffts_config(),
+            cursors, hidden_staging, journal_header, status_line,
+            shmemx_get_ffts_config(),
             slot_bytes, staging_bytes_per_destination,
             row_capacity,
             assignment_capacity, hidden,
@@ -364,6 +375,9 @@ int main(int argc, char **argv)
                              ACL_MEMCPY_DEVICE_TO_HOST);
         correct = status == 0 && device_status ==
             (expect_reject ? 3u : 0u);
+        if (!correct)
+            std::cerr << "[FAIL] INC device_status=" << device_status
+                      << " expected=" << (expect_reject ? 3u : 0u) << '\n';
         if (expect_reject) {
             // The packet copy itself is intentionally corrupt; the gate is
             // that INC rejects it and publishes negative completions.
@@ -400,6 +414,31 @@ int main(int argc, char **argv)
                           << '\n';
                 correct = false;
             }
+        }
+        if (correct && !expect_reject) {
+            DeviceJournalHeader actual_header{};
+            status = aclrtMemcpy(&actual_header,
+                                 sizeof(actual_header), journal_header,
+                                 sizeof(actual_header),
+                                 ACL_MEMCPY_DEVICE_TO_HOST);
+            const uint64_t actual_journal_size = actual_header.token_count;
+            correct = status == 0 &&
+                actual_header.magic == kDeviceJournalMagic &&
+                actual_header.abi_version == kDeviceJournalAbiVersion &&
+                actual_header.struct_bytes == sizeof(DeviceJournalHeader) &&
+                actual_header.generation == kGeneration &&
+                actual_header.wave == kWave &&
+                actual_header.worker_count == workers &&
+                actual_header.status == 0u && actual_header.flags == 0u &&
+                actual_journal_size ==
+                    static_cast<uint64_t>(workers) * tokens;
+            if (!correct)
+                std::cerr << "[FAIL] journal size=" << actual_journal_size
+                          << " expected="
+                          << static_cast<uint64_t>(workers) * tokens
+                          << " copy_status=" << status << '\n';
+            if (!correct)
+                std::cerr << "[FAIL] INC dynamic journal mismatch\n";
         }
     }
     if (correct && pe < inc_pe && expect_reject) {
@@ -617,6 +656,7 @@ int main(int argc, char **argv)
 
     if (status == 0) aclshmem_barrier_all();
     if (status_line != nullptr) aclshmem_free(status_line);
+    if (journal_header != nullptr) aclshmem_free(journal_header);
     if (hidden_staging != nullptr) aclshmem_free(hidden_staging);
     if (cursors != nullptr) aclshmem_free(cursors);
     if (completions != nullptr) aclshmem_free(completions);
