@@ -14,6 +14,7 @@
 
 #include "inc_dc_endpoint_dispatch_packet.h"
 #include "inc_dc_device_journal_abi.h"
+#include "inc_dc_sparse_combine_abi.h"
 
 using namespace inc::dc::pull_combine;
 
@@ -30,6 +31,26 @@ extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
     uint32_t hidden,
     uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
     int32_t inc_pe, uint64_t generation, uint32_t wave);
+
+extern "C" void launch_inc_dc_device_journal_index(
+    uint32_t block_dim, void *stream, uint8_t *inc_packets,
+    uint8_t *journal_header, uint8_t *journal_entries,
+    uint8_t *journal_hash, uint8_t *journal_row_map,
+    uint8_t *destination_rows, uint64_t ffts_addr, uint64_t slot_bytes,
+    uint64_t entry_capacity, uint64_t hash_capacity, uint32_t worker_count,
+    int32_t inc_pe, uint64_t generation, uint32_t wave);
+
+extern "C" void launch_inc_dc_sparse_combine_device_e2e(
+    uint32_t block_dim, void *stream, uint8_t *symmetric_token_ids,
+    uint8_t *symmetric_partials, uint8_t *reduced_output,
+    uint8_t *descriptor_mailbox, uint8_t *ack_mailbox,
+    uint8_t *completion_mailbox, uint8_t *journal_header,
+    uint8_t *journal_entries, uint8_t *journal_row_map,
+    uint8_t *destination_rows, uint8_t *inc_token_ids,
+    uint8_t *block_staging, uint8_t *status_line, uint64_t ffts_addr,
+    uint64_t journal_capacity, uint64_t row_capacity, uint32_t hidden,
+    uint32_t worker_count, int32_t inc_pe, uint64_t generation,
+    uint32_t wave);
 
 int g_npus = 5;
 const char *ipport = "tcp://127.0.0.1:28780";
@@ -75,11 +96,35 @@ uint64_t RecomputeMetadataDigest(std::vector<uint8_t> *packet)
     return hash;
 }
 
+uint64_t NextPowerOfTwo(uint64_t value)
+{
+    uint64_t result = 1u;
+    while (result < value) result <<= 1u;
+    return result;
+}
+
+uint64_t HashToken(uint64_t value)
+{
+    value ^= value >> 33u;
+    value *= 0xff51afd7ed558ccdull;
+    value ^= value >> 33u;
+    value *= 0xc4ceb9fe1a85ec53ull;
+    return value ^ (value >> 33u);
+}
+
 uint8_t HiddenByte(uint32_t source, uint32_t token, uint64_t byte)
 {
     return static_cast<uint8_t>(
         (static_cast<uint64_t>(source) * 131u +
          static_cast<uint64_t>(token) * 17u + byte) % 251u);
+}
+
+float PartialValue(uint32_t expert_worker, uint64_t token_id,
+                   uint32_t element)
+{
+    return static_cast<float>(expert_worker + 1u) +
+        static_cast<float>(token_id % 17u) * 0.03125f +
+        static_cast<float>(element % 11u) * 0.001953125f;
 }
 
 EndpointDispatchInput MakeInput(uint32_t source, uint32_t workers,
@@ -222,6 +267,35 @@ int main(int argc, char **argv)
     const uint64_t row_capacity = static_cast<uint64_t>(workers) * tokens;
     const uint64_t assignment_capacity =
         static_cast<uint64_t>(workers) * tokens * topk;
+    const uint64_t journal_capacity = row_capacity;
+    const uint64_t journal_hash_capacity = NextPowerOfTwo(
+        journal_capacity * 2u);
+    std::vector<uint32_t> combine_rows_per_worker(workers, 0u);
+    std::vector<std::vector<uint64_t>> combine_ids_by_worker(workers);
+    for (uint32_t source = 0u; source < workers; ++source) {
+        const EndpointDispatchInput input = MakeInput(
+            source, workers, tokens, hidden, topk);
+        for (uint32_t token = 0u; token < tokens; ++token) {
+            std::vector<uint8_t> seen(workers, 0u);
+            for (uint32_t assignment = input.assignment_offsets[token];
+                 assignment < input.assignment_offsets[token + 1u];
+                 ++assignment)
+                seen[input.assignments[assignment].destination_rank] = 1u;
+            for (uint32_t destination = 0u; destination < workers;
+                 ++destination) {
+                if (seen[destination] == 0u) continue;
+                combine_ids_by_worker[destination].push_back(
+                    input.token_ids[token]);
+            }
+        }
+    }
+    uint64_t combine_row_capacity = 1u;
+    for (uint32_t worker = 0u; worker < workers; ++worker) {
+        combine_rows_per_worker[worker] =
+            static_cast<uint32_t>(combine_ids_by_worker[worker].size());
+        combine_row_capacity = std::max<uint64_t>(
+            combine_row_capacity, combine_rows_per_worker[worker]);
+    }
     const uint64_t counts_bytes =
         static_cast<uint64_t>(workers) * sizeof(uint32_t) * 4u;
     constexpr uint64_t kMaxStagingBytesPerDestination = 4ull << 20;
@@ -243,8 +317,23 @@ int main(int argc, char **argv)
     uint8_t *cursors = nullptr;
     uint8_t *hidden_staging = nullptr;
     uint8_t *journal_header = nullptr;
+    uint8_t *journal_entries = nullptr;
+    uint8_t *journal_hash = nullptr;
+    uint8_t *journal_row_map = nullptr;
+    uint8_t *destination_rows = nullptr;
+    uint8_t *combine_token_ids = nullptr;
+    uint8_t *combine_partials = nullptr;
+    uint8_t *combine_output = nullptr;
+    uint8_t *combine_descriptors = nullptr;
+    uint8_t *combine_acks = nullptr;
+    uint8_t *combine_completions = nullptr;
+    uint8_t *inc_combine_token_ids = nullptr;
+    uint8_t *combine_staging = nullptr;
+    uint8_t *combine_status_line = nullptr;
     uint8_t *status_line = nullptr;
     double e2e_us = 0.0;
+    double index_us = 0.0;
+    double combine_us = 0.0;
     uint32_t dispatch_aiv = 0u;
 
     int status = aclInit(nullptr);
@@ -263,7 +352,7 @@ int main(int argc, char **argv)
     if (status == 0) status = aclrtCreateStream(&stream);
     if (status == 0) {
         aclshmemx_init_attr_t attr;
-        test_set_attr(pe, pes, 1024ull * 1024ull * 1024ull, ipport,
+        test_set_attr(pe, pes, 2ull * 1024ull * 1024ull * 1024ull, ipport,
                       default_flag_uid, &attr);
         status = aclshmemx_init_attr(ACLSHMEMX_INIT_WITH_DEFAULT, &attr);
         shmem_initialized = status == 0;
@@ -294,6 +383,36 @@ int main(int argc, char **argv)
                   staging_bytes_per_destination * dispatch_aiv));
         journal_header = static_cast<uint8_t *>(aclshmem_malloc(
             sizeof(DeviceJournalHeader)));
+        journal_entries = static_cast<uint8_t *>(aclshmem_malloc(
+            journal_capacity * sizeof(DeviceJournalEntry)));
+        journal_hash = static_cast<uint8_t *>(aclshmem_malloc(
+            journal_hash_capacity * sizeof(uint32_t)));
+        journal_row_map = static_cast<uint8_t *>(aclshmem_malloc(
+            static_cast<uint64_t>(workers) * journal_capacity *
+            sizeof(uint32_t)));
+        destination_rows = static_cast<uint8_t *>(aclshmem_malloc(
+            static_cast<uint64_t>(workers) * sizeof(uint32_t)));
+        combine_token_ids = static_cast<uint8_t *>(aclshmem_malloc(
+            combine_row_capacity * sizeof(uint64_t)));
+        combine_partials = static_cast<uint8_t *>(aclshmem_malloc(
+            combine_row_capacity * hidden * sizeof(float)));
+        combine_output = static_cast<uint8_t *>(aclshmem_malloc(
+            static_cast<uint64_t>(tokens) * hidden * sizeof(float)));
+        combine_descriptors = static_cast<uint8_t *>(aclshmem_malloc(
+            static_cast<uint64_t>(workers) *
+            sizeof(SparseCombineReadyDescriptor)));
+        combine_acks = static_cast<uint8_t *>(aclshmem_malloc(
+            static_cast<uint64_t>(workers) *
+            sizeof(SparseCombineDeviceAck)));
+        combine_completions = static_cast<uint8_t *>(aclshmem_malloc(
+            static_cast<uint64_t>(workers) *
+            sizeof(SparseCombineEgressCompletion)));
+        inc_combine_token_ids = static_cast<uint8_t *>(aclshmem_malloc(
+            static_cast<uint64_t>(workers) * combine_row_capacity *
+            sizeof(uint64_t)));
+        combine_staging = static_cast<uint8_t *>(aclshmem_malloc(
+            static_cast<uint64_t>(dispatch_aiv) * 3072u * sizeof(float)));
+        combine_status_line = static_cast<uint8_t *>(aclshmem_malloc(64u));
         status_line = static_cast<uint8_t *>(aclshmem_malloc(64u));
         if (source_packet == nullptr || inc_packets == nullptr ||
             commits == nullptr || recv_hidden == nullptr ||
@@ -302,7 +421,14 @@ int main(int argc, char **argv)
             completions == nullptr || cursors == nullptr ||
             (staging_bytes_per_destination != 0u &&
              hidden_staging == nullptr) ||
-            journal_header == nullptr ||
+            journal_header == nullptr || journal_entries == nullptr ||
+            journal_hash == nullptr || journal_row_map == nullptr ||
+            destination_rows == nullptr ||
+            combine_token_ids == nullptr || combine_partials == nullptr ||
+            combine_output == nullptr || combine_descriptors == nullptr ||
+            combine_acks == nullptr || combine_completions == nullptr ||
+            inc_combine_token_ids == nullptr || combine_staging == nullptr ||
+            combine_status_line == nullptr ||
             status_line == nullptr)
             status = 1;
     }
@@ -334,7 +460,88 @@ int main(int argc, char **argv)
             ZeroDevice(hidden_staging,
                        staging_bytes_per_destination * dispatch_aiv);
         ZeroDevice(journal_header, sizeof(DeviceJournalHeader));
+        ZeroDevice(journal_entries,
+                   journal_capacity * sizeof(DeviceJournalEntry));
+        std::vector<uint32_t> empty_hash(
+            static_cast<size_t>(journal_hash_capacity),
+            kDeviceJournalEmpty);
+        if (status == 0)
+            status = aclrtMemcpy(
+                journal_hash, journal_hash_capacity * sizeof(uint32_t),
+                empty_hash.data(), journal_hash_capacity * sizeof(uint32_t),
+                ACL_MEMCPY_HOST_TO_DEVICE);
+        std::vector<uint32_t> empty_rows(
+            static_cast<size_t>(workers * journal_capacity),
+            kDeviceJournalEmpty);
+        if (status == 0)
+            status = aclrtMemcpy(
+                journal_row_map,
+                static_cast<uint64_t>(workers) * journal_capacity *
+                    sizeof(uint32_t),
+                empty_rows.data(),
+                static_cast<uint64_t>(workers) * journal_capacity *
+                    sizeof(uint32_t),
+                ACL_MEMCPY_HOST_TO_DEVICE);
+        ZeroDevice(destination_rows,
+                   static_cast<uint64_t>(workers) * sizeof(uint32_t));
+        ZeroDevice(combine_token_ids,
+                   combine_row_capacity * sizeof(uint64_t));
+        ZeroDevice(combine_partials,
+                   combine_row_capacity * hidden * sizeof(float));
+        ZeroDevice(combine_output,
+                   static_cast<uint64_t>(tokens) * hidden * sizeof(float));
+        ZeroDevice(combine_descriptors,
+                   static_cast<uint64_t>(workers) *
+                       sizeof(SparseCombineReadyDescriptor));
+        ZeroDevice(combine_acks,
+                   static_cast<uint64_t>(workers) *
+                       sizeof(SparseCombineDeviceAck));
+        ZeroDevice(combine_completions,
+                   static_cast<uint64_t>(workers) *
+                       sizeof(SparseCombineEgressCompletion));
+        ZeroDevice(inc_combine_token_ids,
+                   static_cast<uint64_t>(workers) * combine_row_capacity *
+                       sizeof(uint64_t));
+        ZeroDevice(combine_staging,
+                   static_cast<uint64_t>(dispatch_aiv) * 3072u *
+                       sizeof(float));
+        ZeroDevice(combine_status_line, 64u);
         ZeroDevice(status_line, 64u);
+    }
+    if (status == 0 && pe < inc_pe && !expect_reject) {
+        const std::vector<uint64_t> &ids = combine_ids_by_worker[pe];
+        std::vector<float> partials(
+            static_cast<size_t>(ids.size()) * hidden);
+        for (uint32_t row = 0u; row < ids.size(); ++row)
+            for (uint32_t element = 0u; element < hidden; ++element)
+                partials[static_cast<uint64_t>(row) * hidden + element] =
+                    PartialValue(pe, ids[row], element);
+        status = aclrtMemcpy(combine_token_ids,
+                             ids.size() * sizeof(uint64_t), ids.data(),
+                             ids.size() * sizeof(uint64_t),
+                             ACL_MEMCPY_HOST_TO_DEVICE);
+        if (status == 0)
+            status = aclrtMemcpy(
+                combine_partials, partials.size() * sizeof(float),
+                partials.data(), partials.size() * sizeof(float),
+                ACL_MEMCPY_HOST_TO_DEVICE);
+        SparseCombineReadyDescriptor descriptor{};
+        descriptor.generation = kGeneration;
+        descriptor.sequence = 1u;
+        descriptor.wave = kWave;
+        descriptor.source_rank = static_cast<uint32_t>(pe);
+        descriptor.row_count = ids.size();
+        descriptor.hidden = hidden;
+        descriptor.source_region_id = 1u;
+        descriptor.payload_bytes =
+            static_cast<uint64_t>(ids.size()) * hidden * sizeof(float);
+        descriptor.metadata_digest = 1u + static_cast<uint32_t>(pe);
+        if (status == 0)
+            status = aclrtMemcpy(
+                combine_descriptors + static_cast<uint64_t>(pe) *
+                    sizeof(descriptor),
+                sizeof(descriptor), &descriptor, sizeof(descriptor),
+                ACL_MEMCPY_HOST_TO_DEVICE);
     }
     if (status == 0 && pe < inc_pe) {
         status = aclrtMemcpy(source_packet, slot_bytes, local_packet.data(),
@@ -364,6 +571,38 @@ int main(int argc, char **argv)
         status = aclrtSynchronizeStream(stream);
         const auto end = std::chrono::steady_clock::now();
         e2e_us = std::chrono::duration<double, std::micro>(end - begin).count();
+    }
+    if (status == 0) aclshmem_barrier_all();
+
+    if (status == 0 && !expect_reject) {
+        const auto begin = std::chrono::steady_clock::now();
+        launch_inc_dc_device_journal_index(
+            1u, stream, inc_packets, journal_header, journal_entries,
+            journal_hash, journal_row_map, destination_rows,
+            shmemx_get_ffts_config(), slot_bytes,
+            journal_capacity, journal_hash_capacity, workers, inc_pe,
+            kGeneration, kWave);
+        status = aclrtSynchronizeStream(stream);
+        const auto end = std::chrono::steady_clock::now();
+        index_us = std::chrono::duration<double, std::micro>(end - begin)
+            .count();
+    }
+    if (status == 0) aclshmem_barrier_all();
+
+    if (status == 0 && !expect_reject) {
+        const auto begin = std::chrono::steady_clock::now();
+        launch_inc_dc_sparse_combine_device_e2e(
+            dispatch_aiv, stream, combine_token_ids, combine_partials,
+            combine_output, combine_descriptors, combine_acks,
+            combine_completions, journal_header, journal_entries,
+            journal_row_map, destination_rows, inc_combine_token_ids,
+            combine_staging, combine_status_line, shmemx_get_ffts_config(),
+            journal_capacity, combine_row_capacity, hidden, workers, inc_pe,
+            kGeneration, kWave);
+        status = aclrtSynchronizeStream(stream);
+        const auto end = std::chrono::steady_clock::now();
+        combine_us = std::chrono::duration<double, std::micro>(end - begin)
+            .count();
     }
     if (status == 0) aclshmem_barrier_all();
 
@@ -417,6 +656,10 @@ int main(int argc, char **argv)
         }
         if (correct && !expect_reject) {
             DeviceJournalHeader actual_header{};
+            std::vector<DeviceJournalEntry> actual_entries;
+            std::vector<uint32_t> actual_hash;
+            std::vector<uint32_t> actual_row_map;
+            std::vector<uint32_t> actual_destination_rows;
             status = aclrtMemcpy(&actual_header,
                                  sizeof(actual_header), journal_header,
                                  sizeof(actual_header),
@@ -429,14 +672,87 @@ int main(int argc, char **argv)
                 actual_header.generation == kGeneration &&
                 actual_header.wave == kWave &&
                 actual_header.worker_count == workers &&
-                actual_header.status == 0u && actual_header.flags == 0u &&
+                actual_header.status == 0u &&
+                actual_header.flags == kDeviceJournalIndexReady &&
                 actual_journal_size ==
-                    static_cast<uint64_t>(workers) * tokens;
+                    static_cast<uint64_t>(workers) * tokens &&
+                CopyFromDevice(&actual_entries, journal_entries,
+                               actual_journal_size) &&
+                CopyFromDevice(&actual_hash, journal_hash,
+                               journal_hash_capacity) &&
+                CopyFromDevice(&actual_row_map, journal_row_map,
+                               static_cast<uint64_t>(workers) *
+                                   actual_journal_size) &&
+                CopyFromDevice(&actual_destination_rows, destination_rows,
+                               workers);
             if (!correct)
                 std::cerr << "[FAIL] journal size=" << actual_journal_size
                           << " expected="
                           << static_cast<uint64_t>(workers) * tokens
                           << " copy_status=" << status << '\n';
+            uint64_t entry_index = 0u;
+            std::vector<uint32_t> expected_destination_rows(workers, 0u);
+            for (uint32_t source = 0u; correct && source < workers;
+                 ++source) {
+                const EndpointDispatchInput input = MakeInput(
+                    source, workers, tokens, hidden, topk);
+                for (uint32_t token = 0u; correct && token < tokens;
+                     ++token, ++entry_index) {
+                    uint64_t expected[2]{0u, 0u};
+                    for (uint32_t assignment =
+                             input.assignment_offsets[token];
+                         assignment < input.assignment_offsets[token + 1u];
+                         ++assignment) {
+                        const uint32_t destination =
+                            input.assignments[assignment].destination_rank;
+                        expected[destination >> 6u] |=
+                            1ull << (destination & 63u);
+                    }
+                    const DeviceJournalEntry &entry =
+                        actual_entries[entry_index];
+                    correct = entry.token_id == input.token_ids[token] &&
+                        entry.owner_rank == source &&
+                        entry.owner_row == token &&
+                        entry.expected[0] == expected[0] &&
+                        entry.expected[1] == expected[1] &&
+                        entry.received[0] == 0u &&
+                        entry.received[1] == 0u &&
+                        entry.accumulator_index == entry_index &&
+                        entry.flags == 0u && entry.reserved == 0u;
+                    for (uint32_t destination = 0u;
+                         correct && destination < workers; ++destination) {
+                        const bool selected =
+                            (expected[destination >> 6u] &
+                             (1ull << (destination & 63u))) != 0u;
+                        const uint32_t actual = actual_row_map[
+                            static_cast<uint64_t>(destination) *
+                                actual_journal_size + entry_index];
+                        if (selected) {
+                            correct = actual ==
+                                expected_destination_rows[destination]++;
+                        } else {
+                            correct = actual == kDeviceJournalEmpty;
+                        }
+                    }
+                    uint64_t bucket = HashToken(entry.token_id) &
+                        (journal_hash_capacity - 1u);
+                    bool found = false;
+                    for (uint64_t probe = 0u;
+                         correct && probe < journal_hash_capacity; ++probe) {
+                        const uint32_t candidate = actual_hash[bucket];
+                        if (candidate == kDeviceJournalEmpty) break;
+                        if (candidate == entry_index) {
+                            found = true;
+                            break;
+                        }
+                        bucket = (bucket + 1u) &
+                            (journal_hash_capacity - 1u);
+                    }
+                    correct = correct && found;
+                }
+            }
+            correct = correct &&
+                actual_destination_rows == expected_destination_rows;
             if (!correct)
                 std::cerr << "[FAIL] INC dynamic journal mismatch\n";
         }
@@ -652,10 +968,112 @@ int main(int argc, char **argv)
                 correct = false;
             }
         }
+
+        SparseCombineDeviceAck combine_ack{};
+        SparseCombineEgressCompletion combine_completion{};
+        if (correct) {
+            status = aclrtMemcpy(
+                &combine_ack, sizeof(combine_ack),
+                combine_acks + static_cast<uint64_t>(pe) *
+                    sizeof(combine_ack),
+                sizeof(combine_ack), ACL_MEMCPY_DEVICE_TO_HOST);
+        }
+        if (status == 0 && correct) {
+            status = aclrtMemcpy(
+                &combine_completion, sizeof(combine_completion),
+                combine_completions + static_cast<uint64_t>(pe) *
+                    sizeof(combine_completion),
+                sizeof(combine_completion), ACL_MEMCPY_DEVICE_TO_HOST);
+        }
+        correct = correct && status == 0 &&
+            combine_ack.magic == kSparseCombineMagic &&
+            combine_ack.abi_version == kSparseCombineAbiVersion &&
+            combine_ack.struct_bytes == sizeof(SparseCombineDeviceAck) &&
+            combine_ack.generation == kGeneration &&
+            combine_ack.sequence == 1u &&
+            combine_ack.source_rank == static_cast<uint32_t>(pe) &&
+            combine_ack.status == 0u &&
+            combine_ack.rows_consumed == combine_rows_per_worker[pe] &&
+            combine_completion.magic == kSparseCombineMagic &&
+            combine_completion.abi_version == kSparseCombineAbiVersion &&
+            combine_completion.struct_bytes ==
+                sizeof(SparseCombineEgressCompletion) &&
+            combine_completion.generation == kGeneration &&
+            combine_completion.wave == kWave &&
+            combine_completion.owner_rank == static_cast<uint32_t>(pe) &&
+            combine_completion.status == 0u &&
+            combine_completion.row_count == tokens;
+        if (!correct) {
+            std::cerr << "[FAIL] pe=" << pe << " combine ack={status="
+                      << combine_ack.status << ",rows="
+                      << combine_ack.rows_consumed << "} completion={status="
+                      << combine_completion.status << ",rows="
+                      << combine_completion.row_count << "}\n";
+        }
+        std::vector<float> actual_output;
+        if (correct)
+            correct = CopyFromDevice(
+                &actual_output, combine_output,
+                static_cast<uint64_t>(tokens) * hidden);
+        const EndpointDispatchInput owner_input = MakeInput(
+            static_cast<uint32_t>(pe), workers, tokens, hidden, topk);
+        for (uint32_t token = 0u; correct && token < tokens; ++token) {
+            std::vector<uint8_t> selected(workers, 0u);
+            for (uint32_t assignment = owner_input.assignment_offsets[token];
+                 assignment < owner_input.assignment_offsets[token + 1u];
+                 ++assignment) {
+                selected[owner_input.assignments[assignment]
+                             .destination_rank] = 1u;
+            }
+            for (uint32_t element = 0u; correct && element < hidden;
+                 ++element) {
+                float expected = 0.0f;
+                for (uint32_t expert = 0u; expert < workers; ++expert)
+                    if (selected[expert] != 0u)
+                        expected += PartialValue(
+                            expert, owner_input.token_ids[token], element);
+                const float actual = actual_output[
+                    static_cast<uint64_t>(token) * hidden + element];
+                if (actual != expected) {
+                    std::cerr << "[FAIL] pe=" << pe
+                              << " combine output token=" << token
+                              << " element=" << element << " actual="
+                              << actual << " expected=" << expected << '\n';
+                    correct = false;
+                }
+            }
+        }
+    }
+
+    if (correct && pe == inc_pe && !expect_reject) {
+        uint32_t combine_device_status =
+            std::numeric_limits<uint32_t>::max();
+        status = aclrtMemcpy(
+            &combine_device_status, sizeof(combine_device_status),
+            combine_status_line, sizeof(combine_device_status),
+            ACL_MEMCPY_DEVICE_TO_HOST);
+        correct = status == 0 && combine_device_status == 0u;
+        if (!correct)
+            std::cerr << "[FAIL] INC sparse Combine device_status="
+                      << combine_device_status << '\n';
     }
 
     if (status == 0) aclshmem_barrier_all();
     if (status_line != nullptr) aclshmem_free(status_line);
+    if (combine_status_line != nullptr) aclshmem_free(combine_status_line);
+    if (combine_staging != nullptr) aclshmem_free(combine_staging);
+    if (inc_combine_token_ids != nullptr)
+        aclshmem_free(inc_combine_token_ids);
+    if (combine_completions != nullptr) aclshmem_free(combine_completions);
+    if (combine_acks != nullptr) aclshmem_free(combine_acks);
+    if (combine_descriptors != nullptr) aclshmem_free(combine_descriptors);
+    if (combine_output != nullptr) aclshmem_free(combine_output);
+    if (combine_partials != nullptr) aclshmem_free(combine_partials);
+    if (combine_token_ids != nullptr) aclshmem_free(combine_token_ids);
+    if (destination_rows != nullptr) aclshmem_free(destination_rows);
+    if (journal_row_map != nullptr) aclshmem_free(journal_row_map);
+    if (journal_hash != nullptr) aclshmem_free(journal_hash);
+    if (journal_entries != nullptr) aclshmem_free(journal_entries);
     if (journal_header != nullptr) aclshmem_free(journal_header);
     if (hidden_staging != nullptr) aclshmem_free(hidden_staging);
     if (cursors != nullptr) aclshmem_free(cursors);
@@ -696,7 +1114,18 @@ int main(int argc, char **argv)
             static_cast<double>(fanout_rows) * row_bytes;
         std::cout << " e2e_us=" << e2e_us
                   << " logical_hidden_gb_s="
-                  << logical_hidden_bytes / e2e_us / 1.0e3;
+                  << logical_hidden_bytes / e2e_us / 1.0e3
+                  << " journal_index_us=" << index_us;
+        uint64_t combine_ingress_rows = 0u;
+        for (uint32_t rows : combine_rows_per_worker)
+            combine_ingress_rows += rows;
+        const double logical_combine_bytes =
+            static_cast<double>(combine_ingress_rows +
+                                static_cast<uint64_t>(workers) * tokens) *
+            hidden * sizeof(float);
+        std::cout << " combine_us=" << combine_us
+                  << " logical_combine_gb_s="
+                  << logical_combine_bytes / combine_us / 1.0e3;
     }
     std::cout << '\n';
     return 0;

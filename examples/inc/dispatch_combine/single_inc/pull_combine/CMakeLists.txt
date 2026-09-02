@@ -84,6 +84,19 @@ inc_device_target(inc_dc_endpoint_dispatch_device_e2e_kernel)
 target_include_directories(inc_dc_endpoint_dispatch_device_e2e_kernel PRIVATE
     ${INC_DC_PULL_COMBINE_DIR})
 
+add_library(inc_dc_device_journal_index_kernel SHARED
+    inc_dc_device_journal_index_kernel.cpp)
+inc_device_target(inc_dc_device_journal_index_kernel)
+target_include_directories(inc_dc_device_journal_index_kernel PRIVATE
+    ${INC_DC_PULL_COMBINE_DIR})
+
+add_library(inc_dc_sparse_combine_device_e2e_kernel SHARED
+    inc_dc_sparse_combine_device_e2e_kernel.cpp)
+inc_device_target(inc_dc_sparse_combine_device_e2e_kernel)
+target_include_directories(inc_dc_sparse_combine_device_e2e_kernel PRIVATE
+    ${INC_DC_PULL_COMBINE_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}/../../common/platform)
+
 add_executable(inc_dc_endpoint_dispatch_device_e2e
     inc_dc_endpoint_dispatch_device_e2e.cpp)
 inc_host_target(inc_dc_endpoint_dispatch_device_e2e)
@@ -91,6 +104,8 @@ target_include_directories(inc_dc_endpoint_dispatch_device_e2e PRIVATE
     ${INC_DC_PULL_COMBINE_DIR})
 target_link_libraries(inc_dc_endpoint_dispatch_device_e2e PRIVATE
     shmem inc_dc_pull_combine_protocol
-    inc_dc_endpoint_dispatch_device_e2e_kernel)
+    inc_dc_endpoint_dispatch_device_e2e_kernel
+    inc_dc_device_journal_index_kernel
+    inc_dc_sparse_combine_device_e2e_kernel)
 add_dependencies(inc_dc_endpoint_dispatch_device_e2e
     aclshmem_bootstrap_config_store)
