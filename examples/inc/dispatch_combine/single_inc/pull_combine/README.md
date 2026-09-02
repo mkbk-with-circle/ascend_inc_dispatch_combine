@@ -29,6 +29,9 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
 - 已完成：endpoint-owned Dispatch packet ABI；hidden、token ID 和 CSR 路由
   metadata 同包上传，INC parser 不依赖预构造 `WavePlan`，并按 destination GPU
   去重 hidden、保留全部 expert/weight/ordinal。
+- 已完成：设备 Dispatch correctness qualification：worker AIV PUT packet 后发布
+  commit 并返回；INC 在线轮询、转置 count、解析 metadata、去重 fan-out，并发布
+  source ACK 与 destination completion。路由没有作为 kernel 参数传入。
 - 已完成：空 wave、零路由 token、重复目的 rank、`topk > worker_count`、乱序到达、
   分块传输、提前 egress、ring 回压、负 ACK 与计划生命周期保护。
 - 已完成：910B 上高阶 SHMEM GET 正确性和 W2/W4 聚合带宽锚点。
@@ -47,8 +50,9 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
   在单调地址 pull 中长期空转；小于两个 chunk 时自动回退到零握手 owner-slice。
 - 已完成：descriptor 或 ready 超时均 fail-closed；成功 ACK 只在 source 已消费且
   egress 完成后发布，失败 ACK 的 `rows_consumed=0`，不会永久占住发送槽。
-- 未完成：持久化设备 server、设备 Dispatch 数据面、跨 wave 端到端
-  Dispatch+Combine gate、公共 API 接入。
+- 未完成：持久化设备 server、设备 Dispatch 多 AIV 性能数据面、跨 wave 端到端
+  Dispatch+Combine gate、公共 API 接入；当前设备 Dispatch 仍是单控制 AIV 的
+  正确性路径，尚未做多 AIV 性能流水。
 
 设备物理 region 按 64B 向上对齐，但 descriptor 中的 `row_count` 和
 `payload_bytes` 始终是真实长度。lane 只在 cache-line 边界切分，最后一个物理
@@ -79,7 +83,8 @@ endpoint packet 另以固定种子运行 5,000 个随机 packet，覆盖 W2–W8
 
 ```bash
 cmake --build /tmp/shmem-pull-combine-v1-build --target \
-  inc_dc_pull_combine_device_e2e -j4
+  inc_dc_pull_combine_device_e2e \
+  inc_dc_endpoint_dispatch_device_e2e -j4
 ```
 
 二进制参数为
@@ -87,6 +92,13 @@ cmake --build /tmp/shmem-pull-combine-v1-build --target \
 同一 case 需要并发启动 `workers + 1` 个 PE，最后一个 PE 是 INC。它只用于协议
 gate，不是公共 API。lane 传 0 时，从实际 `VECTOR_CORE_NUM` 取一半作为 Combine
 预算，再平均分给 worker；不写死 910B 的 40 AIV 或 W2/W4。
+
+设备 Dispatch qualification 参数为
+`<workers> <pe> <ipport> <first_npu> <tokens> <hidden> <topk>`。当前使用 BF16
+hidden，逐字节检查 A→INC packet、count reply、按 destination 去重后的 hidden、
+token row、expert/weight/ordinal、ACK 和 completion。W2/W4 共 8 个随机形状、
+32 个 PE 进程全部 PASS，覆盖 hidden=1–4096、top-k=1–8 及 top-k>worker。
+该 target 只证明完整 Dispatch 语义闭环；单控制 AIV 的吞吐不是性能结果。
 
 ## nb-borrow 设备锚点（2026-09-02）
 

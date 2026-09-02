@@ -63,6 +63,19 @@ struct EndpointDispatchAssignmentRecord {
 static_assert(sizeof(EndpointDispatchAssignmentRecord) == 16u,
               "endpoint assignment record ABI drift");
 
+// One row is emitted per unique (token, destination GPU).  Its assignment
+// range contains every expert for that token on that destination.
+struct EndpointDispatchFanoutRecord {
+    uint64_t token_id = 0u;
+    uint32_t source_rank = 0u;
+    uint32_t source_token = 0u;
+    uint32_t assignment_begin = 0u;
+    uint32_t assignment_count = 0u;
+    uint64_t reserved = 0u;
+};
+static_assert(sizeof(EndpointDispatchFanoutRecord) == 32u,
+              "endpoint fan-out row ABI drift");
+
 // Publication is the only ready flag polled by the INC.  It is written after
 // the packet and count vectors are visible in the INC-owned ring slot.
 struct alignas(64) EndpointDispatchCommit {
@@ -81,6 +94,36 @@ struct alignas(64) EndpointDispatchCommit {
 };
 static_assert(sizeof(EndpointDispatchCommit) == 64u,
               "endpoint Dispatch commit must own one cache line");
+
+struct alignas(64) EndpointDispatchAck {
+    uint32_t magic = kEndpointDispatchMagic;
+    uint16_t abi_version = kEndpointDispatchAbiVersion;
+    uint16_t struct_bytes = sizeof(EndpointDispatchAck);
+    uint64_t generation = 0u;
+    uint64_t sequence = 0u;
+    uint32_t source_rank = 0u;
+    uint32_t status = 0u;
+    uint64_t tokens_consumed = 0u;
+    uint64_t reserved[3]{};
+};
+static_assert(sizeof(EndpointDispatchAck) == 64u,
+              "endpoint Dispatch ACK must own one cache line");
+
+struct alignas(64) EndpointDispatchReceiveCompletion {
+    uint32_t magic = kEndpointDispatchMagic;
+    uint16_t abi_version = kEndpointDispatchAbiVersion;
+    uint16_t struct_bytes = sizeof(EndpointDispatchReceiveCompletion);
+    uint64_t generation = 0u;
+    uint32_t wave = 0u;
+    uint32_t destination_rank = 0u;
+    uint32_t status = 0u;
+    uint32_t row_count = 0u;
+    uint32_t assignment_count = 0u;
+    uint32_t worker_count = 0u;
+    uint64_t reserved[3]{};
+};
+static_assert(sizeof(EndpointDispatchReceiveCompletion) == 64u,
+              "endpoint receive completion must own one cache line");
 
 } // namespace inc::dc::pull_combine
 
