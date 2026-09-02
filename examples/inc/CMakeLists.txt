@@ -41,6 +41,8 @@ function(inc_device_target target)
         --cce-fatobj-link ${CCE_AICORE_ARCH_VEC} ${SANITIZER_FLAGS})
 endfunction()
 
+add_subdirectory(dispatch_combine/single_inc/pull_combine)
+
 # Shared framework-facing API.
 add_library(inc_dc_framework_api SHARED
     dispatch_combine/common/api/inc_dc_framework_c_api.cpp
