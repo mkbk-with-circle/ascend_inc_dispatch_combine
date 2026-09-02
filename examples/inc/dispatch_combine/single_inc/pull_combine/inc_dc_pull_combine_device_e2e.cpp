@@ -1,4 +1,5 @@
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -53,7 +54,7 @@ int main(int argc, char **argv)
     if (argc != 7) {
         std::cerr << "usage: " << argv[0]
                   << " <workers> <pe> <ipport> <first_npu> <bytes>"
-                     " <lanes_per_worker>\n";
+                     " <lanes_per_worker; 0=half-AIV auto>\n";
         return 2;
     }
     const uint32_t workers = static_cast<uint32_t>(std::strtoul(
@@ -62,13 +63,13 @@ int main(int argc, char **argv)
     ipport = argv[3];
     f_npu = std::atoi(argv[4]);
     const uint64_t bytes = std::strtoull(argv[5], nullptr, 10);
-    const uint32_t lanes = static_cast<uint32_t>(std::strtoul(
+    uint32_t lanes = static_cast<uint32_t>(std::strtoul(
         argv[6], nullptr, 10));
     const uint32_t pes = workers + 1u;
     const int inc_pe = static_cast<int>(workers);
     g_npus = static_cast<int>(pes);
     if (workers < 2u || workers > kPullCombineMaxWorkers || pe < 0 ||
-        pe >= static_cast<int>(pes) || lanes == 0u || bytes == 0u ||
+        pe >= static_cast<int>(pes) || bytes == 0u ||
         bytes % sizeof(float) != 0u ||
         bytes > std::numeric_limits<uint32_t>::max() ||
         bytes / sizeof(float) > std::numeric_limits<uint32_t>::max()) {
@@ -89,6 +90,7 @@ int main(int argc, char **argv)
     uint8_t *descriptors = nullptr;
     uint8_t *acks = nullptr;
     uint8_t *status_line = nullptr;
+    double device_e2e_us = 0.0;
 
     int status = aclInit(nullptr);
     if (status == 0) status = aclrtSetDevice(device);
@@ -96,8 +98,15 @@ int main(int argc, char **argv)
     if (status == 0)
         status = aclrtGetDeviceInfo(device, ACL_DEV_ATTR_VECTOR_CORE_NUM,
                                     &vector_cores);
+    if (status == 0 && lanes == 0u && vector_cores > 0) {
+        // Dispatch and Combine each own half of the live AIV budget.  Derive
+        // the per-worker share from the actual device instead of encoding
+        // 910B's 40 AIVs or a particular W2/W4 shape in the protocol.
+        const uint64_t combine_aiv = static_cast<uint64_t>(vector_cores) / 2u;
+        lanes = static_cast<uint32_t>(combine_aiv / workers);
+    }
     if (status == 0 && (vector_cores <= 0 ||
-        static_cast<uint64_t>(workers) * lanes >
+        lanes == 0u || static_cast<uint64_t>(workers) * lanes >
             static_cast<uint64_t>(vector_cores)))
         status = 2;
     if (status == 0) status = aclrtCreateStream(&stream);
@@ -181,11 +190,15 @@ int main(int argc, char **argv)
     if (status == 0) aclshmem_barrier_all();
 
     if (status == 0) {
+        const auto begin = std::chrono::steady_clock::now();
         launch_inc_dc_pull_combine_device_e2e(
             workers * lanes, stream, partials, staging, output, descriptors,
             acks, status_line, shmemx_get_ffts_config(), elements, workers,
             lanes, inc_pe, kGeneration, kWave, kDigest);
         status = aclrtSynchronizeStream(stream);
+        const auto end = std::chrono::steady_clock::now();
+        device_e2e_us = std::chrono::duration<double, std::micro>(
+                            end - begin).count();
     }
     if (status == 0) aclshmem_barrier_all();
 
@@ -218,19 +231,22 @@ int main(int argc, char **argv)
                                  actual.size() * sizeof(float),
                                  ACL_MEMCPY_DEVICE_TO_HOST);
         correct = correct && status == 0;
+        uint32_t mismatches = 0u;
         for (uint64_t element = begin; correct && element < end; ++element) {
             float expected = 0.0f;
             for (uint32_t worker = 0u; worker < workers; ++worker)
                 expected += PartialValue(worker, element);
             if (std::fabs(actual[static_cast<size_t>(element - begin)] -
                           expected) > 1e-6f) {
-                std::cerr << "[FAIL] pe=" << pe << " element=" << element
-                          << " actual="
-                          << actual[static_cast<size_t>(element - begin)]
-                          << " expected=" << expected << '\n';
-                correct = false;
+                if (mismatches < 8u)
+                    std::cerr << "[FAIL] pe=" << pe
+                              << " element=" << element << " actual="
+                              << actual[static_cast<size_t>(element - begin)]
+                              << " expected=" << expected << '\n';
+                ++mismatches;
             }
         }
+        correct = correct && mismatches == 0u;
     }
 
     if (status == 0) aclshmem_barrier_all();
@@ -247,6 +263,14 @@ int main(int argc, char **argv)
 
     if (!correct) return Fail("device e2e", status);
     std::cout << "[PASS] pe=" << pe << " workers=" << workers
-              << " bytes=" << bytes << " lanes=" << lanes << '\n';
+              << " bytes=" << bytes << " lanes=" << lanes;
+    if (pe == inc_pe && device_e2e_us > 0.0) {
+        const double logical_rma_bytes =
+            static_cast<double>(bytes) * (workers + 1u);
+        std::cout << " e2e_us=" << device_e2e_us
+                  << " logical_rma_gb_s="
+                  << logical_rma_bytes / device_e2e_us / 1.0e3;
+    }
+    std::cout << '\n';
     return 0;
 }

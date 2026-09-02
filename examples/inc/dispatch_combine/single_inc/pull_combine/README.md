@@ -31,7 +31,9 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
 - 已完成：910B 上高阶 SHMEM GET 正确性和 W2/W4 聚合带宽锚点。
 - 已完成：设备 qualification 路径的 descriptor→pull→严格 FP32 reduce→
   source ACK→按 owner 选择性回传，并在 W2/W4 上逐元素验证。
-- 未完成：持久化设备 server、设备 Dispatch 数据面、向量化归约、跨 wave 端到端
+- 已完成：1536-element UB tiled FP32 reduction，以及 contributor MTE2 与向量 Add
+  的 ping/pong 流水。
+- 未完成：持久化设备 server、设备 Dispatch 数据面、跨 wave 端到端
   Dispatch+Combine gate、公共 API 接入。
 
 设备物理 region 按 64B 向上对齐，但 descriptor 中的 `row_count` 和
@@ -64,7 +66,8 @@ cmake --build /tmp/shmem-pull-combine-v1-build --target \
 二进制参数为
 `<workers> <pe> <ipport> <first_npu> <真实字节数> <每 worker lane>`；
 同一 case 需要并发启动 `workers + 1` 个 PE，最后一个 PE 是 INC。它只用于协议
-gate，不是公共 API。
+gate，不是公共 API。lane 传 0 时，从实际 `VECTOR_CORE_NUM` 取一半作为 Combine
+预算，再平均分给 worker；不写死 910B 的 40 AIV 或 W2/W4。
 
 ## nb-borrow 设备锚点（2026-09-02）
 
@@ -80,10 +83,10 @@ gate，不是公共 API。
 | W4+1INC | 64 MiB | 1 | 44.95 GB/s | 1.00x |
 | W4+1INC | 64 MiB | 2 | 83.49 GB/s | 1.86x |
 
-结论：当前 910B MTE 路径在 2 AIV/peer 饱和。资源策略应根据 worker 数与
-实时 AIV 数推导 lane，而不是写死 20/20；W2 Combine 需要 4 AIV，W4 需要 8 AIV。
-低阶 UDMA 只在 Ascend 950 开启，本协议使用高阶 SHMEM RMA 自动选择 MTE、SDMA
-或 UDMA，避免把 910B 跑到不支持的 engine。
+结论：当前 910B 纯 MTE pull 在 2 AIV/peer 饱和；完整 Combine 中，多出的 AIV
+继续并行 FP32 reduction，因此自动策略使用一半实时 AIV 预算，而不是把 transport
+饱和 lane 写死成整个算子的上限。低阶 UDMA 只在 Ascend 950 开启，本协议使用
+高阶 SHMEM RMA 自动选择 MTE、SDMA 或 UDMA。
 
 ### 设备端正确性 gate
 
@@ -95,9 +98,23 @@ gate，不是公共 API。
 | W2 | 68 B | 非 64B、非 worker 整分 | PASS |
 | W4 | 4 B | 三个 owner 为零元素 | PASS |
 | W2/W4 | 1,000,012 B | 非 64B、非 worker 整分 | 全部 PASS |
-| W2/W4 | 1 MiB | 各连续 5 次 | 10/10 PASS |
+| W2/W4 | 1 MiB | UB 向量路径，各连续 5 次 | 10/10 PASS |
 | W4 | 64 MiB | 大消息 | 5 PE 全部 PASS |
 
-这里的设备 E2E 是正确性闭环，严格 FP32 归约当前仍是 scalar reference；性能
-结论仍应使用上面的纯 transport roofline。下一阶段会在不改变 ACK、对齐布局和
-owner 选择性回传语义的前提下替换为 UB tiled vector reduction。
+### 当前设备 E2E 性能
+
+计时覆盖一次 kernel 的 descriptor 校验、pull、严格 FP32 reduction、ACK 和
+selective push；`logical_rma_gb_s=(W+1)×真实字节数/时间`，不是纯链路带宽。
+
+| 规模 | 每 worker | lane/worker | E2E | 逻辑 RMA 吞吐 |
+|---|---:|---:|---:|---:|
+| W2 | 64 MiB | 12（自动） | 7.72 ms | 26.09 GB/s |
+| W4 | 64 MiB | 2 | 11.95 ms | 28.08 GB/s |
+| W4 | 64 MiB | 4 | 8.45 ms | 39.69 GB/s |
+| W4 | 64 MiB | 5 | 7.86 ms | 42.70 GB/s |
+| W4 | 64 MiB | 6（自动） | 7.37 ms | 45.55 GB/s |
+
+这仍是 qualification kernel，不是最终性能 gate：当前尚未把分块 pull、reduce、
+egress 做成跨 tile 的持久化流水，因此不能用这张表宣称达到 90% roofline。
+nb 运行时报告 48 个 vector core，所以半 AIV 自动预算是 24；这也是为什么这里
+的自动 lane 是 W2=12、W4=6，而不是沿用旧 40-AIV 环境的 10/5。

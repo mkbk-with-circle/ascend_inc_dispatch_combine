@@ -2,6 +2,7 @@
 #include "shmem.h"
 
 #include "inc_dc_pull_combine_abi.h"
+#include "inc_dc_vector_reduce_aicore.h"
 
 using namespace inc::dc::pull_combine;
 
@@ -10,6 +11,12 @@ namespace {
 constexpr uint32_t kDeviceE2eStatusOk = 0u;
 constexpr uint32_t kDeviceE2eStatusDescriptor = 1u;
 constexpr uint32_t kRmaAlignment = 64u;
+constexpr uint32_t kVecPingMte2V = 0u;
+constexpr uint32_t kVecPingVMte2 = 1u;
+constexpr uint32_t kVecPongMte2V = 2u;
+constexpr uint32_t kVecPongVMte2 = 3u;
+constexpr uint32_t kVecMte3V = 4u;
+constexpr uint32_t kVecVMte3 = 5u;
 
 __aicore__ inline void GetExact(__gm__ uint8_t *destination,
                                 __gm__ uint8_t *source, uint32_t bytes,
@@ -29,6 +36,108 @@ __aicore__ inline void PutExact(__gm__ uint8_t *destination,
     if (bulk != 0u) aclshmem_putmem(destination, source, bulk, pe);
     if (bulk != bytes)
         aclshmem_putmem(destination + bulk, source + bulk, bytes - bulk, pe);
+}
+
+__aicore__ inline void CopyFp32GmToUb(
+    __gm__ float *source, __ubuf__ uint8_t *destination, uint32_t elements,
+    uint32_t ready_for_mte2, uint32_t ready_for_vector)
+{
+    const uint32_t bytes = elements * sizeof(float);
+    AscendC::LocalTensor<uint8_t> ub;
+    AscendC::GlobalTensor<uint8_t> gm;
+    AscendC::DataCopyExtParams params(1u, bytes, 0u, 0u, 0u);
+    AscendC::DataCopyPadExtParams<uint8_t> padding;
+    ub.address_.logicPos = static_cast<uint8_t>(AscendC::TPosition::VECIN);
+    ub.address_.bufferAddr = reinterpret_cast<uint64_t>(destination);
+    ub.address_.dataLen = static_cast<uint32_t>(IncVecUbAlignUp(bytes, 32));
+    gm.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(source));
+    AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(ready_for_mte2);
+    AscendC::DataCopyPad(ub, gm, params, padding);
+    AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(ready_for_vector);
+}
+
+__aicore__ inline void CopyFp32UbToGm(
+    __ubuf__ uint8_t *source, __gm__ float *destination, uint32_t elements)
+{
+    const uint32_t bytes = elements * sizeof(float);
+    AscendC::LocalTensor<uint8_t> ub;
+    AscendC::GlobalTensor<uint8_t> gm;
+    AscendC::DataCopyExtParams params(1u, bytes, 0u, 0u, 0u);
+    ub.address_.logicPos = static_cast<uint8_t>(AscendC::TPosition::VECOUT);
+    ub.address_.bufferAddr = reinterpret_cast<uint64_t>(source);
+    ub.address_.dataLen = static_cast<uint32_t>(IncVecUbAlignUp(bytes, 32));
+    gm.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(destination));
+    AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(kVecVMte3);
+    AscendC::DataCopyPad(gm, ub, params);
+    AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+}
+
+__aicore__ inline void ReduceOwnerFp32Vector(
+    __gm__ float *staging, __gm__ float *output, uint64_t padded_elements,
+    uint32_t worker_count, uint64_t logical_begin,
+    uint64_t local_begin, uint64_t local_end)
+{
+    if (local_begin >= local_end) return;
+    // The 910B wide-vector path is qualified at 1536 elements.  Ping, pong
+    // and accumulator consume 18 KiB of the 24-KiB AIV UB.
+    constexpr uint32_t kTileElements = 1536u;
+    constexpr uint32_t kTileBytes = kTileElements * sizeof(float);
+    static_assert(kTileBytes * 3u <= INC_VEC_UB_BUDGET_BYTES,
+                  "ping/pong FP32 tile exceeds AIV UB budget");
+    __ubuf__ uint8_t *ping_ub = reinterpret_cast<__ubuf__ uint8_t *>(0);
+    __ubuf__ uint8_t *pong_ub = ping_ub + kTileBytes;
+    __ubuf__ uint8_t *acc_ub = pong_ub + kTileBytes;
+
+    AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
+    AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
+    AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+    for (uint64_t local = local_begin; local < local_end;
+         local += kTileElements) {
+        const uint32_t count = static_cast<uint32_t>(
+            local_end - local < kTileElements
+                ? local_end - local
+                : kTileElements);
+        // The accumulator UB cannot be reused until the preceding MTE3 store
+        // has completed.
+        AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+        const uint64_t logical = logical_begin + local;
+        AscendC::LocalTensor<float> acc =
+            IncVecBindFloatUb(acc_ub, count * sizeof(float));
+        AscendC::Duplicate(acc, 0.0f, count);
+        AscendC::PipeBarrier<PIPE_V>();
+        CopyFp32GmToUb(staging + logical, ping_ub, count,
+                       kVecPingVMte2, kVecPingMte2V);
+        for (uint32_t worker = 0u; worker < worker_count; ++worker) {
+            const bool ping = (worker & 1u) == 0u;
+            __ubuf__ uint8_t *current = ping ? ping_ub : pong_ub;
+            const uint32_t current_mte2v =
+                ping ? kVecPingMte2V : kVecPongMte2V;
+            const uint32_t current_vmte2 =
+                ping ? kVecPingVMte2 : kVecPongVMte2;
+            if (worker + 1u < worker_count) {
+                const uint32_t next = worker + 1u;
+                const bool next_ping = (next & 1u) == 0u;
+                CopyFp32GmToUb(
+                    staging + static_cast<uint64_t>(next) *
+                                  padded_elements + logical,
+                    next_ping ? ping_ub : pong_ub, count,
+                    next_ping ? kVecPingVMte2 : kVecPongVMte2,
+                    next_ping ? kVecPingMte2V : kVecPongMte2V);
+            }
+            AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(current_mte2v);
+            AscendC::LocalTensor<float> temp =
+                IncVecBindFloatUb(current, count * sizeof(float));
+            AscendC::Add(acc, acc, temp, count);
+            AscendC::PipeBarrier<PIPE_V>();
+            AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(current_vmte2);
+        }
+
+        AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(kVecVMte3);
+        CopyFp32UbToGm(acc_ub, output + local, count);
+    }
+    AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+    AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
+    AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
 }
 
 __aicore__ inline bool DescriptorValid(
@@ -170,9 +279,8 @@ void inc_dc_pull_combine_device_e2e_kernel(
                             static_cast<int32_t>(block));
         }
 
-        // Correctness-first strict FP32 reduction.  The next milestone
-        // replaces this scalar loop with tiled UB vector reduction while
-        // keeping the same staging and ACK boundaries.
+        // Strict FP32 reduction, tiled through AIV UB.  Worker order remains
+        // fixed, so vectorization does not change floating-point semantics.
         __gm__ float *staging = reinterpret_cast<__gm__ float *>(inc_staging);
         __gm__ float *output = reinterpret_cast<__gm__ float *>(
             reduced_output);
@@ -198,18 +306,12 @@ void inc_dc_pull_combine_device_e2e_kernel(
                 ? last_local_unclamped
                 : owner_elements;
         // A cache line has exactly one producer AIV.  Interleaving elements
-        // across blocks would create cross-AIV false sharing and allow one
-        // cache writeback to discard another AIV's scalar stores.
-        for (uint64_t local_element = first_local_element;
-             local_element < last_local_element; ++local_element) {
-            const uint64_t element = owner_begin + local_element;
-            float sum = staging[element];
-            for (uint32_t worker = 1u; worker < worker_count; ++worker)
-                sum += staging[static_cast<uint64_t>(worker) *
-                               padded_elements + element];
-            output[static_cast<uint64_t>(owner) * padded_elements +
-                   local_element] = sum;
-        }
+        // across blocks would create cross-AIV false sharing.
+        ReduceOwnerFp32Vector(
+            staging,
+            output + static_cast<uint64_t>(owner) * padded_elements,
+            padded_elements, worker_count, owner_begin,
+            first_local_element, last_local_element);
         AscendC::PipeBarrier<PIPE_ALL>();
     }
     AscendC::SyncAll<true>();
