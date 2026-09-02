@@ -35,8 +35,10 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
   的 ping/pong 流水。
 - 已完成：归约结果从 UB 直接 PUT 到 owner，省去 INC 本地 GM store/read 与独立
   egress；64B timeline 可拆分六个设备阶段。
+- 已完成：AIV 固定拥有 owner slice，并错开 source 顺序执行局部
+  pull→reduce→push；不再等待整 wave pull 完成。
 - 未完成：持久化设备 server、设备 Dispatch 数据面、跨 wave 端到端
-  Dispatch+Combine gate、pull/reduce 跨 tile 重叠、公共 API 接入。
+  Dispatch+Combine gate、独立 pull/reducer 角色的真双流水、公共 API 接入。
 
 设备物理 region 按 64B 向上对齐，但 descriptor 中的 `row_count` 和
 `payload_bytes` 始终是真实长度。lane 只在 cache-line 边界切分，最后一个物理
@@ -107,13 +109,13 @@ gate，不是公共 API。lane 传 0 时，从实际 `VECTOR_CORE_NUM` 取一半
 
 计时覆盖一次 kernel 的 descriptor 校验、pull、严格 FP32 reduction、ACK 和
 selective push；`logical_rma_gb_s=(W+1)×真实字节数/时间`，不是纯链路带宽。
-输出中的六项 `phase_pct` 依次是 descriptor、pull、acquire、reduce+direct push、
-release、最终同步。
+输出中的六项 `phase_pct` 依次是 descriptor、数据面、order、ACK、release、最终
+同步；owner-slice 版本的数据面本身已经包含局部 pull+reduce+direct push。
 
-| 规模 | lane/worker | staged GM | UB 直接回传 | 当前吞吐 | 加速 |
+| 规模 | lane/worker | staged GM | UB 直接回传 | owner slice | 当前吞吐 |
 |---|---:|---:|---:|---:|---:|
-| W2×64 MiB | 12（自动） | 7.72 ms | 4.98 ms | 40.44 GB/s | 1.55x |
-| W4×64 MiB | 6（自动） | 7.37 ms | 4.25 ms | 78.97 GB/s | 1.74x |
+| W2×64 MiB | 12（自动） | 7.72 ms | 4.98 ms | 4.83 ms | 41.72 GB/s |
+| W4×64 MiB | 6（自动） | 7.37 ms | 4.25 ms | 4.22 ms | 79.43 GB/s |
 
 这仍是 qualification kernel，不是最终性能 gate：当前尚未把分块 pull、reduce、
 push 做成跨 tile 的持久化流水，因此不能用这张表宣称达到 90% roofline。

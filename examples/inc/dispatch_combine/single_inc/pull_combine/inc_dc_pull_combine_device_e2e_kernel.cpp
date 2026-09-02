@@ -205,73 +205,9 @@ void inc_dc_pull_combine_device_e2e_kernel(
         timeline->cycle[kTimelineDescriptorDone] = AscendC::GetSystemCycle();
 
     if (pe == inc_pe && *status == kDeviceE2eStatusOk) {
-        const uint32_t worker = block / lanes_per_worker;
-        const uint32_t stripe = block % lanes_per_worker;
-        if (worker < worker_count) {
-            const uint64_t source_lines = padded_elements /
-                                          kFloatsPerCacheLine;
-            const uint64_t first_line = source_lines * stripe /
-                                        lanes_per_worker;
-            const uint64_t last_line = source_lines * (stripe + 1u) /
-                                       lanes_per_worker;
-            const uint64_t stripe_begin =
-                first_line * kFloatsPerCacheLine;
-            const uint64_t stripe_end = last_line * kFloatsPerCacheLine;
-            const uint32_t stripe_elements = static_cast<uint32_t>(
-                stripe_end - stripe_begin);
-            __gm__ float *local = reinterpret_cast<__gm__ float *>(
-                inc_staging) + static_cast<uint64_t>(worker) *
-                padded_elements +
-                stripe_begin;
-            __gm__ float *remote = reinterpret_cast<__gm__ float *>(
-                symmetric_partials) + stripe_begin;
-            GetExact(reinterpret_cast<__gm__ uint8_t *>(local),
-                     reinterpret_cast<__gm__ uint8_t *>(remote),
-                     stripe_elements * sizeof(float),
-                     static_cast<int32_t>(worker));
-        }
-    }
-    AscendC::SyncAll<true>();
-    if (pe == inc_pe && block == 0u)
-        timeline->cycle[kTimelinePullDone] = AscendC::GetSystemCycle();
-
-    if (pe == inc_pe && *status == kDeviceE2eStatusOk) {
-        // GET completion and the following consumer both use the MTE path.
-        // No scalar cache observes staging, so a full DCCI sweep is neither
-        // required nor desirable for large messages.
-        AscendC::PipeBarrier<PIPE_ALL>();
-    }
-    AscendC::SyncAll<true>();
-    if (pe == inc_pe && block == 0u)
-        timeline->cycle[kTimelineAcquireDone] = AscendC::GetSystemCycle();
-
-    if (pe == inc_pe && *status == kDeviceE2eStatusOk) {
-        // GET completion is now global across the INC kernel.  Publish one
-        // ACK per worker before reduction; source partial buffers are no
-        // longer read after this point.
-        if (block < worker_count) {
-            __gm__ CombineAck *local_ack =
-                reinterpret_cast<__gm__ CombineAck *>(ack_mailbox) + block;
-            local_ack->magic = kPullCombineMagic;
-            local_ack->abi_version = kPullCombineAbiVersion;
-            local_ack->struct_bytes = sizeof(CombineAck);
-            local_ack->generation = generation;
-            local_ack->sequence = 1u;
-            local_ack->source_rank = block;
-            local_ack->status = kDeviceE2eStatusOk;
-            local_ack->rows_consumed = elements;
-            for (uint32_t i = 0u; i < 3u; ++i)
-                local_ack->reserved[i] = 0u;
-            dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(local_ack));
-            aclshmem_putmem(local_ack, local_ack, sizeof(CombineAck),
-                            static_cast<int32_t>(block));
-        }
-
-        // Strict FP32 reduction, tiled through AIV UB.  Worker order remains
-        // fixed, so vectorization does not change floating-point semantics.
-        __gm__ float *staging = reinterpret_cast<__gm__ float *>(inc_staging);
-        __gm__ float *output = reinterpret_cast<__gm__ float *>(
-            reduced_output);
+        // One AIV owns one cache-line partition of one output owner.  Pull,
+        // reduce and direct push are local to that slice, so independent AIVs
+        // naturally overlap different phases without a whole-wave barrier.
         const uint32_t owner = block / lanes_per_worker;
         const uint32_t lane = block % lanes_per_worker;
         const uint64_t owner_begin = static_cast<uint64_t>(elements) * owner /
@@ -293,14 +229,79 @@ void inc_dc_pull_combine_device_e2e_kernel(
             last_local_unclamped < owner_elements
                 ? last_local_unclamped
                 : owner_elements;
-        // A cache line has exactly one producer AIV.  Interleaving elements
-        // across blocks would create cross-AIV false sharing.
-        ReduceOwnerFp32Vector(
-            staging,
-            output,
-            padded_elements, worker_count, owner_begin,
-            first_local_element, last_local_element,
-            static_cast<int32_t>(owner));
+        if (first_local_element < last_local_element) {
+            const uint64_t logical_begin = owner_begin + first_local_element;
+            const uint64_t logical_end = owner_begin + last_local_element;
+            const uint64_t pull_begin = logical_begin /
+                                        kFloatsPerCacheLine *
+                                        kFloatsPerCacheLine;
+            const uint64_t pull_end_unclamped =
+                (logical_end + kFloatsPerCacheLine - 1u) /
+                kFloatsPerCacheLine * kFloatsPerCacheLine;
+            const uint64_t pull_end = pull_end_unclamped < padded_elements
+                ? pull_end_unclamped
+                : padded_elements;
+            const uint32_t pull_bytes = static_cast<uint32_t>(
+                (pull_end - pull_begin) * sizeof(float));
+            __gm__ float *staging =
+                reinterpret_cast<__gm__ float *>(inc_staging);
+            __gm__ float *remote =
+                reinterpret_cast<__gm__ float *>(symmetric_partials);
+            // Rotate the first source so no instant sends every AIV to the
+            // same HCCS peer.  Worker order inside reduction remains fixed.
+            const uint32_t first_source = (owner + lane) % worker_count;
+            for (uint32_t step = 0u; step < worker_count; ++step) {
+                const uint32_t source = (first_source + step) % worker_count;
+                GetExact(
+                    reinterpret_cast<__gm__ uint8_t *>(
+                        staging + static_cast<uint64_t>(source) *
+                                      padded_elements + pull_begin),
+                    reinterpret_cast<__gm__ uint8_t *>(remote + pull_begin),
+                    pull_bytes, static_cast<int32_t>(source));
+            }
+            AscendC::PipeBarrier<PIPE_ALL>();
+            ReduceOwnerFp32Vector(
+                staging, reinterpret_cast<__gm__ float *>(reduced_output),
+                padded_elements, worker_count, owner_begin,
+                first_local_element, last_local_element,
+                static_cast<int32_t>(owner));
+        }
+    }
+    AscendC::SyncAll<true>();
+    if (pe == inc_pe && block == 0u)
+        timeline->cycle[kTimelinePullDone] = AscendC::GetSystemCycle();
+
+    if (pe == inc_pe && *status == kDeviceE2eStatusOk) {
+        // GET completion and the following consumer both use the MTE path.
+        // No scalar cache observes staging, so a full DCCI sweep is neither
+        // required nor desirable for large messages.
+        AscendC::PipeBarrier<PIPE_ALL>();
+    }
+    AscendC::SyncAll<true>();
+    if (pe == inc_pe && block == 0u)
+        timeline->cycle[kTimelineAcquireDone] = AscendC::GetSystemCycle();
+
+    if (pe == inc_pe && *status == kDeviceE2eStatusOk) {
+        // Every slice has completed all source GETs before this global point.
+        // ACK may therefore release the worker source buffers.
+        if (block < worker_count) {
+            __gm__ CombineAck *local_ack =
+                reinterpret_cast<__gm__ CombineAck *>(ack_mailbox) + block;
+            local_ack->magic = kPullCombineMagic;
+            local_ack->abi_version = kPullCombineAbiVersion;
+            local_ack->struct_bytes = sizeof(CombineAck);
+            local_ack->generation = generation;
+            local_ack->sequence = 1u;
+            local_ack->source_rank = block;
+            local_ack->status = kDeviceE2eStatusOk;
+            local_ack->rows_consumed = elements;
+            for (uint32_t i = 0u; i < 3u; ++i)
+                local_ack->reserved[i] = 0u;
+            dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(local_ack));
+            aclshmem_putmem(local_ack, local_ack, sizeof(CombineAck),
+                            static_cast<int32_t>(block));
+        }
+
         AscendC::PipeBarrier<PIPE_ALL>();
     }
     AscendC::SyncAll<true>();
