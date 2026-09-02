@@ -5,6 +5,9 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <vector>
@@ -80,10 +83,25 @@ float PartialValue(const CombineRow &row, uint32_t h)
 
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
-    std::mt19937_64 rng(0x50434d425631ull);
-    for (uint32_t iteration = 0u; iteration < 500u; ++iteration) {
+    constexpr uint64_t kDefaultSeed = 0x50434d425631ull;
+    const uint64_t requested_iterations = argc > 1
+        ? std::strtoull(argv[1], nullptr, 0)
+        : 500u;
+    const uint64_t seed = argc > 2
+        ? std::strtoull(argv[2], nullptr, 0)
+        : kDefaultSeed;
+    if (argc > 3 || requested_iterations == 0u ||
+        requested_iterations > std::numeric_limits<uint32_t>::max()) {
+        std::cerr << "usage: " << argv[0]
+                  << " [positive_iterations] [seed]\n";
+        return 2;
+    }
+    const uint32_t iterations =
+        static_cast<uint32_t>(requested_iterations);
+    std::mt19937_64 rng(seed);
+    for (uint32_t iteration = 0u; iteration < iterations; ++iteration) {
         WavePlanDesc desc{};
         desc.worker_count = 2u + static_cast<uint32_t>(rng() % 7u);
         desc.expert_count = 8u + static_cast<uint32_t>(rng() % 57u);
@@ -332,5 +350,7 @@ int main()
         for (size_t i = 0u; i < actual.size(); ++i)
             assert(std::fabs(actual[i] - expected[i]) < 1e-5f);
     }
+    std::cout << "[PASS] randomized waves=" << iterations
+              << " seed=" << seed << '\n';
     return 0;
 }
