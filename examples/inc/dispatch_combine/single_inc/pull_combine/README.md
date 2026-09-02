@@ -33,8 +33,10 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
   source ACK→按 owner 选择性回传，并在 W2/W4 上逐元素验证。
 - 已完成：1536-element UB tiled FP32 reduction，以及 contributor MTE2 与向量 Add
   的 ping/pong 流水。
+- 已完成：归约结果从 UB 直接 PUT 到 owner，省去 INC 本地 GM store/read 与独立
+  egress；64B timeline 可拆分六个设备阶段。
 - 未完成：持久化设备 server、设备 Dispatch 数据面、跨 wave 端到端
-  Dispatch+Combine gate、公共 API 接入。
+  Dispatch+Combine gate、pull/reduce 跨 tile 重叠、公共 API 接入。
 
 设备物理 region 按 64B 向上对齐，但 descriptor 中的 `row_count` 和
 `payload_bytes` 始终是真实长度。lane 只在 cache-line 边界切分，最后一个物理
@@ -105,16 +107,15 @@ gate，不是公共 API。lane 传 0 时，从实际 `VECTOR_CORE_NUM` 取一半
 
 计时覆盖一次 kernel 的 descriptor 校验、pull、严格 FP32 reduction、ACK 和
 selective push；`logical_rma_gb_s=(W+1)×真实字节数/时间`，不是纯链路带宽。
+输出中的六项 `phase_pct` 依次是 descriptor、pull、acquire、reduce+direct push、
+release、最终同步。
 
-| 规模 | 每 worker | lane/worker | E2E | 逻辑 RMA 吞吐 |
-|---|---:|---:|---:|---:|
-| W2 | 64 MiB | 12（自动） | 7.72 ms | 26.09 GB/s |
-| W4 | 64 MiB | 2 | 11.95 ms | 28.08 GB/s |
-| W4 | 64 MiB | 4 | 8.45 ms | 39.69 GB/s |
-| W4 | 64 MiB | 5 | 7.86 ms | 42.70 GB/s |
-| W4 | 64 MiB | 6（自动） | 7.37 ms | 45.55 GB/s |
+| 规模 | lane/worker | staged GM | UB 直接回传 | 当前吞吐 | 加速 |
+|---|---:|---:|---:|---:|---:|
+| W2×64 MiB | 12（自动） | 7.72 ms | 4.98 ms | 40.44 GB/s | 1.55x |
+| W4×64 MiB | 6（自动） | 7.37 ms | 4.25 ms | 78.97 GB/s | 1.74x |
 
 这仍是 qualification kernel，不是最终性能 gate：当前尚未把分块 pull、reduce、
-egress 做成跨 tile 的持久化流水，因此不能用这张表宣称达到 90% roofline。
+push 做成跨 tile 的持久化流水，因此不能用这张表宣称达到 90% roofline。
 nb 运行时报告 48 个 vector core，所以半 AIV 自动预算是 24；这也是为什么这里
 的自动 lane 是 W2=12、W4=6，而不是沿用旧 40-AIV 环境的 10/5。

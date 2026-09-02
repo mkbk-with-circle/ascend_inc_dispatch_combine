@@ -2,6 +2,7 @@
 #include "shmem.h"
 
 #include "inc_dc_pull_combine_abi.h"
+#include "inc_dc_pull_combine_device_e2e_abi.h"
 #include "inc_dc_vector_reduce_aicore.h"
 
 using namespace inc::dc::pull_combine;
@@ -28,16 +29,6 @@ __aicore__ inline void GetExact(__gm__ uint8_t *destination,
         aclshmem_getmem(destination + bulk, source + bulk, bytes - bulk, pe);
 }
 
-__aicore__ inline void PutExact(__gm__ uint8_t *destination,
-                                __gm__ uint8_t *source, uint32_t bytes,
-                                int32_t pe)
-{
-    const uint32_t bulk = bytes / kRmaAlignment * kRmaAlignment;
-    if (bulk != 0u) aclshmem_putmem(destination, source, bulk, pe);
-    if (bulk != bytes)
-        aclshmem_putmem(destination + bulk, source + bulk, bytes - bulk, pe);
-}
-
 __aicore__ inline void CopyFp32GmToUb(
     __gm__ float *source, __ubuf__ uint8_t *destination, uint32_t elements,
     uint32_t ready_for_mte2, uint32_t ready_for_vector)
@@ -56,26 +47,21 @@ __aicore__ inline void CopyFp32GmToUb(
     AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(ready_for_vector);
 }
 
-__aicore__ inline void CopyFp32UbToGm(
-    __ubuf__ uint8_t *source, __gm__ float *destination, uint32_t elements)
+__aicore__ inline void PutFp32UbRemote(
+    __ubuf__ uint8_t *source, __gm__ float *destination, uint32_t elements,
+    int32_t destination_pe)
 {
-    const uint32_t bytes = elements * sizeof(float);
-    AscendC::LocalTensor<uint8_t> ub;
-    AscendC::GlobalTensor<uint8_t> gm;
-    AscendC::DataCopyExtParams params(1u, bytes, 0u, 0u, 0u);
-    ub.address_.logicPos = static_cast<uint8_t>(AscendC::TPosition::VECOUT);
-    ub.address_.bufferAddr = reinterpret_cast<uint64_t>(source);
-    ub.address_.dataLen = static_cast<uint32_t>(IncVecUbAlignUp(bytes, 32));
-    gm.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(destination));
     AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(kVecVMte3);
-    AscendC::DataCopyPad(gm, ub, params);
+    aclshmemx_mte_put_nbi(
+        destination, reinterpret_cast<__ubuf__ float *>(source), elements,
+        destination_pe, 0u);
     AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
 }
 
 __aicore__ inline void ReduceOwnerFp32Vector(
     __gm__ float *staging, __gm__ float *output, uint64_t padded_elements,
     uint32_t worker_count, uint64_t logical_begin,
-    uint64_t local_begin, uint64_t local_end)
+    uint64_t local_begin, uint64_t local_end, int32_t owner_pe)
 {
     if (local_begin >= local_end) return;
     // The 910B wide-vector path is qualified at 1536 elements.  Ping, pong
@@ -133,7 +119,7 @@ __aicore__ inline void ReduceOwnerFp32Vector(
         }
 
         AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(kVecVMte3);
-        CopyFp32UbToGm(acc_ub, output + local, count);
+        PutFp32UbRemote(acc_ub, output + local, count, owner_pe);
     }
     AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
     AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
@@ -185,16 +171,17 @@ void inc_dc_pull_combine_device_e2e_kernel(
     // with the production fusion and MegaMoE device entry points.
     shmemx_set_ffts_config(ffts_addr);
     const uint32_t block = AscendC::GetBlockIdx();
-    const uint32_t blocks = AscendC::GetBlockNum();
     const int32_t pe = aclshmem_my_pe();
     constexpr uint64_t kFloatsPerCacheLine = 64u / sizeof(float);
     const uint64_t padded_elements =
         (static_cast<uint64_t>(elements) + kFloatsPerCacheLine - 1u) /
         kFloatsPerCacheLine * kFloatsPerCacheLine;
-    __gm__ uint32_t *status =
-        reinterpret_cast<__gm__ uint32_t *>(status_line);
+    __gm__ DeviceE2eTimeline *timeline =
+        reinterpret_cast<__gm__ DeviceE2eTimeline *>(status_line);
+    __gm__ uint32_t *status = &timeline->status;
 
     if (pe == inc_pe && block == 0u) {
+        timeline->cycle[kTimelineStart] = AscendC::GetSystemCycle();
         *status = kDeviceE2eStatusOk;
         for (uint32_t worker = 0u; worker < worker_count; ++worker) {
             __gm__ CombineReadyDescriptor *descriptor =
@@ -214,6 +201,8 @@ void inc_dc_pull_combine_device_e2e_kernel(
         dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(status));
     }
     AscendC::SyncAll<true>();
+    if (pe == inc_pe && block == 0u)
+        timeline->cycle[kTimelineDescriptorDone] = AscendC::GetSystemCycle();
 
     if (pe == inc_pe && *status == kDeviceE2eStatusOk) {
         const uint32_t worker = block / lanes_per_worker;
@@ -243,19 +232,18 @@ void inc_dc_pull_combine_device_e2e_kernel(
         }
     }
     AscendC::SyncAll<true>();
+    if (pe == inc_pe && block == 0u)
+        timeline->cycle[kTimelinePullDone] = AscendC::GetSystemCycle();
 
     if (pe == inc_pe && *status == kDeviceE2eStatusOk) {
-        // GET completes through MTE/SDMA, outside the scalar cache hierarchy.
-        // Acquire every padded staging cache line before AIV code consumes it.
-        const uint64_t staging_bytes = static_cast<uint64_t>(worker_count) *
-                                       padded_elements * sizeof(float);
-        for (uint64_t offset = static_cast<uint64_t>(block) * 64u;
-             offset < staging_bytes;
-             offset += static_cast<uint64_t>(blocks) * 64u) {
-            dcci_cacheline(inc_staging + offset);
-        }
+        // GET completion and the following consumer both use the MTE path.
+        // No scalar cache observes staging, so a full DCCI sweep is neither
+        // required nor desirable for large messages.
+        AscendC::PipeBarrier<PIPE_ALL>();
     }
     AscendC::SyncAll<true>();
+    if (pe == inc_pe && block == 0u)
+        timeline->cycle[kTimelineAcquireDone] = AscendC::GetSystemCycle();
 
     if (pe == inc_pe && *status == kDeviceE2eStatusOk) {
         // GET completion is now global across the INC kernel.  Publish one
@@ -309,60 +297,32 @@ void inc_dc_pull_combine_device_e2e_kernel(
         // across blocks would create cross-AIV false sharing.
         ReduceOwnerFp32Vector(
             staging,
-            output + static_cast<uint64_t>(owner) * padded_elements,
+            output,
             padded_elements, worker_count, owner_begin,
-            first_local_element, last_local_element);
+            first_local_element, last_local_element,
+            static_cast<int32_t>(owner));
         AscendC::PipeBarrier<PIPE_ALL>();
     }
     AscendC::SyncAll<true>();
+    if (pe == inc_pe && block == 0u)
+        timeline->cycle[kTimelineReduceDone] = AscendC::GetSystemCycle();
 
     if (pe == inc_pe && *status == kDeviceE2eStatusOk) {
-        // Scalar stores may still reside in an AIV cache.  The MTE/SDMA
-        // transport reads the source through a different engine, so every
-        // produced cache line must be made visible before egress starts.
-        const uint32_t owner = block / lanes_per_worker;
-        const uint32_t lane = block % lanes_per_worker;
-        const uint64_t owner_begin = static_cast<uint64_t>(elements) * owner /
-                                     worker_count;
-        const uint64_t owner_end = static_cast<uint64_t>(elements) *
-                                   (owner + 1u) / worker_count;
-        const uint64_t owner_elements = owner_end - owner_begin;
-        const uint64_t owner_lines =
-            (owner_elements + kFloatsPerCacheLine - 1u) /
-            kFloatsPerCacheLine;
-        const uint64_t first_line = owner_lines * lane / lanes_per_worker;
-        const uint64_t last_line = owner_lines * (lane + 1u) /
-                                   lanes_per_worker;
-        for (uint64_t line = first_line; line < last_line; ++line) {
-            dcci_cacheline(reduced_output +
-                           static_cast<uint64_t>(owner) *
-                               padded_elements * sizeof(float) +
-                           line * 64u);
-        }
+        // Reduce output is produced by MTE3 and consumed by MTE egress.  The
+        // vector helper has already drained MTE3 before this global phase.
+        AscendC::PipeBarrier<PIPE_ALL>();
     }
     AscendC::SyncAll<true>();
+    if (pe == inc_pe && block == 0u)
+        timeline->cycle[kTimelineReleaseDone] = AscendC::GetSystemCycle();
 
-    const uint32_t egress_owner = block / lanes_per_worker;
-    const uint32_t egress_lane = block % lanes_per_worker;
-    if (pe == inc_pe && *status == kDeviceE2eStatusOk &&
-        egress_owner < worker_count && egress_lane == 0u) {
-        const uint64_t begin = static_cast<uint64_t>(elements) *
-                               egress_owner / worker_count;
-        const uint64_t end = static_cast<uint64_t>(elements) *
-                             (egress_owner + 1u) / worker_count;
-        __gm__ float *segment = reinterpret_cast<__gm__ float *>(
-            reduced_output) + static_cast<uint64_t>(egress_owner) *
-            padded_elements;
-        const uint64_t owner_elements = end - begin;
-        const uint64_t owner_padded_elements =
-            (owner_elements + kFloatsPerCacheLine - 1u) /
-            kFloatsPerCacheLine * kFloatsPerCacheLine;
-        PutExact(reduced_output,
-                 reinterpret_cast<__gm__ uint8_t *>(segment),
-                 static_cast<uint32_t>(owner_padded_elements * sizeof(float)),
-                 static_cast<int32_t>(egress_owner));
-    }
+    // Egress was issued tile-by-tile directly from UB during reduction.
     AscendC::SyncAll<true>();
+    if (pe == inc_pe && block == 0u) {
+        timeline->cycle[kTimelineEgressDone] = AscendC::GetSystemCycle();
+        AscendC::PipeBarrier<PIPE_ALL>();
+        dcci_cacheline(status_line);
+    }
 }
 
 extern "C" void launch_inc_dc_pull_combine_device_e2e(

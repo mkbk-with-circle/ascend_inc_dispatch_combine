@@ -12,6 +12,7 @@
 #include "utils.h"
 
 #include "inc_dc_pull_combine_abi.h"
+#include "inc_dc_pull_combine_device_e2e_abi.h"
 
 using namespace inc::dc::pull_combine;
 
@@ -91,6 +92,7 @@ int main(int argc, char **argv)
     uint8_t *acks = nullptr;
     uint8_t *status_line = nullptr;
     double device_e2e_us = 0.0;
+    DeviceE2eTimeline timeline{};
 
     int status = aclInit(nullptr);
     if (status == 0) status = aclrtSetDevice(device);
@@ -204,10 +206,10 @@ int main(int argc, char **argv)
 
     bool correct = status == 0;
     if (correct && pe == inc_pe) {
-        uint32_t device_status = 0u;
-        status = aclrtMemcpy(&device_status, sizeof(device_status), status_line,
-                             sizeof(device_status), ACL_MEMCPY_DEVICE_TO_HOST);
-        correct = status == 0 && device_status == 0u;
+        status = aclrtMemcpy(&timeline, sizeof(timeline), status_line,
+                             sizeof(timeline), ACL_MEMCPY_DEVICE_TO_HOST);
+        correct = status == 0 && timeline.status == 0u &&
+                  timeline.reserved == 0u;
     }
     if (correct && pe < inc_pe) {
         CombineAck ack{};
@@ -270,6 +272,19 @@ int main(int argc, char **argv)
         std::cout << " e2e_us=" << device_e2e_us
                   << " logical_rma_gb_s="
                   << logical_rma_bytes / device_e2e_us / 1.0e3;
+        const uint64_t total_cycles =
+            timeline.cycle[kTimelineEgressDone] -
+            timeline.cycle[kTimelineStart];
+        if (total_cycles != 0u) {
+            std::cout << " phase_pct=";
+            for (uint32_t point = 1u; point < kTimelinePointCount; ++point) {
+                if (point != 1u) std::cout << ',';
+                const uint64_t phase_cycles = timeline.cycle[point] -
+                    timeline.cycle[point - 1u];
+                std::cout << 100.0 * static_cast<double>(phase_cycles) /
+                    static_cast<double>(total_cycles);
+            }
+        }
     }
     std::cout << '\n';
     return 0;
