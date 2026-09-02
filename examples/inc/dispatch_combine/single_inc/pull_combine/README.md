@@ -9,7 +9,7 @@
 count:    A0..An ──PUT counts──> INC ──transpose/PUT reply──> B0..Bn
 dispatch: A ──PUT one hidden row + route──> INC ──dedup fan-out PUT──> B
 compute:  B local experts ──local reduce per (token, B)──> partial rows
-combine:  B ──ready descriptor──> INC ──GET/complete/reduce──> accumulator
+combine:  B ──ready(count)──> INC ──GET token IDs + partials/reduce──> result
 egress:   ready token runs ──coalesced PUT──> original A ──completion
 ```
 
@@ -17,7 +17,8 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
 
 - A 对每个 token 只向 INC 上传一份 hidden；同一 B 上的多个 expert 共享该份。
 - count 矩阵物理路径只能是 worker→INC→worker。
-- Combine 不重新传 token ID；它使用 Dispatch 产生的确定性 packed-row 逆映射。
+- Combine 的每个 B 行都携带 token ID。规范顺序走 Dispatch journal 的零重排
+  快路径；任意顺序走 journal hash 动态建表，两种路径语义相同。
 - INC 只保留当前 generation/wave 的临时状态，跨 wave 不保存路由状态。
 - ACK 只在相关 GET 或下游 PUT 完成后发布；失败也发布负 ACK 释放发送槽。
 - generation、sequence、semantic digest、范围、字节数、保留字段均 fail-closed。
@@ -50,6 +51,15 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
   worker 的发送槽可在 ACK 后复用，同时后续 Combine/index kernel 仍能从 INC
   packet 在线恢复 token ID、owner row 和 contributor bitmap。64 MiB case 未出现
   journal 构建导致的性能回退。
+- 已完成：Dispatch journal 驱动的稀疏设备 Combine。B 只发布 count/descriptor，
+  INC 按任意到达次序立即 GET token IDs；规范行序直接使用 journal row-map，乱序
+  行通过 token hash 恢复。随后由 24 个普通 AIV 直接从 B HBM 拉到 UB，严格 FP32
+  reduce，并仅向原 owner PUT 一份结果。
+- 已完成：Combine descriptor 采用 generation commit-word 两阶段发布，避免 128B
+  descriptor 跨 cache-line 撕裂；journal 的 `INDEX_READY` 也只在 entries/hash/
+  row-map/counts 全部 flush 后发布。
+- 已完成：B 晚到、行重排、空 batch、非 tile 对齐 hidden、top-k 大于 worker 数、
+  descriptor 损坏及 token ID 损坏的设备 gate；失败均负 ACK/负 completion，无挂死。
 - 已完成：空 wave、零路由 token、重复目的 rank、`topk > worker_count`、乱序到达、
   分块传输、提前 egress、ring 回压、负 ACK 与计划生命周期保护。
 - 已完成：910B 上高阶 SHMEM GET 正确性和 W2/W4 聚合带宽锚点。
@@ -68,9 +78,7 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
   在单调地址 pull 中长期空转；小于两个 chunk 时自动回退到零握手 owner-slice。
 - 已完成：descriptor 或 ready 超时均 fail-closed；成功 ACK 只在 source 已消费且
   egress 完成后发布，失败 ACK 的 `rows_consumed=0`，不会永久占住发送槽。
-- 未完成：持久化设备 server、Dispatch journal 驱动的稀疏 token-ID Combine
-  **设备数据面**、
-  跨 wave 端到端 Dispatch+Combine gate、公共 API 接入。当前 endpoint Dispatch
+- 未完成：跨 wave ring 的持久化设备 server、公共 API 接入。当前 endpoint Dispatch
   是完整单 wave 算子，但 destination 侧 wire-view 筛选还只在 qualification
   harness 中校验，尚未与正式 expert packing kernel 融合。
 
@@ -113,15 +121,18 @@ cmake --build /tmp/shmem-pull-combine-v1-build --target \
 gate，不是公共 API。lane 传 0 时，从实际 `VECTOR_CORE_NUM` 取一半作为 Combine
 预算，再平均分给 worker；不写死 910B 的 40 AIV 或 W2/W4。
 
-设备 Dispatch qualification 参数为
-`<workers> <pe> <ipport> <first_npu> <tokens> <hidden> <topk> [aiv] [fault]`。
+设备 Dispatch+Combine qualification 参数为
+`<workers> <pe> <ipport> <first_npu> <tokens> <hidden> <topk> [aiv] [fault]`
+` [delay_rank] [device_delay_cycles] [reorder_combine_rows]`。
 `aiv=0` 自动取实时 `VECTOR_CORE_NUM` 的一半；`fault=1..4` 分别注入 digest、重复
-ordinal、非有限 weight 和 count mismatch。当前使用 BF16
+ordinal、非有限 weight 和 count mismatch，`fault=5..6` 分别破坏 Combine
+descriptor 和 token ID。`delay_rank` 在设备内延迟一个 B 的通知；最后一个参数为
+1 时会重排每个 B 的 Combine 行，强制走 hash fallback。当前 Dispatch 使用 BF16
 hidden，逐字节检查 A→INC packet、count reply、按 destination 去重后的 hidden、
-token/assignment wire view、ACK 和 completion。W2/W4 随机形状覆盖 hidden=1–4096、
-top-k=1–8 及 top-k>worker，四种损坏包均正确拒绝。该 target 证明完整单 wave
-Dispatch 语义闭环；带宽口径包含 packet upload、在线解析、count transpose、
-hidden fan-out、metadata wire view、ACK 和 completion，不是纯链路带宽。
+token/assignment wire view、ACK 和 completion；Combine 使用 FP32 partial 并对回传
+结果逐元素严格比较。W2/W4 边界矩阵覆盖 token=0/1、hidden=1、1535/1536/1537、
+4097、top-k=1–8 及 top-k>worker，六种损坏输入均正确拒绝。该 target 证明完整
+单 wave Dispatch→journal→Combine 语义闭环；带宽口径包含控制与数据面，不是纯链路。
 
 ### 当前设备 Dispatch 性能（2026-09-03）
 
@@ -142,6 +153,31 @@ hidden ingress 和去重后的 destination hidden egress；metadata/control 虽�
 这是当前稳定正确检查点，不代表最终 90% gate 已通过。nb 的 W2/W4 单向 raw
 参考分别为 56/112 GB/s，而完整 Dispatch 同时包含 ingress、在线路由和 fan-out，
 两者不能直接当作相同口径；后续仍需用同一路由分布的实测 roofline 判定。
+
+### Endpoint 稀疏 Dispatch+Combine（2026-09-03）
+
+这是本目录新协议的完整单 wave 设备路径，不是单程链路：
+`A packet PUT → INC parse/fan-out → device journal/index → B ready →`
+`INC token-ID GET → partial GET/reduce → owner PUT → ACK/completion`。
+资格程序把 journal/index 串行计入 `serial_dc_us`；真实推理可让 INC 的 index 与
+worker expert compute 重叠，因此同时保留各阶段时间。Combine 的
+`logical_combine_gb_s=(实际 partial ingress + owner egress)/完整 Combine 时间`；
+上下行已流水交叠，所以该值可能超过单方向 raw roof，不能解释成单条链路速率。
+
+| 同平面规模 | 64 MiB/worker 参数 | Dispatch（3轮） | Combine（3轮） | 串行 D+index+C | 正确性 |
+|---|---|---:|---:|---:|---|
+| W2+1INC | 4096×8192, top-k 2 | 29.776 GB/s，CV 0.308% | 58.527 GB/s，CV 0.624% | 20.886 ms，38.54 GB/s | 全量逐元素 PASS |
+| W4+1INC | 2048×16384, top-k 4 | 56.094 GB/s，CV 0.275% | 96.078 GB/s，CV 0.532% | 35.329 ms，68.37 GB/s | 全量逐元素 PASS |
+
+同一批 W2 Combine 的 ingress/egress 均约 29.26 GB/s；W4 分别约
+64.05/32.03 GB/s（路由使 ingress 字节数为 egress 的 2 倍）。W2/W4 的 logical
+Combine 分别为单向 raw 参考 56/112 GB/s 的 104.5%/85.8%；W2 超过 100% 是双向
+交叠和 logical bytes 口径导致，不代表物理链路超频。W4 仍未达到按 112 GB/s
+直接计算的 90%（100.8 GB/s），因此这里只记录当前稳定最优值，不虚报 gate。
+
+额外 gate：六组 W2/W4 并行边界矩阵全部通过；Combine 行循环移位后 hash fallback
+通过；一个 B 在设备内晚到约 2 秒仍完成；Dispatch 四类和 Combine 两类故障均
+fail-closed。0-token/hidden=4096/top-k=0 的空 wave 也完成且输出 0 logical bytes。
 
 ## nb-borrow 设备锚点（2026-09-02）
 
