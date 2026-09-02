@@ -134,6 +134,11 @@ void inc_dc_device_journal_index_kernel(
     for (uint32_t destination = 0u; destination < worker_count;
          ++destination)
         destination_count[destination] = destination_cursor[destination];
+    // Header::flags is the publication word for entries, hash, canonical row
+    // map and destination counts.  Flush every preceding scalar GM write
+    // before making INDEX_READY observable to a later kernel/AIV.
+    AscendC::PipeBarrier<PIPE_ALL>();
+    dcci_entire_cache();
     header->flags = kDeviceJournalIndexReady;
     dcci_cacheline(journal_header);
 }

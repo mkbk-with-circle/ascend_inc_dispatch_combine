@@ -45,12 +45,15 @@ extern "C" void launch_inc_dc_sparse_combine_device_e2e(
     uint8_t *symmetric_partials, uint8_t *reduced_output,
     uint8_t *descriptor_mailbox, uint8_t *ack_mailbox,
     uint8_t *completion_mailbox, uint8_t *journal_header,
-    uint8_t *journal_entries, uint8_t *journal_row_map,
-    uint8_t *destination_rows, uint8_t *inc_token_ids,
+    uint8_t *journal_entries, uint8_t *journal_hash,
+    uint8_t *journal_row_map, uint8_t *combine_row_map,
+    uint8_t *destination_rows,
+    uint8_t *inc_token_ids,
     uint8_t *status_line, uint64_t ffts_addr,
-    uint64_t journal_capacity, uint64_t row_capacity, uint32_t hidden,
-    uint32_t worker_count, int32_t inc_pe, uint64_t generation,
-    uint32_t wave, int32_t delay_rank, uint64_t delay_cycles);
+    uint64_t journal_capacity, uint64_t journal_hash_capacity,
+    uint64_t row_capacity, uint32_t hidden, uint32_t worker_count,
+    int32_t inc_pe, uint64_t generation, uint32_t wave, int32_t delay_rank,
+    uint64_t delay_cycles, uint32_t combine_flags);
 
 int g_npus = 5;
 const char *ipport = "tcp://127.0.0.1:28780";
@@ -190,14 +193,15 @@ bool CopyFromDevice(std::vector<T> *host, uint8_t *device, uint64_t count)
 
 int main(int argc, char **argv)
 {
-    if (argc < 8 || argc > 12) {
+    if (argc < 8 || argc > 13) {
         std::cerr << "usage: " << argv[0]
                   << " <workers> <pe> <ipport> <first_npu> <tokens>"
                      " <hidden> <topk> [aiv; 0=half of live AIV]"
                      " [fault; 0=none, 1=digest, 2=duplicate ordinal,"
                      " 3=nonfinite weight, 4=count mismatch,"
                      " 5=combine descriptor, 6=combine token ID]"
-                     " [delay_rank; -1=none] [device_delay_cycles]\n";
+                     " [delay_rank; -1=none] [device_delay_cycles]"
+                     " [reorder_combine_rows; 0|1]\n";
         return 2;
     }
     const uint32_t workers = static_cast<uint32_t>(std::strtoul(
@@ -218,14 +222,18 @@ int main(int argc, char **argv)
     const int32_t delay_rank = argc >= 11 ? std::atoi(argv[10]) : -1;
     const uint64_t delay_cycles = argc >= 12
         ? std::strtoull(argv[11], nullptr, 10) : 0u;
+    const uint32_t reorder_combine_rows = argc >= 13
+        ? static_cast<uint32_t>(std::strtoul(argv[12], nullptr, 10)) : 0u;
     const uint32_t pes = workers + 1u;
     const int inc_pe = static_cast<int>(workers);
     g_npus = static_cast<int>(pes);
     if (workers < 2u || workers > 8u || pe < 0 ||
-        pe >= static_cast<int>(pes) || tokens == 0u || hidden == 0u ||
-        topk == 0u || topk > 32u || fault > 6u || delay_rank < -1 ||
+        pe >= static_cast<int>(pes) || hidden == 0u ||
+        (tokens != 0u && topk == 0u) || topk > 32u || fault > 6u ||
+        (tokens == 0u && fault != 0u) || delay_rank < -1 ||
         delay_rank >= static_cast<int32_t>(workers) ||
-        (delay_rank == -1 && delay_cycles != 0u)) {
+        (delay_rank == -1 && delay_cycles != 0u) ||
+        reorder_combine_rows > 1u) {
         return Fail("arguments", 2);
     }
 
@@ -274,9 +282,10 @@ int main(int argc, char **argv)
     }
     const uint64_t slot_bytes = local_packet.size();
     const uint64_t row_bytes = static_cast<uint64_t>(hidden) * 2u;
-    const uint64_t row_capacity = static_cast<uint64_t>(workers) * tokens;
-    const uint64_t assignment_capacity =
-        static_cast<uint64_t>(workers) * tokens * topk;
+    const uint64_t row_capacity = std::max<uint64_t>(
+        1u, static_cast<uint64_t>(workers) * tokens);
+    const uint64_t assignment_capacity = std::max<uint64_t>(
+        1u, static_cast<uint64_t>(workers) * tokens * topk);
     const uint64_t journal_capacity = row_capacity;
     const uint64_t journal_hash_capacity = NextPowerOfTwo(
         journal_capacity * 2u);
@@ -330,6 +339,7 @@ int main(int argc, char **argv)
     uint8_t *journal_entries = nullptr;
     uint8_t *journal_hash = nullptr;
     uint8_t *journal_row_map = nullptr;
+    uint8_t *combine_row_map = nullptr;
     uint8_t *destination_rows = nullptr;
     uint8_t *combine_token_ids = nullptr;
     uint8_t *combine_partials = nullptr;
@@ -399,6 +409,9 @@ int main(int argc, char **argv)
         journal_row_map = static_cast<uint8_t *>(aclshmem_malloc(
             static_cast<uint64_t>(workers) * journal_capacity *
             sizeof(uint32_t)));
+        combine_row_map = static_cast<uint8_t *>(aclshmem_malloc(
+            static_cast<uint64_t>(workers) * journal_capacity *
+            sizeof(uint32_t)));
         destination_rows = static_cast<uint8_t *>(aclshmem_malloc(
             static_cast<uint64_t>(workers) * sizeof(uint32_t)));
         combine_token_ids = static_cast<uint8_t *>(aclshmem_malloc(
@@ -406,7 +419,8 @@ int main(int argc, char **argv)
         combine_partials = static_cast<uint8_t *>(aclshmem_malloc(
             combine_row_capacity * hidden * sizeof(float)));
         combine_output = static_cast<uint8_t *>(aclshmem_malloc(
-            static_cast<uint64_t>(tokens) * hidden * sizeof(float)));
+            std::max<uint64_t>(1u, static_cast<uint64_t>(tokens) * hidden) *
+            sizeof(float)));
         combine_descriptors = static_cast<uint8_t *>(aclshmem_malloc(
             static_cast<uint64_t>(workers) *
             sizeof(SparseCombineReadyDescriptor)));
@@ -419,7 +433,7 @@ int main(int argc, char **argv)
         inc_combine_token_ids = static_cast<uint8_t *>(aclshmem_malloc(
             static_cast<uint64_t>(workers) * combine_row_capacity *
             sizeof(uint64_t)));
-        combine_status_line = static_cast<uint8_t *>(aclshmem_malloc(64u));
+        combine_status_line = static_cast<uint8_t *>(aclshmem_malloc(128u));
         status_line = static_cast<uint8_t *>(aclshmem_malloc(64u));
         if (source_packet == nullptr || inc_packets == nullptr ||
             commits == nullptr || recv_hidden == nullptr ||
@@ -430,6 +444,7 @@ int main(int argc, char **argv)
              hidden_staging == nullptr) ||
             journal_header == nullptr || journal_entries == nullptr ||
             journal_hash == nullptr || journal_row_map == nullptr ||
+            combine_row_map == nullptr ||
             destination_rows == nullptr ||
             combine_token_ids == nullptr || combine_partials == nullptr ||
             combine_output == nullptr || combine_descriptors == nullptr ||
@@ -489,6 +504,15 @@ int main(int argc, char **argv)
                 static_cast<uint64_t>(workers) * journal_capacity *
                     sizeof(uint32_t),
                 ACL_MEMCPY_HOST_TO_DEVICE);
+        if (status == 0)
+            status = aclrtMemcpy(
+                combine_row_map,
+                static_cast<uint64_t>(workers) * journal_capacity *
+                    sizeof(uint32_t),
+                empty_rows.data(),
+                static_cast<uint64_t>(workers) * journal_capacity *
+                    sizeof(uint32_t),
+                ACL_MEMCPY_HOST_TO_DEVICE);
         ZeroDevice(destination_rows,
                    static_cast<uint64_t>(workers) * sizeof(uint32_t));
         ZeroDevice(combine_token_ids,
@@ -496,7 +520,9 @@ int main(int argc, char **argv)
         ZeroDevice(combine_partials,
                    combine_row_capacity * hidden * sizeof(float));
         ZeroDevice(combine_output,
-                   static_cast<uint64_t>(tokens) * hidden * sizeof(float));
+                   std::max<uint64_t>(
+                       1u, static_cast<uint64_t>(tokens) * hidden) *
+                       sizeof(float));
         ZeroDevice(combine_descriptors,
                    static_cast<uint64_t>(workers) *
                        sizeof(SparseCombineReadyDescriptor));
@@ -509,11 +535,15 @@ int main(int argc, char **argv)
         ZeroDevice(inc_combine_token_ids,
                    static_cast<uint64_t>(workers) * combine_row_capacity *
                        sizeof(uint64_t));
-        ZeroDevice(combine_status_line, 64u);
+        ZeroDevice(combine_status_line, 128u);
         ZeroDevice(status_line, 64u);
     }
     if (status == 0 && pe < inc_pe && !expect_reject) {
         std::vector<uint64_t> ids = combine_ids_by_worker[pe];
+        if (reorder_combine_rows != 0u && ids.size() > 1u && fault != 6u) {
+            const size_t rotate = (static_cast<size_t>(pe) + 1u) % ids.size();
+            std::rotate(ids.begin(), ids.begin() + rotate, ids.end());
+        }
         if (fault == 6u && pe == 0 && !ids.empty()) ids[0] ^= 1u;
         std::vector<float> partials(
             static_cast<size_t>(ids.size()) * hidden);
@@ -521,11 +551,12 @@ int main(int argc, char **argv)
             for (uint32_t element = 0u; element < hidden; ++element)
                 partials[static_cast<uint64_t>(row) * hidden + element] =
                     PartialValue(pe, ids[row], element);
-        status = aclrtMemcpy(combine_token_ids,
-                             ids.size() * sizeof(uint64_t), ids.data(),
-                             ids.size() * sizeof(uint64_t),
-                             ACL_MEMCPY_HOST_TO_DEVICE);
-        if (status == 0)
+        if (!ids.empty())
+            status = aclrtMemcpy(combine_token_ids,
+                                 ids.size() * sizeof(uint64_t), ids.data(),
+                                 ids.size() * sizeof(uint64_t),
+                                 ACL_MEMCPY_HOST_TO_DEVICE);
+        if (status == 0 && !partials.empty())
             status = aclrtMemcpy(
                 combine_partials, partials.size() * sizeof(float),
                 partials.data(), partials.size() * sizeof(float),
@@ -541,6 +572,8 @@ int main(int argc, char **argv)
         descriptor.payload_bytes =
             static_cast<uint64_t>(ids.size()) * hidden * sizeof(float);
         descriptor.metadata_digest = 1u + static_cast<uint32_t>(pe);
+        descriptor.flags = reorder_combine_rows == 0u
+            ? kSparseCombineFlagCanonicalRows : 0u;
         if (fault == 5u && pe == 0) ++descriptor.row_count;
         if (status == 0)
             status = aclrtMemcpy(
@@ -601,10 +634,13 @@ int main(int argc, char **argv)
             dispatch_aiv, stream, combine_token_ids, combine_partials,
             combine_output, combine_descriptors, combine_acks,
             combine_completions, journal_header, journal_entries,
-            journal_row_map, destination_rows, inc_combine_token_ids,
-            combine_status_line, shmemx_get_ffts_config(),
-            journal_capacity, combine_row_capacity, hidden, workers, inc_pe,
-            kGeneration, kWave, delay_rank, delay_cycles);
+            journal_hash, journal_row_map, combine_row_map,
+            destination_rows, inc_combine_token_ids, combine_status_line,
+            shmemx_get_ffts_config(), journal_capacity,
+            journal_hash_capacity, combine_row_capacity, hidden, workers,
+            inc_pe, kGeneration, kWave, delay_rank, delay_cycles,
+            reorder_combine_rows == 0u
+                ? kSparseCombineFlagCanonicalRows : 0u);
         status = aclrtSynchronizeStream(stream);
         const auto end = std::chrono::steady_clock::now();
         combine_us = std::chrono::duration<double, std::micro>(end - begin)
@@ -1087,6 +1123,41 @@ int main(int argc, char **argv)
                 }
             }
         }
+        if (!correct && combine_device_status == 4u) {
+            std::vector<DeviceJournalEntry> debug_entries;
+            std::vector<uint32_t> debug_map;
+            std::vector<uint32_t> debug_rows;
+            if (CopyFromDevice(&debug_entries, journal_entries,
+                               static_cast<uint64_t>(workers) * tokens) &&
+                CopyFromDevice(&debug_map, combine_row_map,
+                               static_cast<uint64_t>(workers) *
+                                   journal_capacity) &&
+                CopyFromDevice(&debug_rows, destination_rows, workers)) {
+                for (uint32_t source = 0u; source < workers; ++source) {
+                    for (uint64_t index = 0u;
+                         index < debug_entries.size(); ++index) {
+                        const bool expected =
+                            (debug_entries[index].expected[source >> 6u] &
+                             (1ull << (source & 63u))) != 0u;
+                        const uint32_t row = debug_map[
+                            static_cast<uint64_t>(source) *
+                                journal_capacity + index];
+                        if ((!expected && row != kDeviceJournalEmpty) ||
+                            (expected && row >= debug_rows[source])) {
+                            std::cerr << "[FAIL] runtime row map source="
+                                      << source << " index=" << index
+                                      << " token="
+                                      << debug_entries[index].token_id
+                                      << " expected=" << expected
+                                      << " row=" << row << " rows="
+                                      << debug_rows[source] << '\n';
+                            source = workers;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if (status == 0) aclshmem_barrier_all();
@@ -1101,6 +1172,7 @@ int main(int argc, char **argv)
     if (combine_partials != nullptr) aclshmem_free(combine_partials);
     if (combine_token_ids != nullptr) aclshmem_free(combine_token_ids);
     if (destination_rows != nullptr) aclshmem_free(destination_rows);
+    if (combine_row_map != nullptr) aclshmem_free(combine_row_map);
     if (journal_row_map != nullptr) aclshmem_free(journal_row_map);
     if (journal_hash != nullptr) aclshmem_free(journal_hash);
     if (journal_entries != nullptr) aclshmem_free(journal_entries);
@@ -1141,23 +1213,42 @@ int main(int argc, char **argv)
                 for (uint8_t value : seen) fanout_rows += value;
             }
         }
-        const double logical_hidden_bytes =
-            static_cast<double>(workers) * tokens * row_bytes +
+        const double dispatch_ingress_bytes =
+            static_cast<double>(workers) * tokens * row_bytes;
+        const double dispatch_egress_bytes =
             static_cast<double>(fanout_rows) * row_bytes;
+        const double logical_hidden_bytes = dispatch_ingress_bytes +
+            dispatch_egress_bytes;
         std::cout << " e2e_us=" << e2e_us
                   << " logical_hidden_gb_s="
                   << logical_hidden_bytes / e2e_us / 1.0e3
+                  << " dispatch_ingress_gb_s="
+                  << dispatch_ingress_bytes / e2e_us / 1.0e3
+                  << " dispatch_egress_gb_s="
+                  << dispatch_egress_bytes / e2e_us / 1.0e3
                   << " journal_index_us=" << index_us;
         uint64_t combine_ingress_rows = 0u;
         for (uint32_t rows : combine_rows_per_worker)
             combine_ingress_rows += rows;
-        const double logical_combine_bytes =
-            static_cast<double>(combine_ingress_rows +
-                                static_cast<uint64_t>(workers) * tokens) *
-            hidden * sizeof(float);
+        const double combine_ingress_bytes =
+            static_cast<double>(combine_ingress_rows) * hidden *
+            sizeof(float);
+        const double combine_egress_bytes =
+            static_cast<double>(workers) * tokens * hidden * sizeof(float);
+        const double logical_combine_bytes = combine_ingress_bytes +
+            combine_egress_bytes;
         std::cout << " combine_us=" << combine_us
                   << " logical_combine_gb_s="
-                  << logical_combine_bytes / combine_us / 1.0e3;
+                  << logical_combine_bytes / combine_us / 1.0e3
+                  << " combine_ingress_gb_s="
+                  << combine_ingress_bytes / combine_us / 1.0e3
+                  << " combine_egress_gb_s="
+                  << combine_egress_bytes / combine_us / 1.0e3;
+        const double serial_dc_us = e2e_us + index_us + combine_us;
+        std::cout << " serial_dc_us=" << serial_dc_us
+                  << " serial_dc_logical_gb_s="
+                  << (logical_hidden_bytes + logical_combine_bytes) /
+                         serial_dc_us / 1.0e3;
     }
     std::cout << '\n';
     return 0;

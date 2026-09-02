@@ -30,6 +30,15 @@ constexpr uint32_t kVMte3[2]{5u, 7u};
 static_assert(kTileBytes * 4u <= INC_VEC_UB_BUDGET_BYTES,
               "sparse Combine tile exceeds AIV UB budget");
 
+__aicore__ inline uint64_t HashToken(uint64_t value)
+{
+    value ^= value >> 33u;
+    value *= 0xff51afd7ed558ccdull;
+    value ^= value >> 33u;
+    value *= 0xc4ceb9fe1a85ec53ull;
+    return value ^ (value >> 33u);
+}
+
 __aicore__ inline bool WaitControlValue(__gm__ uint32_t *value,
                                         uint32_t expected)
 {
@@ -71,7 +80,8 @@ __aicore__ inline bool DescriptorValid(
         descriptor->token_ids_offset != 0u || descriptor->payload_offset != 0u ||
         descriptor->payload_bytes !=
             static_cast<uint64_t>(expected_rows) * hidden * sizeof(float) ||
-        descriptor->metadata_digest == 0u || descriptor->flags != 0u ||
+        descriptor->metadata_digest == 0u ||
+        (descriptor->flags & ~kSparseCombineFlagCanonicalRows) != 0u ||
         descriptor->reserved0 != 0u)
         return false;
     for (uint32_t i = 0u; i < 4u; ++i)
@@ -152,12 +162,14 @@ void inc_dc_sparse_combine_device_e2e_kernel(
     GM_ADDR symmetric_token_ids, GM_ADDR symmetric_partials,
     GM_ADDR reduced_output, GM_ADDR descriptor_mailbox, GM_ADDR ack_mailbox,
     GM_ADDR completion_mailbox, GM_ADDR journal_header,
-    GM_ADDR journal_entries, GM_ADDR journal_row_map,
-    GM_ADDR destination_rows, GM_ADDR inc_token_ids, GM_ADDR status_line,
-    uint64_t ffts_addr, uint64_t journal_capacity,
+    GM_ADDR journal_entries, GM_ADDR journal_hash,
+    GM_ADDR journal_row_map, GM_ADDR combine_row_map,
+    GM_ADDR destination_rows,
+    GM_ADDR inc_token_ids, GM_ADDR status_line, uint64_t ffts_addr,
+    uint64_t journal_capacity, uint64_t journal_hash_capacity,
     uint64_t row_capacity, uint32_t hidden, uint32_t worker_count,
-    int32_t inc_pe, uint64_t generation, uint32_t wave,
-    int32_t delay_rank, uint64_t delay_cycles)
+    int32_t inc_pe, uint64_t generation, uint32_t wave, int32_t delay_rank,
+    uint64_t delay_cycles, uint32_t combine_flags)
 {
     shmemx_set_ffts_config(ffts_addr);
     const uint32_t block = AscendC::GetBlockIdx();
@@ -205,6 +217,15 @@ void inc_dc_sparse_combine_device_e2e_kernel(
         reinterpret_cast<__gm__ uint32_t *>(destination_rows);
     __gm__ DeviceJournalHeader *header =
         reinterpret_cast<__gm__ DeviceJournalHeader *>(journal_header);
+    __gm__ DeviceJournalEntry *entries =
+        reinterpret_cast<__gm__ DeviceJournalEntry *>(journal_entries);
+    __gm__ uint32_t *hash = reinterpret_cast<__gm__ uint32_t *>(journal_hash);
+    __gm__ uint32_t *row_map =
+        reinterpret_cast<__gm__ uint32_t *>(combine_row_map);
+    __gm__ uint32_t *canonical_row_map =
+        reinterpret_cast<__gm__ uint32_t *>(journal_row_map);
+    __gm__ uint64_t *pulled_ids =
+        reinterpret_cast<__gm__ uint64_t *>(inc_token_ids);
     if (block == 0u) {
         *status = kStatusOk;
         *initialized = 0u;
@@ -217,7 +238,9 @@ void inc_dc_sparse_combine_device_e2e_kernel(
             header->generation != generation || header->wave != wave ||
             header->worker_count != worker_count || header->status != 0u ||
             header->flags != kDeviceJournalIndexReady ||
-            header->token_count > journal_capacity) {
+            header->token_count > journal_capacity ||
+            journal_hash_capacity == 0u ||
+            (journal_hash_capacity & (journal_hash_capacity - 1u)) != 0u) {
             *status = kStatusInvalidJournal;
         }
         *initialized = wave + 1u;
@@ -243,7 +266,8 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                 if (expected_rows[source] > row_capacity ||
                     !DescriptorValid(descriptor, source,
                                      expected_rows[source], hidden,
-                                     generation, wave)) {
+                                     generation, wave) ||
+                    descriptor->flags != combine_flags) {
                     *status = kStatusInvalidDescriptor;
                     break;
                 }
@@ -254,6 +278,50 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                     reinterpret_cast<__gm__ uint8_t *>(
                         symmetric_token_ids),
                     expected_rows[source] * sizeof(uint64_t), source);
+                const bool canonical_rows = (combine_flags &
+                    kSparseCombineFlagCanonicalRows) != 0u;
+                if (!canonical_rows) {
+                    // General fallback: B may return locally reduced rows in
+                    // any order. Resolve carried IDs through the Dispatch hash
+                    // and publish a source-private runtime map.
+                    __gm__ uint32_t *source_map = row_map +
+                        static_cast<uint64_t>(source) * journal_capacity;
+                    for (uint64_t index = 0u; index < header->token_count;
+                         ++index)
+                        source_map[index] = kDeviceJournalEmpty;
+                    for (uint32_t row = 0u;
+                         row < expected_rows[source]; ++row) {
+                        const uint64_t token_id = pulled_ids[
+                            static_cast<uint64_t>(source) * row_capacity +
+                            row];
+                        uint64_t bucket = HashToken(token_id) &
+                            (journal_hash_capacity - 1u);
+                        uint32_t entry_index = kDeviceJournalEmpty;
+                        for (uint64_t probe = 0u;
+                             probe < journal_hash_capacity; ++probe) {
+                            const uint32_t candidate = hash[bucket];
+                            if (candidate == kDeviceJournalEmpty) break;
+                            if (candidate < header->token_count &&
+                                entries[candidate].token_id == token_id) {
+                                entry_index = candidate;
+                                break;
+                            }
+                            bucket = (bucket + 1u) &
+                                (journal_hash_capacity - 1u);
+                        }
+                        if (entry_index == kDeviceJournalEmpty ||
+                            (entries[entry_index].expected[source >> 6u] &
+                             (1ull << (source & 63u))) == 0u ||
+                            source_map[entry_index] != kDeviceJournalEmpty) {
+                            *status = kStatusTokenMismatch;
+                            break;
+                        }
+                        source_map[entry_index] = row;
+                    }
+                }
+                if (*status != kStatusOk) break;
+                AscendC::PipeBarrier<PIPE_ALL>();
+                if (!canonical_rows) dcci_entire_cache();
                 source_ready[source] = 1u;
                 AscendC::PipeBarrier<PIPE_ALL>();
                 dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
@@ -272,12 +340,6 @@ void inc_dc_sparse_combine_device_e2e_kernel(
     }
     dcci_cacheline(status_line);
 
-    __gm__ DeviceJournalEntry *entries =
-        reinterpret_cast<__gm__ DeviceJournalEntry *>(journal_entries);
-    __gm__ uint32_t *row_map =
-        reinterpret_cast<__gm__ uint32_t *>(journal_row_map);
-    __gm__ uint64_t *pulled_ids =
-        reinterpret_cast<__gm__ uint64_t *>(inc_token_ids);
     __gm__ float *partials =
         reinterpret_cast<__gm__ float *>(symmetric_partials);
     __gm__ float *output = reinterpret_cast<__gm__ float *>(reduced_output);
@@ -307,36 +369,55 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                 header->token_count
             ? index_begin + entries_per_reducer
             : header->token_count;
+        bool source_acquired[128]{};
+        const bool canonical = (combine_flags &
+            kSparseCombineFlagCanonicalRows) != 0u;
         for (uint64_t index = index_begin; index < index_end; ++index) {
             __gm__ DeviceJournalEntry *entry = entries + index;
+            uint32_t token_rows[128]{};
             for (uint32_t source = 0u; source < worker_count; ++source) {
                 const bool expected =
                     (entry->expected[source >> 6u] &
                      (1ull << (source & 63u))) != 0u;
-                if (expected &&
-                    !WaitSourceReady(source_ready + source, status)) {
-                    if (*status == kStatusOk)
-                        *status = kStatusDescriptorTimeout;
+                if (!expected) continue;
+                if (!source_acquired[source]) {
+                    if (!WaitSourceReady(source_ready + source, status)) {
+                        if (*status == kStatusOk)
+                            *status = kStatusDescriptorTimeout;
+                        break;
+                    }
+                    source_acquired[source] = true;
+                }
+                __gm__ uint32_t *selected_map = canonical
+                    ? canonical_row_map : row_map;
+                __gm__ uint32_t *row_pointer = selected_map +
+                    static_cast<uint64_t>(source) * journal_capacity + index;
+                if (!canonical)
+                    dcci_cacheline(
+                        reinterpret_cast<__gm__ uint8_t *>(row_pointer));
+                const uint32_t row = *row_pointer;
+                if (row >= expected_rows[source]) {
+                    *status = kStatusInvalidRowMap;
                     break;
                 }
-                const uint32_t row = row_map[
-                    static_cast<uint64_t>(source) * journal_capacity + index];
-                if ((!expected && row != kDeviceJournalEmpty) ||
-                    (expected && (row >= expected_rows[source] ||
-                     pulled_ids[static_cast<uint64_t>(source) * row_capacity +
-                                row] != entry->token_id))) {
-                    *status = expected ? kStatusTokenMismatch
-                                       : kStatusInvalidRowMap;
+                if (canonical && pulled_ids[
+                        static_cast<uint64_t>(source) * row_capacity + row] !=
+                        entry->token_id) {
+                    *status = kStatusTokenMismatch;
                     break;
                 }
+                token_rows[source] = row;
             }
             if (*status != kStatusOk) break;
 
-            for (uint32_t begin = 0u; begin < hidden;
+            for (uint64_t begin = 0u; begin < hidden;
                  begin += kTileElements) {
-                const uint32_t count = hidden - begin < kTileElements
-                    ? hidden - begin : kTileElements;
-                const uint32_t ping = (begin / kTileElements) & 1u;
+                const uint32_t count = static_cast<uint32_t>(
+                    static_cast<uint64_t>(hidden) - begin < kTileElements
+                        ? static_cast<uint64_t>(hidden) - begin
+                        : kTileElements);
+                const uint32_t ping = static_cast<uint32_t>(
+                    (begin / kTileElements) & 1u);
                 // The preceding remote MTE3 still owns acc_ub until this
                 // event completes.  Fence before Duplicate overwrites it.
                 if (ping == 0u)
@@ -356,9 +437,7 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                     ++source;
                 uint32_t input_ping = 0u;
                 if (source < worker_count) {
-                    const uint32_t row = row_map[
-                        static_cast<uint64_t>(source) * journal_capacity +
-                        index];
+                    const uint32_t row = token_rows[source];
                     GetFp32RemoteToUb(
                         input_ub[input_ping],
                         partials + static_cast<uint64_t>(row) * hidden +
@@ -373,9 +452,7 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                         ++next;
                     if (next < worker_count) {
                         const uint32_t next_ping = 1u - input_ping;
-                        const uint32_t next_row = row_map[
-                            static_cast<uint64_t>(next) * journal_capacity +
-                            index];
+                        const uint32_t next_row = token_rows[next];
                         GetFp32RemoteToUb(
                             input_ub[next_ping],
                             partials + static_cast<uint64_t>(next_row) *
@@ -471,18 +548,22 @@ extern "C" void launch_inc_dc_sparse_combine_device_e2e(
     uint8_t *symmetric_partials, uint8_t *reduced_output,
     uint8_t *descriptor_mailbox, uint8_t *ack_mailbox,
     uint8_t *completion_mailbox, uint8_t *journal_header,
-    uint8_t *journal_entries, uint8_t *journal_row_map,
-    uint8_t *destination_rows, uint8_t *inc_token_ids,
+    uint8_t *journal_entries, uint8_t *journal_hash,
+    uint8_t *journal_row_map, uint8_t *combine_row_map,
+    uint8_t *destination_rows,
+    uint8_t *inc_token_ids,
     uint8_t *status_line, uint64_t ffts_addr,
-    uint64_t journal_capacity, uint64_t row_capacity, uint32_t hidden,
-    uint32_t worker_count, int32_t inc_pe, uint64_t generation,
-    uint32_t wave, int32_t delay_rank, uint64_t delay_cycles)
+    uint64_t journal_capacity, uint64_t journal_hash_capacity,
+    uint64_t row_capacity, uint32_t hidden, uint32_t worker_count,
+    int32_t inc_pe, uint64_t generation, uint32_t wave, int32_t delay_rank,
+    uint64_t delay_cycles, uint32_t combine_flags)
 {
     inc_dc_sparse_combine_device_e2e_kernel<<<block_dim, nullptr, stream>>>(
         symmetric_token_ids, symmetric_partials, reduced_output,
         descriptor_mailbox, ack_mailbox, completion_mailbox, journal_header,
-        journal_entries, journal_row_map, destination_rows, inc_token_ids,
-        status_line, ffts_addr, journal_capacity, row_capacity,
-        hidden, worker_count, inc_pe, generation, wave, delay_rank,
-        delay_cycles);
+        journal_entries, journal_hash, journal_row_map, combine_row_map,
+        destination_rows, inc_token_ids, status_line, ffts_addr,
+        journal_capacity, journal_hash_capacity, row_capacity, hidden,
+        worker_count, inc_pe, generation, wave, delay_rank, delay_cycles,
+        combine_flags);
 }
