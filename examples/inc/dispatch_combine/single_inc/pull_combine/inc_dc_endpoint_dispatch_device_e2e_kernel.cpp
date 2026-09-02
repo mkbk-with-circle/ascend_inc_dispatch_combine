@@ -145,6 +145,76 @@ __aicore__ inline bool WeightFinite(
 }
 
 __aicore__ inline uint32_t ReadCount(
+    __gm__ uint8_t *packet, uint64_t counts_offset, uint32_t index);
+
+__aicore__ inline bool ValidatePacketMetadata(
+    __gm__ uint8_t *packet, __gm__ EndpointDispatchPacketHeader *header,
+    uint32_t expert_count, __gm__ uint32_t *cursor, uint32_t source)
+{
+    const uint32_t workers = header->worker_count;
+    for (uint32_t destination = 0u; destination < workers; ++destination) {
+        __gm__ uint32_t *slot = cursor +
+            (static_cast<uint64_t>(source) * workers + destination) * 16u;
+        slot[8] = 0u;
+        slot[9] = 0u;
+    }
+    uint32_t expected_assignment_begin = 0u;
+    for (uint32_t token = 0u; token < header->token_count; ++token) {
+        __gm__ EndpointDispatchTokenRecord *record =
+            reinterpret_cast<__gm__ EndpointDispatchTokenRecord *>(
+                packet + header->tokens_offset) + token;
+        if (record->source_token != token ||
+            record->assignment_begin != expected_assignment_begin ||
+            record->assignment_count >
+                header->assignment_count - expected_assignment_begin ||
+            record->reserved0 != 0u || record->reserved1 != 0u)
+            return false;
+        uint64_t seen[2]{0u, 0u};
+        for (uint32_t local = 0u; local < record->assignment_count; ++local) {
+            __gm__ EndpointDispatchAssignmentRecord *assignment =
+                reinterpret_cast<__gm__ EndpointDispatchAssignmentRecord *>(
+                    packet + header->assignments_offset) +
+                record->assignment_begin + local;
+            if (assignment->destination_rank >= workers ||
+                assignment->expert_id >= expert_count ||
+                !WeightFinite(assignment))
+                return false;
+            for (uint32_t prior = 0u; prior < local; ++prior) {
+                __gm__ EndpointDispatchAssignmentRecord *other =
+                    reinterpret_cast<
+                        __gm__ EndpointDispatchAssignmentRecord *>(
+                            packet + header->assignments_offset) +
+                    record->assignment_begin + prior;
+                if (other->ordinal == assignment->ordinal) return false;
+            }
+            const uint32_t destination = assignment->destination_rank;
+            __gm__ uint32_t *slot = cursor +
+                (static_cast<uint64_t>(source) * workers + destination) *
+                    16u;
+            ++slot[9];
+            const uint32_t word = destination >> 6u;
+            const uint64_t bit = 1ull << (destination & 63u);
+            if ((seen[word] & bit) == 0u) {
+                seen[word] |= bit;
+                ++slot[8];
+            }
+        }
+        expected_assignment_begin += record->assignment_count;
+    }
+    if (expected_assignment_begin != header->assignment_count) return false;
+    for (uint32_t destination = 0u; destination < workers; ++destination) {
+        __gm__ uint32_t *slot = cursor +
+            (static_cast<uint64_t>(source) * workers + destination) * 16u;
+        if (slot[8] != ReadCount(packet, header->counts_offset,
+                                 destination) ||
+            slot[9] != ReadCount(packet, header->counts_offset,
+                                 workers + destination))
+            return false;
+    }
+    return true;
+}
+
+__aicore__ inline uint32_t ReadCount(
     __gm__ uint8_t *packet, uint64_t counts_offset, uint32_t index)
 {
     __gm__ uint32_t *value = reinterpret_cast<__gm__ uint32_t *>(
@@ -260,10 +330,6 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
             // compact metadata once here instead of repeating DCCI for every
             // token, assignment and destination owner.
             FlushRange(packet, header->hidden_offset);
-            if (MetadataDigest(packet, header) != header->metadata_digest) {
-                *global_status = kStatusInvalidPacket;
-                break;
-            }
         }
         AscendC::PipeBarrier<PIPE_ALL>();
         dcci_cacheline(status_line);
@@ -274,6 +340,27 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     __gm__ uint32_t *cursor = reinterpret_cast<__gm__ uint32_t *>(cursors);
     const uint64_t row_bytes = static_cast<uint64_t>(hidden) *
         DTypeBytes(dtype);
+
+    if (*global_status == kStatusOk) {
+        for (uint32_t source = block; source < worker_count;
+             source += blocks) {
+            __gm__ uint8_t *packet =
+                inc_packets + static_cast<uint64_t>(source) * slot_bytes;
+            __gm__ EndpointDispatchPacketHeader *header =
+                reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
+                    packet);
+            if (MetadataDigest(packet, header) != header->metadata_digest ||
+                !ValidatePacketMetadata(packet, header, expert_count, cursor,
+                                        source)) {
+                *global_status = kStatusInvalidPacket;
+                AscendC::PipeBarrier<PIPE_ALL>();
+                dcci_cacheline(status_line);
+                break;
+            }
+        }
+    }
+    AscendC::SyncAll<true>();
+    dcci_cacheline(status_line);
 
     if (block == 0u && *global_status == kStatusOk) {
         // Count transpose and source-major receive offsets.  The complete
@@ -321,270 +408,152 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     dcci_cacheline(status_line);
 
     if (*global_status == kStatusOk) {
-        // One AIV owns each destination for the whole wave.  The generic MTE
-        // transport uses per-AIV staging and is safe across different remote
-        // PEs, but multiple AIV producers targeting the same PE can overwrite
-        // staging state.  Destination ownership removes that race while
-        // retaining parallel traffic on every worker<->INC link.
-        for (uint32_t source = 0u; source < worker_count; ++source) {
-            __gm__ uint8_t *packet =
-                inc_packets + static_cast<uint64_t>(source) * slot_bytes;
+        const uint32_t pair_count = worker_count * worker_count;
+        const bool multiple_lanes = blocks >= pair_count;
+        const uint32_t first_pair = multiple_lanes ? block % pair_count
+                                                   : block;
+        const uint32_t pair_stride = multiple_lanes ? pair_count : blocks;
+        const uint32_t pair_limit = multiple_lanes ? first_pair + 1u
+                                                   : pair_count;
+        for (uint32_t pair = first_pair; pair < pair_limit;
+             pair += pair_stride) {
+            const uint32_t source = pair / worker_count;
+            const uint32_t destination = pair % worker_count;
+            const uint32_t lane = multiple_lanes ? block / pair_count : 0u;
+            const uint32_t lanes = multiple_lanes
+                ? (blocks + pair_count - 1u - pair) / pair_count : 1u;
+            __gm__ uint8_t *packet = inc_packets +
+                static_cast<uint64_t>(source) * slot_bytes;
             __gm__ EndpointDispatchPacketHeader *header =
                 reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
                     packet);
-            uint32_t expected_assignment_begin = 0u;
-            for (uint32_t destination = block; destination < worker_count;
-                 destination += blocks) {
-                // One cache line per (source,destination).  Different AIV
-                // destination owners must never update adjacent words in the
-                // same cache line.
-                __gm__ uint32_t *destination_cursor = cursor +
-                    (static_cast<uint64_t>(source) * worker_count +
-                     destination) * 16u;
-                __gm__ uint32_t *tile_cursor = cursor +
-                    static_cast<uint64_t>(destination) * 16u;
-                uint32_t row_begin = 0u;
-                uint32_t assignment_begin = 0u;
-                for (uint32_t previous = 0u; previous < source; ++previous) {
-                    __gm__ uint8_t *previous_packet =
-                        inc_packets +
-                        static_cast<uint64_t>(previous) * slot_bytes;
-                    __gm__ EndpointDispatchPacketHeader *previous_header =
-                        reinterpret_cast<
-                            __gm__ EndpointDispatchPacketHeader *>(
-                                previous_packet);
-                    row_begin += ReadCount(
-                        previous_packet, previous_header->counts_offset,
-                        destination);
-                    assignment_begin += ReadCount(
-                        previous_packet, previous_header->counts_offset,
-                        worker_count + destination);
-                }
-                destination_cursor[0] = row_begin;
-                destination_cursor[1] = assignment_begin;
-                if (source == 0u) {
-                    tile_cursor[2] = 0u;  // tile begin row
-                    tile_cursor[3] = 0u;  // rows currently staged
-                }
+            const uint32_t token_begin =
+                static_cast<uint64_t>(header->token_count) * lane / lanes;
+            const uint32_t token_end =
+                static_cast<uint64_t>(header->token_count) * (lane + 1u) /
+                lanes;
+            uint32_t row_index = 0u;
+            uint32_t assignment_index = 0u;
+            for (uint32_t previous = 0u; previous < source; ++previous) {
+                __gm__ uint8_t *prior_packet = inc_packets +
+                    static_cast<uint64_t>(previous) * slot_bytes;
+                __gm__ EndpointDispatchPacketHeader *prior_header =
+                    reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
+                        prior_packet);
+                row_index += ReadCount(prior_packet,
+                    prior_header->counts_offset, destination);
+                assignment_index += ReadCount(prior_packet,
+                    prior_header->counts_offset,
+                    worker_count + destination);
             }
-
-            for (uint32_t token = 0u; token < header->token_count; ++token) {
-                __gm__ EndpointDispatchTokenRecord *token_record =
+            // Derive the lane's deterministic output prefix by parsing only
+            // the preceding token slice for this source/destination pair.
+            for (uint32_t token = 0u; token < token_begin; ++token) {
+                __gm__ EndpointDispatchTokenRecord *record =
                     reinterpret_cast<__gm__ EndpointDispatchTokenRecord *>(
                         packet + header->tokens_offset) + token;
-                if (token_record->source_token != token ||
-                    token_record->assignment_begin !=
-                        expected_assignment_begin ||
-                    token_record->assignment_begin >
-                        header->assignment_count ||
-                    token_record->assignment_count >
-                        header->assignment_count -
-                            token_record->assignment_begin ||
-                    token_record->reserved0 != 0u ||
-                    token_record->reserved1 != 0u) {
+                uint32_t hits = 0u;
+                for (uint32_t local = 0u; local < record->assignment_count;
+                     ++local) {
+                    __gm__ EndpointDispatchAssignmentRecord *assignment =
+                        reinterpret_cast<
+                            __gm__ EndpointDispatchAssignmentRecord *>(
+                                packet + header->assignments_offset) +
+                        record->assignment_begin + local;
+                    hits += assignment->destination_rank == destination;
+                }
+                row_index += hits != 0u;
+                assignment_index += hits;
+            }
+            if (lane == 0u) {
+                const uint64_t token_capacity_per_source =
+                    row_capacity / worker_count;
+                const uint64_t assignment_capacity_per_source =
+                    assignment_capacity / worker_count;
+                if (header->token_count > token_capacity_per_source ||
+                    header->assignment_count >
+                        assignment_capacity_per_source) {
                     *global_status = kStatusInvalidPacket;
                     break;
                 }
-                for (uint32_t destination = block;
-                     destination < worker_count; destination += blocks) {
-                    uint32_t assignments_for_destination = 0u;
-                    for (uint32_t local = 0u;
-                         local < token_record->assignment_count; ++local) {
-                        __gm__ EndpointDispatchAssignmentRecord *assignment =
-                            reinterpret_cast<
-                                __gm__ EndpointDispatchAssignmentRecord *>(
-                                    packet + header->assignments_offset) +
-                            token_record->assignment_begin + local;
-                        if (assignment->destination_rank >= worker_count ||
-                            assignment->expert_id >= expert_count ||
-                            !WeightFinite(assignment)) {
-                            *global_status = kStatusInvalidPacket;
-                            break;
-                        }
-                        for (uint32_t prior = 0u; prior < local; ++prior) {
-                            __gm__ EndpointDispatchAssignmentRecord *other =
-                                reinterpret_cast<
-                                    __gm__ EndpointDispatchAssignmentRecord *>(
-                                        packet + header->assignments_offset) +
-                                token_record->assignment_begin + prior;
-                            if (other->ordinal == assignment->ordinal) {
-                                *global_status = kStatusInvalidPacket;
-                                break;
-                            }
-                        }
-                        if (*global_status != kStatusOk) break;
-                        if (assignment->destination_rank == destination)
-                            ++assignments_for_destination;
-                    }
-                    if (*global_status != kStatusOk) break;
-                    if (assignments_for_destination == 0u) continue;
-
-                    __gm__ uint32_t *destination_cursor = cursor +
-                        (static_cast<uint64_t>(source) * worker_count +
-                         destination) * 16u;
-                    __gm__ uint32_t *tile_cursor = cursor +
-                        static_cast<uint64_t>(destination) * 16u;
-                    const uint32_t row_index = destination_cursor[0]++;
-                    const uint32_t output_assignment_begin =
-                        destination_cursor[1];
-                    if (row_index >= row_capacity ||
-                        output_assignment_begin +
-                            assignments_for_destination >
-                            assignment_capacity) {
-                        *global_status = kStatusInvalidPacket;
-                        break;
-                    }
-                    __gm__ EndpointDispatchFanoutRecord *row =
-                        reinterpret_cast<
-                            __gm__ EndpointDispatchFanoutRecord *>(
-                                recv_rows) + row_index;
-                    const int32_t destination_pe =
-                        static_cast<int32_t>(destination);
-                    aclshmem_uint64_p(&row->token_id,
-                                      token_record->token_id,
-                                      destination_pe);
-                    aclshmem_uint32_p(&row->source_rank, source,
-                                      destination_pe);
-                    aclshmem_uint32_p(&row->source_token, token,
-                                      destination_pe);
-                    aclshmem_uint32_p(&row->assignment_begin,
-                                      output_assignment_begin,
-                                      destination_pe);
-                    aclshmem_uint32_p(&row->assignment_count,
-                                      assignments_for_destination,
-                                      destination_pe);
-                    aclshmem_uint64_p(&row->reserved, 0u, destination_pe);
-                    aclshmem_quiet();
-                    __gm__ uint8_t *hidden_source =
-                        packet + header->hidden_offset +
-                        static_cast<uint64_t>(token) * row_bytes;
-                    const uint64_t tile_rows =
-                        staging_bytes_per_destination / row_bytes;
-                    if (tile_rows == 0u) {
-                        aclshmem_putmem(
-                            recv_hidden + static_cast<uint64_t>(row_index) *
-                                row_bytes,
-                            hidden_source, row_bytes, destination_pe);
-                    } else {
-                        const uint32_t staged_rows = tile_cursor[3];
-                        __gm__ uint8_t *staging = hidden_staging +
-                            static_cast<uint64_t>(destination) *
-                                staging_bytes_per_destination;
-                        CopyLocalGm(
-                            staging + static_cast<uint64_t>(staged_rows) *
-                                row_bytes,
-                            hidden_source, row_bytes);
-                        tile_cursor[3] = staged_rows + 1u;
-                        if (tile_cursor[3] == tile_rows) {
-                            aclshmem_putmem(
-                                recv_hidden +
-                                    static_cast<uint64_t>(
-                                        tile_cursor[2]) * row_bytes,
-                                staging, tile_rows * row_bytes,
-                                destination_pe);
-                            tile_cursor[2] += tile_rows;
-                            tile_cursor[3] = 0u;
-                        }
-                    }
-
-                    uint32_t output_assignment = output_assignment_begin;
-                    for (uint32_t local = 0u;
-                         local < token_record->assignment_count; ++local) {
-                        __gm__ EndpointDispatchAssignmentRecord *assignment =
-                            reinterpret_cast<
-                                __gm__ EndpointDispatchAssignmentRecord *>(
-                                    packet + header->assignments_offset) +
-                            token_record->assignment_begin + local;
-                        if (assignment->destination_rank != destination)
-                            continue;
-                        __gm__ EndpointDispatchAssignmentRecord *remote =
-                            reinterpret_cast<
-                                __gm__ EndpointDispatchAssignmentRecord *>(
-                                    recv_assignments) + output_assignment;
-                        aclshmem_uint32_p(
-                            &remote->destination_rank,
-                            assignment->destination_rank, destination_pe);
-                        aclshmem_uint32_p(&remote->expert_id,
-                                          assignment->expert_id,
-                                          destination_pe);
-                        aclshmem_uint32_p(&remote->ordinal,
-                                          assignment->ordinal,
-                                          destination_pe);
-                        aclshmem_uint32_p(
-                            reinterpret_cast<__gm__ uint32_t *>(
-                                &remote->weight),
-                            reinterpret_cast<__gm__ uint32_t *>(
-                                assignment)[3],
-                            destination_pe);
-                        ++output_assignment;
-                    }
-                    aclshmem_quiet();
-                    destination_cursor[1] = output_assignment;
-                }
-                if (*global_status != kStatusOk) break;
-                expected_assignment_begin +=
-                    token_record->assignment_count;
-            }
-
-            if (*global_status == kStatusOk &&
-                expected_assignment_begin != header->assignment_count)
-                *global_status = kStatusInvalidPacket;
-            for (uint32_t destination = block;
-                 *global_status == kStatusOk &&
-                 destination < worker_count; destination += blocks) {
-                __gm__ uint32_t *destination_cursor = cursor +
-                    (static_cast<uint64_t>(source) * worker_count +
-                     destination) * 16u;
-                uint32_t expected_rows = ReadCount(
-                    packet, header->counts_offset, destination);
-                uint32_t expected_assignments = ReadCount(
-                    packet, header->counts_offset,
-                    worker_count + destination);
-                uint32_t row_begin = 0u;
-                uint32_t assignment_begin = 0u;
-                for (uint32_t previous = 0u; previous < source; ++previous) {
-                    __gm__ uint8_t *previous_packet = inc_packets +
-                        static_cast<uint64_t>(previous) * slot_bytes;
-                    __gm__ EndpointDispatchPacketHeader *previous_header =
-                        reinterpret_cast<
-                            __gm__ EndpointDispatchPacketHeader *>(
-                                previous_packet);
-                    row_begin += ReadCount(previous_packet,
-                        previous_header->counts_offset, destination);
-                    assignment_begin += ReadCount(previous_packet,
-                        previous_header->counts_offset,
-                        worker_count + destination);
-                }
-                if (destination_cursor[0] != row_begin + expected_rows ||
-                    destination_cursor[1] !=
-                        assignment_begin + expected_assignments)
-                    *global_status = kStatusInvalidPacket;
-            }
-
-            if (*global_status != kStatusOk) break;
-        }
-
-        // Flush the partially filled tile after the final source.  Each
-        // destination is owned by exactly one AIV, so no remote write can
-        // race this tail.
-        for (uint32_t destination = block; destination < worker_count;
-             destination += blocks) {
-            __gm__ uint32_t *tile_cursor = cursor +
-                static_cast<uint64_t>(destination) * 16u;
-            const uint32_t staged_rows = tile_cursor[3];
-            if (staged_rows != 0u) {
-                __gm__ uint8_t *staging = hidden_staging +
-                    static_cast<uint64_t>(destination) *
-                        staging_bytes_per_destination;
                 aclshmem_putmem(
-                    recv_hidden +
-                        static_cast<uint64_t>(tile_cursor[2]) *
+                    recv_rows + static_cast<uint64_t>(source) *
+                        token_capacity_per_source *
+                        sizeof(EndpointDispatchTokenRecord),
+                    packet + header->tokens_offset,
+                    static_cast<uint64_t>(header->token_count) *
+                        sizeof(EndpointDispatchTokenRecord),
+                    static_cast<int32_t>(destination));
+                aclshmem_putmem(
+                    recv_assignments + static_cast<uint64_t>(source) *
+                        assignment_capacity_per_source *
+                        sizeof(EndpointDispatchAssignmentRecord),
+                    packet + header->assignments_offset,
+                    static_cast<uint64_t>(header->assignment_count) *
+                        sizeof(EndpointDispatchAssignmentRecord),
+                    static_cast<int32_t>(destination));
+            }
+            const uint64_t tile_rows =
+                staging_bytes_per_destination / row_bytes;
+            uint32_t tile_begin = row_index;
+            uint32_t staged_rows = 0u;
+            __gm__ uint8_t *staging = hidden_staging +
+                static_cast<uint64_t>(block) *
+                    staging_bytes_per_destination;
+            for (uint32_t token = token_begin; token < token_end; ++token) {
+                __gm__ EndpointDispatchTokenRecord *record =
+                    reinterpret_cast<__gm__ EndpointDispatchTokenRecord *>(
+                        packet + header->tokens_offset) + token;
+                uint32_t hits = 0u;
+                for (uint32_t local = 0u; local < record->assignment_count;
+                     ++local) {
+                    __gm__ EndpointDispatchAssignmentRecord *assignment =
+                        reinterpret_cast<
+                            __gm__ EndpointDispatchAssignmentRecord *>(
+                                packet + header->assignments_offset) +
+                        record->assignment_begin + local;
+                    hits += assignment->destination_rank == destination;
+                }
+                if (hits == 0u) continue;
+                if (row_index >= row_capacity ||
+                    assignment_index + hits > assignment_capacity) {
+                    *global_status = kStatusInvalidPacket;
+                    break;
+                }
+                __gm__ uint8_t *hidden_source = packet +
+                    header->hidden_offset +
+                    static_cast<uint64_t>(token) * row_bytes;
+                if (tile_rows == 0u) {
+                    aclshmem_putmem(
+                        recv_hidden + static_cast<uint64_t>(row_index) *
                             row_bytes,
+                        hidden_source, row_bytes,
+                        static_cast<int32_t>(destination));
+                } else {
+                    CopyLocalGm(staging +
+                        static_cast<uint64_t>(staged_rows) * row_bytes,
+                        hidden_source, row_bytes);
+                    ++staged_rows;
+                    if (staged_rows == tile_rows) {
+                        aclshmem_putmem(
+                            recv_hidden + static_cast<uint64_t>(tile_begin) *
+                                row_bytes,
+                            staging, tile_rows * row_bytes,
+                            static_cast<int32_t>(destination));
+                        tile_begin += staged_rows;
+                        staged_rows = 0u;
+                    }
+                }
+                ++row_index;
+                assignment_index += hits;
+            }
+            if (staged_rows != 0u)
+                aclshmem_putmem(
+                    recv_hidden + static_cast<uint64_t>(tile_begin) *
+                        row_bytes,
                     staging, static_cast<uint64_t>(staged_rows) * row_bytes,
                     static_cast<int32_t>(destination));
-                tile_cursor[2] += staged_rows;
-                tile_cursor[3] = 0u;
-            }
+            if (*global_status != kStatusOk) break;
         }
     }
 

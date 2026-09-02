@@ -285,7 +285,7 @@ int main(int argc, char **argv)
         hidden_staging = staging_bytes_per_destination == 0u
             ? nullptr
             : static_cast<uint8_t *>(aclshmem_malloc(
-                  staging_bytes_per_destination * workers));
+                  staging_bytes_per_destination * dispatch_aiv));
         status_line = static_cast<uint8_t *>(aclshmem_malloc(64u));
         if (source_packet == nullptr || inc_packets == nullptr ||
             commits == nullptr || recv_hidden == nullptr ||
@@ -323,7 +323,7 @@ int main(int argc, char **argv)
                    static_cast<uint64_t>(workers) * workers * 64u);
         if (hidden_staging != nullptr)
             ZeroDevice(hidden_staging,
-                       staging_bytes_per_destination * workers);
+                       staging_bytes_per_destination * dispatch_aiv);
         ZeroDevice(status_line, 64u);
     }
     if (status == 0 && pe < inc_pe) {
@@ -463,6 +463,9 @@ int main(int argc, char **argv)
                                            topk));
         std::vector<EndpointDispatchFanoutRecord> expected_rows;
         std::vector<EndpointDispatchAssignmentRecord> expected_assignments;
+        std::vector<EndpointDispatchTokenRecord> expected_wire_tokens;
+        std::vector<EndpointDispatchAssignmentRecord>
+            expected_wire_assignments;
         std::vector<uint8_t> expected_hidden;
         std::vector<uint32_t> expected_counts(workers * 4u, 0u);
         for (uint32_t source = 0u; source < workers; ++source) {
@@ -471,6 +474,18 @@ int main(int argc, char **argv)
             expected_counts[workers * 3u + source] =
                 static_cast<uint32_t>(expected_assignments.size());
             const EndpointDispatchInput &input = all_inputs[source];
+            for (uint32_t token = 0u; token < tokens; ++token) {
+                EndpointDispatchTokenRecord record{};
+                record.token_id = input.token_ids[token];
+                record.source_token = token;
+                record.assignment_begin = input.assignment_offsets[token];
+                record.assignment_count = input.assignment_offsets[token + 1u]
+                    - input.assignment_offsets[token];
+                expected_wire_tokens.push_back(record);
+            }
+            expected_wire_assignments.insert(
+                expected_wire_assignments.end(), input.assignments.begin(),
+                input.assignments.end());
             uint32_t source_rows = 0u;
             uint32_t source_assignments = 0u;
             for (uint32_t token = 0u; token < tokens; ++token) {
@@ -504,14 +519,16 @@ int main(int argc, char **argv)
             completion.assignment_count == expected_assignments.size();
 
         std::vector<uint32_t> actual_counts;
-        std::vector<EndpointDispatchFanoutRecord> actual_rows;
-        std::vector<EndpointDispatchAssignmentRecord> actual_assignments;
+        std::vector<EndpointDispatchTokenRecord> actual_wire_tokens;
+        std::vector<EndpointDispatchAssignmentRecord>
+            actual_wire_assignments;
         std::vector<uint8_t> actual_hidden;
         const bool copied = CopyFromDevice(&actual_counts, recv_counts,
                                            workers * 4u) &&
-            CopyFromDevice(&actual_rows, recv_rows, expected_rows.size()) &&
-            CopyFromDevice(&actual_assignments, recv_assignments,
-                           expected_assignments.size()) &&
+            CopyFromDevice(&actual_wire_tokens, recv_rows,
+                           expected_wire_tokens.size()) &&
+            CopyFromDevice(&actual_wire_assignments, recv_assignments,
+                           expected_wire_assignments.size()) &&
             CopyFromDevice(&actual_hidden, recv_hidden,
                            expected_hidden.size());
         if (copied && actual_counts != expected_counts)
@@ -534,48 +551,64 @@ int main(int argc, char **argv)
         }
         correct = correct && copied && actual_counts == expected_counts &&
             actual_hidden == expected_hidden &&
-            actual_rows.size() == expected_rows.size() &&
-            actual_assignments.size() == expected_assignments.size();
-        for (size_t i = 0u; correct && i < expected_rows.size(); ++i) {
-            if (std::memcmp(&actual_rows[i], &expected_rows[i],
-                            sizeof(expected_rows[i])) != 0) {
-                std::cerr << "[FAIL] pe=" << pe << " row=" << i
-                          << " actual={token=" << actual_rows[i].token_id
-                          << ",src=" << actual_rows[i].source_rank
-                          << ",local=" << actual_rows[i].source_token
-                          << ",begin=" << actual_rows[i].assignment_begin
-                          << ",count=" << actual_rows[i].assignment_count
-                          << "} expected={token=" << expected_rows[i].token_id
-                          << ",src=" << expected_rows[i].source_rank
-                          << ",local=" << expected_rows[i].source_token
-                          << ",begin=" << expected_rows[i].assignment_begin
-                          << ",count=" << expected_rows[i].assignment_count
+            actual_wire_tokens.size() == expected_wire_tokens.size() &&
+            actual_wire_assignments.size() ==
+                expected_wire_assignments.size();
+        for (size_t i = 0u; correct &&
+             i < expected_wire_tokens.size(); ++i) {
+            if (std::memcmp(&actual_wire_tokens[i],
+                            &expected_wire_tokens[i],
+                            sizeof(expected_wire_tokens[i])) != 0) {
+                std::cerr << "[FAIL] pe=" << pe << " wire_token=" << i
+                          << " actual={token="
+                          << actual_wire_tokens[i].token_id
+                          << ",local="
+                          << actual_wire_tokens[i].source_token
+                          << ",begin="
+                          << actual_wire_tokens[i].assignment_begin
+                          << ",count="
+                          << actual_wire_tokens[i].assignment_count
+                          << "} expected={token="
+                          << expected_wire_tokens[i].token_id
+                          << ",local="
+                          << expected_wire_tokens[i].source_token
+                          << ",begin="
+                          << expected_wire_tokens[i].assignment_begin
+                          << ",count="
+                          << expected_wire_tokens[i].assignment_count
                           << "}\n";
                 correct = false;
             }
         }
-        for (size_t i = 0u; correct && i < expected_assignments.size(); ++i) {
+        for (size_t i = 0u; correct &&
+             i < expected_wire_assignments.size(); ++i) {
             const bool assignment_ok =
-                actual_assignments[i].destination_rank ==
-                    expected_assignments[i].destination_rank &&
-                actual_assignments[i].expert_id ==
-                    expected_assignments[i].expert_id &&
-                actual_assignments[i].ordinal ==
-                    expected_assignments[i].ordinal &&
-                actual_assignments[i].weight ==
-                    expected_assignments[i].weight;
+                actual_wire_assignments[i].destination_rank ==
+                    expected_wire_assignments[i].destination_rank &&
+                actual_wire_assignments[i].expert_id ==
+                    expected_wire_assignments[i].expert_id &&
+                actual_wire_assignments[i].ordinal ==
+                    expected_wire_assignments[i].ordinal &&
+                actual_wire_assignments[i].weight ==
+                    expected_wire_assignments[i].weight;
             if (!assignment_ok) {
                 std::cerr << "[FAIL] pe=" << pe << " assignment=" << i
                           << " actual={dst="
-                          << actual_assignments[i].destination_rank
-                          << ",expert=" << actual_assignments[i].expert_id
-                          << ",ordinal=" << actual_assignments[i].ordinal
-                          << ",weight=" << actual_assignments[i].weight
+                          << actual_wire_assignments[i].destination_rank
+                          << ",expert="
+                          << actual_wire_assignments[i].expert_id
+                          << ",ordinal="
+                          << actual_wire_assignments[i].ordinal
+                          << ",weight="
+                          << actual_wire_assignments[i].weight
                           << "} expected={dst="
-                          << expected_assignments[i].destination_rank
-                          << ",expert=" << expected_assignments[i].expert_id
-                          << ",ordinal=" << expected_assignments[i].ordinal
-                          << ",weight=" << expected_assignments[i].weight
+                          << expected_wire_assignments[i].destination_rank
+                          << ",expert="
+                          << expected_wire_assignments[i].expert_id
+                          << ",ordinal="
+                          << expected_wire_assignments[i].ordinal
+                          << ",weight="
+                          << expected_wire_assignments[i].weight
                           << "}\n";
                 correct = false;
             }

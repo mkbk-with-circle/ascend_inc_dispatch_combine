@@ -32,6 +32,13 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
 - 已完成：设备 Dispatch correctness qualification：worker AIV PUT packet 后发布
   commit 并返回；INC 在线轮询、转置 count、解析 metadata、去重 fan-out，并发布
   source ACK 与 destination completion。路由没有作为 kernel 参数传入。
+- 已完成：设备 Dispatch 多 AIV 数据面。每个 source 的 token/assignment wire view
+  以两个连续 PUT 批量转发，destination 在本地筛选；hidden 仍只发给实际命中的
+  destination。INC 按 `(source,destination,token-lane)` 分片，lane 写入确定且互不
+  重叠的 packed hidden 区间，避免逐 token 远端标量控制写。
+- 已完成：设备端严格 metadata 校验。digest、CSR 连续性、count 重算、范围、
+  非有限权重和重复 ordinal 均在 fan-out 前 fail-closed；损坏包也发布负 ACK/
+  completion，不会永久占住槽位。
 - 已完成：空 wave、零路由 token、重复目的 rank、`topk > worker_count`、乱序到达、
   分块传输、提前 egress、ring 回压、负 ACK 与计划生命周期保护。
 - 已完成：910B 上高阶 SHMEM GET 正确性和 W2/W4 聚合带宽锚点。
@@ -50,9 +57,10 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
   在单调地址 pull 中长期空转；小于两个 chunk 时自动回退到零握手 owner-slice。
 - 已完成：descriptor 或 ready 超时均 fail-closed；成功 ACK 只在 source 已消费且
   egress 完成后发布，失败 ACK 的 `rows_consumed=0`，不会永久占住发送槽。
-- 未完成：持久化设备 server、设备 Dispatch 多 AIV 性能数据面、跨 wave 端到端
-  Dispatch+Combine gate、公共 API 接入；当前设备 Dispatch 仍是单控制 AIV 的
-  正确性路径，尚未做多 AIV 性能流水。
+- 未完成：持久化设备 server、Dispatch journal 驱动的稀疏 token-ID Combine、
+  跨 wave 端到端 Dispatch+Combine gate、公共 API 接入。当前 endpoint Dispatch
+  是完整单 wave 算子，但 destination 侧 wire-view 筛选还只在 qualification
+  harness 中校验，尚未与正式 expert packing kernel 融合。
 
 设备物理 region 按 64B 向上对齐，但 descriptor 中的 `row_count` 和
 `payload_bytes` 始终是真实长度。lane 只在 cache-line 边界切分，最后一个物理
@@ -94,11 +102,31 @@ gate，不是公共 API。lane 传 0 时，从实际 `VECTOR_CORE_NUM` 取一半
 预算，再平均分给 worker；不写死 910B 的 40 AIV 或 W2/W4。
 
 设备 Dispatch qualification 参数为
-`<workers> <pe> <ipport> <first_npu> <tokens> <hidden> <topk>`。当前使用 BF16
+`<workers> <pe> <ipport> <first_npu> <tokens> <hidden> <topk> [aiv] [fault]`。
+`aiv=0` 自动取实时 `VECTOR_CORE_NUM` 的一半；`fault=1..4` 分别注入 digest、重复
+ordinal、非有限 weight 和 count mismatch。当前使用 BF16
 hidden，逐字节检查 A→INC packet、count reply、按 destination 去重后的 hidden、
-token row、expert/weight/ordinal、ACK 和 completion。W2/W4 共 8 个随机形状、
-32 个 PE 进程全部 PASS，覆盖 hidden=1–4096、top-k=1–8 及 top-k>worker。
-该 target 只证明完整 Dispatch 语义闭环；单控制 AIV 的吞吐不是性能结果。
+token/assignment wire view、ACK 和 completion。W2/W4 随机形状覆盖 hidden=1–4096、
+top-k=1–8 及 top-k>worker，四种损坏包均正确拒绝。该 target 证明完整单 wave
+Dispatch 语义闭环；带宽口径包含 packet upload、在线解析、count transpose、
+hidden fan-out、metadata wire view、ACK 和 completion，不是纯链路带宽。
+
+### 当前设备 Dispatch 性能（2026-09-03）
+
+同一 HCCS 平面，自动使用 24/48 AIV。`logical_hidden_gb_s` 只累计一次 worker
+hidden ingress 和去重后的 destination hidden egress；metadata/control 虽未计入
+字节数，但其时间完整包含在分母中。
+
+| 规模 | 每 worker 输入 | 参数 | 完整 Dispatch | 结果 |
+|---|---:|---|---:|---|
+| W2 | 32 MiB | 4096 token, hidden 4096, top-k 2 | 22.87 GB/s（3 轮均值，CV 0.150%） | PASS |
+| W4 | 16 MiB | 2048 token, hidden 4096, top-k 4 | 37.97 GB/s（3 轮均值，CV 0.246%） | PASS |
+| W2 | 64 MiB | 4096 token, hidden 8192, top-k 2 | 29.62 GB/s | PASS |
+| W4 | 64 MiB | 2048 token, hidden 16384, top-k 4 | 57.27 GB/s | PASS |
+
+这是当前稳定正确检查点，不代表最终 90% gate 已通过。nb 的 W2/W4 单向 raw
+参考分别为 56/112 GB/s，而完整 Dispatch 同时包含 ingress、在线路由和 fan-out，
+两者不能直接当作相同口径；后续仍需用同一路由分布的实测 roofline 判定。
 
 ## nb-borrow 设备锚点（2026-09-02）
 
