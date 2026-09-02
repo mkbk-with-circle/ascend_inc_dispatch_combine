@@ -26,6 +26,9 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
 ## 当前完成度
 
 - 已完成：ABI、路由编译、count 转置、Dispatch/Combine 主机参考状态机。
+- 已完成：endpoint-owned Dispatch packet ABI；hidden、token ID 和 CSR 路由
+  metadata 同包上传，INC parser 不依赖预构造 `WavePlan`，并按 destination GPU
+  去重 hidden、保留全部 expert/weight/ordinal。
 - 已完成：空 wave、零路由 token、重复目的 rank、`topk > worker_count`、乱序到达、
   分块传输、提前 egress、ring 回压、负 ACK 与计划生命周期保护。
 - 已完成：910B 上高阶 SHMEM GET 正确性和 W2/W4 聚合带宽锚点。
@@ -61,11 +64,16 @@ cmake --build /tmp/shmem-pull-combine-v1-build --target \
   inc_dc_pull_combine_plan_tests \
   inc_dc_pull_combine_dispatch_tests \
   inc_dc_pull_combine_state_tests \
-  inc_dc_pull_combine_fuzz_tests -j4
+  inc_dc_pull_combine_fuzz_tests \
+  inc_dc_endpoint_dispatch_packet_tests -j4
 ```
 
 随机 gate 固定种子运行 500 个 W2–W8 联合 wave；开发时另以
 `-Wall -Wextra -Werror`、ASan/UBSan 和 10,000-wave soak 通过。
+endpoint packet 另以固定种子运行 5,000 个随机 packet，覆盖 W2–W8、空 wave、
+0–32 token、每 token 0–12 assignments、重复目标 GPU、三种 dtype、非一致 top-k
+及随机 hidden payload；metadata digest、generation/sequence、重复 token/ordinal、
+非有限权重、范围、payload 大小和 count 重算均 fail-closed。
 
 设备 qualification target：
 
