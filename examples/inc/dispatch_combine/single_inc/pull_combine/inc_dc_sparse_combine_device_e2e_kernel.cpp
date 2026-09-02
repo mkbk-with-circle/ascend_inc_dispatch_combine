@@ -18,15 +18,16 @@ constexpr uint32_t kStatusTokenMismatch = 5u;
 constexpr uint64_t kSpinLimit = 1000000000ull;
 // Keep one vector operation within the platform-qualified repeat range.
 // Larger rows are tiled; this avoids silent tail corruption on 910B.
-// One input plus ping/pong accumulators fill the live 24-KiB AIV UB.  The two
-// accumulators let the previous owner PUT overlap the next tile's GET/reduce.
-constexpr uint32_t kTileElements = 2048u;
+// Ping/pong inputs and ping/pong accumulators fill the live 24-KiB AIV UB.
+// This overlaps the next B->INC GET and the preceding INC->A PUT with vector
+// reduction of the current tile.
+constexpr uint32_t kTileElements = 1536u;
 constexpr uint32_t kTileBytes = kTileElements * sizeof(float);
-constexpr uint32_t kMte2V = 0u;
-constexpr uint32_t kVMte2 = 1u;
-constexpr uint32_t kMte3V[2]{2u, 4u};
-constexpr uint32_t kVMte3[2]{3u, 5u};
-static_assert(kTileBytes * 3u <= INC_VEC_UB_BUDGET_BYTES,
+constexpr uint32_t kMte2V[2]{0u, 2u};
+constexpr uint32_t kVMte2[2]{1u, 3u};
+constexpr uint32_t kMte3V[2]{4u, 6u};
+constexpr uint32_t kVMte3[2]{5u, 7u};
+static_assert(kTileBytes * 4u <= INC_VEC_UB_BUDGET_BYTES,
               "sparse Combine tile exceeds AIV UB budget");
 
 __aicore__ inline bool WaitControlValue(__gm__ uint32_t *value,
@@ -107,6 +108,24 @@ __aicore__ inline void PutFp32UbRemote(__ubuf__ uint8_t *source,
         AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kMte3V[1]);
 }
 
+__aicore__ inline void GetFp32RemoteToUb(__ubuf__ uint8_t *destination,
+                                         __gm__ float *source,
+                                         uint32_t elements, int32_t pe,
+                                         uint32_t ping)
+{
+    if (ping == 0u)
+        AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVMte2[0]);
+    else
+        AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVMte2[1]);
+    aclshmemx_mte_get_nbi(
+        reinterpret_cast<__ubuf__ float *>(destination), source, elements,
+        pe, 0u);
+    if (ping == 0u)
+        AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(kMte2V[0]);
+    else
+        AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(kMte2V[1]);
+}
+
 __aicore__ inline void PublishAck(
     __gm__ SparseCombineDeviceAck *ack, uint32_t source, uint32_t status,
     uint64_t rows, uint64_t generation)
@@ -134,10 +153,11 @@ void inc_dc_sparse_combine_device_e2e_kernel(
     GM_ADDR reduced_output, GM_ADDR descriptor_mailbox, GM_ADDR ack_mailbox,
     GM_ADDR completion_mailbox, GM_ADDR journal_header,
     GM_ADDR journal_entries, GM_ADDR journal_row_map,
-    GM_ADDR destination_rows, GM_ADDR inc_token_ids, GM_ADDR block_staging,
-    GM_ADDR status_line, uint64_t ffts_addr, uint64_t journal_capacity,
+    GM_ADDR destination_rows, GM_ADDR inc_token_ids, GM_ADDR status_line,
+    uint64_t ffts_addr, uint64_t journal_capacity,
     uint64_t row_capacity, uint32_t hidden, uint32_t worker_count,
-    int32_t inc_pe, uint64_t generation, uint32_t wave)
+    int32_t inc_pe, uint64_t generation, uint32_t wave,
+    int32_t delay_rank, uint64_t delay_cycles)
 {
     shmemx_set_ffts_config(ffts_addr);
     const uint32_t block = AscendC::GetBlockIdx();
@@ -146,11 +166,32 @@ void inc_dc_sparse_combine_device_e2e_kernel(
 
     if (pe != inc_pe) {
         if (block == 0u) {
+            if (pe == delay_rank && delay_cycles != 0u) {
+                const uint64_t delay_begin = AscendC::GetSystemCycle();
+                while (AscendC::GetSystemCycle() - delay_begin <
+                       delay_cycles) {
+                }
+            }
             __gm__ SparseCombineReadyDescriptor *descriptor =
                 reinterpret_cast<__gm__ SparseCombineReadyDescriptor *>(
                     descriptor_mailbox) + pe;
+            const uint64_t publish_generation = descriptor->generation;
+            // Two-phase publication: generation is the commit word.  A
+            // single 128-byte PUT may expose its first cache line before the
+            // second one, so INC must never accept generation until every
+            // descriptor field is remotely visible.
+            descriptor->generation = 0u;
+            AscendC::PipeBarrier<PIPE_ALL>();
+            dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(descriptor));
             aclshmem_putmem(descriptor, descriptor,
                             sizeof(SparseCombineReadyDescriptor), inc_pe);
+            aclshmem_quiet();
+            aclshmem_uint64_p(&descriptor->generation, publish_generation,
+                              inc_pe);
+            aclshmem_quiet();
+            descriptor->generation = publish_generation;
+            AscendC::PipeBarrier<PIPE_ALL>();
+            dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(descriptor));
         }
         return;
     }
@@ -240,10 +281,12 @@ void inc_dc_sparse_combine_device_e2e_kernel(
     __gm__ float *partials =
         reinterpret_cast<__gm__ float *>(symmetric_partials);
     __gm__ float *output = reinterpret_cast<__gm__ float *>(reduced_output);
-    (void)block_staging;
-    __ubuf__ uint8_t *temp_ub = reinterpret_cast<__ubuf__ uint8_t *>(0u);
-    __ubuf__ uint8_t *acc_ub[2]{temp_ub + kTileBytes,
-                                temp_ub + kTileBytes * 2u};
+    __ubuf__ uint8_t *input_ub[2]{
+        reinterpret_cast<__ubuf__ uint8_t *>(0u),
+        reinterpret_cast<__ubuf__ uint8_t *>(kTileBytes)};
+    __ubuf__ uint8_t *acc_ub[2]{
+        reinterpret_cast<__ubuf__ uint8_t *>(kTileBytes * 2u),
+        reinterpret_cast<__ubuf__ uint8_t *>(kTileBytes * 3u)};
 
     // Block 0 joins the same static token partition after it finishes the
     // controller scan.  Other reducers have already started on early-ready
@@ -252,7 +295,8 @@ void inc_dc_sparse_combine_device_e2e_kernel(
     const uint32_t reducer_index = block;
     const uint32_t reducer_count = blocks;
     if (reducer && *status == kStatusOk) {
-        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVMte2);
+        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVMte2[0]);
+        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVMte2[1]);
         AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kMte3V[0]);
         AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kMte3V[1]);
         const uint64_t entries_per_reducer =
@@ -305,29 +349,58 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                     IncVecBindFloatUb(acc_ub[ping], count * sizeof(float));
                 AscendC::Duplicate(acc, 0.0f, count);
                 AscendC::PipeBarrier<PIPE_V>();
-                for (uint32_t source = 0u; source < worker_count; ++source) {
-                    if ((entry->expected[source >> 6u] &
-                         (1ull << (source & 63u))) == 0u)
-                        continue;
+                uint32_t source = 0u;
+                while (source < worker_count &&
+                       (entry->expected[source >> 6u] &
+                        (1ull << (source & 63u))) == 0u)
+                    ++source;
+                uint32_t input_ping = 0u;
+                if (source < worker_count) {
                     const uint32_t row = row_map[
                         static_cast<uint64_t>(source) * journal_capacity +
                         index];
-                    // Pull directly from the source HBM into this AIV's UB.
-                    // Avoiding the transient INC-HBM bounce is both faster
-                    // and avoids rereading a stale staging cache line.
-                    AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVMte2);
-                    aclshmemx_mte_get_nbi(
-                        reinterpret_cast<__ubuf__ float *>(temp_ub),
+                    GetFp32RemoteToUb(
+                        input_ub[input_ping],
                         partials + static_cast<uint64_t>(row) * hidden +
                             begin,
                         count, static_cast<int32_t>(source), 0u);
-                    AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(kMte2V);
-                    AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(kMte2V);
+                }
+                while (source < worker_count) {
+                    uint32_t next = source + 1u;
+                    while (next < worker_count &&
+                           (entry->expected[next >> 6u] &
+                            (1ull << (next & 63u))) == 0u)
+                        ++next;
+                    if (next < worker_count) {
+                        const uint32_t next_ping = 1u - input_ping;
+                        const uint32_t next_row = row_map[
+                            static_cast<uint64_t>(next) * journal_capacity +
+                            index];
+                        GetFp32RemoteToUb(
+                            input_ub[next_ping],
+                            partials + static_cast<uint64_t>(next_row) *
+                                hidden + begin,
+                            count, static_cast<int32_t>(next), next_ping);
+                    }
+                    if (input_ping == 0u)
+                        AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(
+                            kMte2V[0]);
+                    else
+                        AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(
+                            kMte2V[1]);
                     AscendC::LocalTensor<float> temp =
-                        IncVecBindFloatUb(temp_ub, count * sizeof(float));
+                        IncVecBindFloatUb(input_ub[input_ping],
+                                          count * sizeof(float));
                     AscendC::Add(acc, acc, temp, count);
                     AscendC::PipeBarrier<PIPE_V>();
-                    AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVMte2);
+                    if (input_ping == 0u)
+                        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(
+                            kVMte2[0]);
+                    else
+                        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(
+                            kVMte2[1]);
+                    source = next;
+                    input_ping = 1u - input_ping;
                 }
                 if (ping == 0u)
                     AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(
@@ -350,7 +423,8 @@ void inc_dc_sparse_combine_device_e2e_kernel(
         // publication.  Without this fence, long streams can expose the
         // completion before early owner rows are globally observable.
         aclshmemx_mte_quiet();
-        AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVMte2);
+        AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVMte2[0]);
+        AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVMte2[1]);
     }
     AscendC::SyncAll<true>();
     dcci_cacheline(status_line);
@@ -399,15 +473,16 @@ extern "C" void launch_inc_dc_sparse_combine_device_e2e(
     uint8_t *completion_mailbox, uint8_t *journal_header,
     uint8_t *journal_entries, uint8_t *journal_row_map,
     uint8_t *destination_rows, uint8_t *inc_token_ids,
-    uint8_t *block_staging, uint8_t *status_line, uint64_t ffts_addr,
+    uint8_t *status_line, uint64_t ffts_addr,
     uint64_t journal_capacity, uint64_t row_capacity, uint32_t hidden,
     uint32_t worker_count, int32_t inc_pe, uint64_t generation,
-    uint32_t wave)
+    uint32_t wave, int32_t delay_rank, uint64_t delay_cycles)
 {
     inc_dc_sparse_combine_device_e2e_kernel<<<block_dim, nullptr, stream>>>(
         symmetric_token_ids, symmetric_partials, reduced_output,
         descriptor_mailbox, ack_mailbox, completion_mailbox, journal_header,
         journal_entries, journal_row_map, destination_rows, inc_token_ids,
-        block_staging, status_line, ffts_addr, journal_capacity, row_capacity,
-        hidden, worker_count, inc_pe, generation, wave);
+        status_line, ffts_addr, journal_capacity, row_capacity,
+        hidden, worker_count, inc_pe, generation, wave, delay_rank,
+        delay_cycles);
 }

@@ -47,10 +47,10 @@ extern "C" void launch_inc_dc_sparse_combine_device_e2e(
     uint8_t *completion_mailbox, uint8_t *journal_header,
     uint8_t *journal_entries, uint8_t *journal_row_map,
     uint8_t *destination_rows, uint8_t *inc_token_ids,
-    uint8_t *block_staging, uint8_t *status_line, uint64_t ffts_addr,
+    uint8_t *status_line, uint64_t ffts_addr,
     uint64_t journal_capacity, uint64_t row_capacity, uint32_t hidden,
     uint32_t worker_count, int32_t inc_pe, uint64_t generation,
-    uint32_t wave);
+    uint32_t wave, int32_t delay_rank, uint64_t delay_cycles);
 
 int g_npus = 5;
 const char *ipport = "tcp://127.0.0.1:28780";
@@ -190,12 +190,14 @@ bool CopyFromDevice(std::vector<T> *host, uint8_t *device, uint64_t count)
 
 int main(int argc, char **argv)
 {
-    if (argc < 8 || argc > 10) {
+    if (argc < 8 || argc > 12) {
         std::cerr << "usage: " << argv[0]
                   << " <workers> <pe> <ipport> <first_npu> <tokens>"
                      " <hidden> <topk> [aiv; 0=half of live AIV]"
                      " [fault; 0=none, 1=digest, 2=duplicate ordinal,"
-                     " 3=nonfinite weight, 4=count mismatch]\n";
+                     " 3=nonfinite weight, 4=count mismatch,"
+                     " 5=combine descriptor, 6=combine token ID]"
+                     " [delay_rank; -1=none] [device_delay_cycles]\n";
         return 2;
     }
     const uint32_t workers = static_cast<uint32_t>(std::strtoul(
@@ -211,14 +213,19 @@ int main(int argc, char **argv)
         argv[7], nullptr, 10));
     const uint32_t requested_aiv = argc >= 9
         ? static_cast<uint32_t>(std::strtoul(argv[8], nullptr, 10)) : 0u;
-    const uint32_t fault = argc == 10
+    const uint32_t fault = argc >= 10
         ? static_cast<uint32_t>(std::strtoul(argv[9], nullptr, 10)) : 0u;
+    const int32_t delay_rank = argc >= 11 ? std::atoi(argv[10]) : -1;
+    const uint64_t delay_cycles = argc >= 12
+        ? std::strtoull(argv[11], nullptr, 10) : 0u;
     const uint32_t pes = workers + 1u;
     const int inc_pe = static_cast<int>(workers);
     g_npus = static_cast<int>(pes);
     if (workers < 2u || workers > 8u || pe < 0 ||
         pe >= static_cast<int>(pes) || tokens == 0u || hidden == 0u ||
-        topk == 0u || topk > 32u || fault > 4u) {
+        topk == 0u || topk > 32u || fault > 6u || delay_rank < -1 ||
+        delay_rank >= static_cast<int32_t>(workers) ||
+        (delay_rank == -1 && delay_cycles != 0u)) {
         return Fail("arguments", 2);
     }
 
@@ -235,8 +242,11 @@ int main(int argc, char **argv)
         std::cerr << packet_error << '\n';
         return Fail("build packet", 2);
     }
-    const bool expect_reject = fault != 0u;
-    if (fault != 0u && pe == 0) {
+    const bool expect_reject = fault >= 1u && fault <= 4u;
+    const bool expect_combine_reject = fault >= 5u;
+    const uint32_t expected_combine_status = fault == 5u ? 2u :
+        (fault == 6u ? 5u : 0u);
+    if (expect_reject && pe == 0) {
         EndpointDispatchPacketHeader *header =
             reinterpret_cast<EndpointDispatchPacketHeader *>(
                 local_packet.data());
@@ -328,7 +338,6 @@ int main(int argc, char **argv)
     uint8_t *combine_acks = nullptr;
     uint8_t *combine_completions = nullptr;
     uint8_t *inc_combine_token_ids = nullptr;
-    uint8_t *combine_staging = nullptr;
     uint8_t *combine_status_line = nullptr;
     uint8_t *status_line = nullptr;
     double e2e_us = 0.0;
@@ -410,8 +419,6 @@ int main(int argc, char **argv)
         inc_combine_token_ids = static_cast<uint8_t *>(aclshmem_malloc(
             static_cast<uint64_t>(workers) * combine_row_capacity *
             sizeof(uint64_t)));
-        combine_staging = static_cast<uint8_t *>(aclshmem_malloc(
-            static_cast<uint64_t>(dispatch_aiv) * 3072u * sizeof(float)));
         combine_status_line = static_cast<uint8_t *>(aclshmem_malloc(64u));
         status_line = static_cast<uint8_t *>(aclshmem_malloc(64u));
         if (source_packet == nullptr || inc_packets == nullptr ||
@@ -427,7 +434,7 @@ int main(int argc, char **argv)
             combine_token_ids == nullptr || combine_partials == nullptr ||
             combine_output == nullptr || combine_descriptors == nullptr ||
             combine_acks == nullptr || combine_completions == nullptr ||
-            inc_combine_token_ids == nullptr || combine_staging == nullptr ||
+            inc_combine_token_ids == nullptr ||
             combine_status_line == nullptr ||
             status_line == nullptr)
             status = 1;
@@ -502,14 +509,12 @@ int main(int argc, char **argv)
         ZeroDevice(inc_combine_token_ids,
                    static_cast<uint64_t>(workers) * combine_row_capacity *
                        sizeof(uint64_t));
-        ZeroDevice(combine_staging,
-                   static_cast<uint64_t>(dispatch_aiv) * 3072u *
-                       sizeof(float));
         ZeroDevice(combine_status_line, 64u);
         ZeroDevice(status_line, 64u);
     }
     if (status == 0 && pe < inc_pe && !expect_reject) {
-        const std::vector<uint64_t> &ids = combine_ids_by_worker[pe];
+        std::vector<uint64_t> ids = combine_ids_by_worker[pe];
+        if (fault == 6u && pe == 0 && !ids.empty()) ids[0] ^= 1u;
         std::vector<float> partials(
             static_cast<size_t>(ids.size()) * hidden);
         for (uint32_t row = 0u; row < ids.size(); ++row)
@@ -536,6 +541,7 @@ int main(int argc, char **argv)
         descriptor.payload_bytes =
             static_cast<uint64_t>(ids.size()) * hidden * sizeof(float);
         descriptor.metadata_digest = 1u + static_cast<uint32_t>(pe);
+        if (fault == 5u && pe == 0) ++descriptor.row_count;
         if (status == 0)
             status = aclrtMemcpy(
                 combine_descriptors + static_cast<uint64_t>(pe) *
@@ -596,9 +602,9 @@ int main(int argc, char **argv)
             combine_output, combine_descriptors, combine_acks,
             combine_completions, journal_header, journal_entries,
             journal_row_map, destination_rows, inc_combine_token_ids,
-            combine_staging, combine_status_line, shmemx_get_ffts_config(),
+            combine_status_line, shmemx_get_ffts_config(),
             journal_capacity, combine_row_capacity, hidden, workers, inc_pe,
-            kGeneration, kWave);
+            kGeneration, kWave, delay_rank, delay_cycles);
         status = aclrtSynchronizeStream(stream);
         const auto end = std::chrono::steady_clock::now();
         combine_us = std::chrono::duration<double, std::micro>(end - begin)
@@ -992,8 +998,9 @@ int main(int argc, char **argv)
             combine_ack.generation == kGeneration &&
             combine_ack.sequence == 1u &&
             combine_ack.source_rank == static_cast<uint32_t>(pe) &&
-            combine_ack.status == 0u &&
-            combine_ack.rows_consumed == combine_rows_per_worker[pe] &&
+            combine_ack.status == expected_combine_status &&
+            combine_ack.rows_consumed ==
+                (expect_combine_reject ? 0u : combine_rows_per_worker[pe]) &&
             combine_completion.magic == kSparseCombineMagic &&
             combine_completion.abi_version == kSparseCombineAbiVersion &&
             combine_completion.struct_bytes ==
@@ -1001,8 +1008,9 @@ int main(int argc, char **argv)
             combine_completion.generation == kGeneration &&
             combine_completion.wave == kWave &&
             combine_completion.owner_rank == static_cast<uint32_t>(pe) &&
-            combine_completion.status == 0u &&
-            combine_completion.row_count == tokens;
+            combine_completion.status == expected_combine_status &&
+            combine_completion.row_count ==
+                (expect_combine_reject ? 0u : tokens);
         if (!correct) {
             std::cerr << "[FAIL] pe=" << pe << " combine ack={status="
                       << combine_ack.status << ",rows="
@@ -1011,13 +1019,14 @@ int main(int argc, char **argv)
                       << combine_completion.row_count << "}\n";
         }
         std::vector<float> actual_output;
-        if (correct)
+        if (correct && !expect_combine_reject)
             correct = CopyFromDevice(
                 &actual_output, combine_output,
                 static_cast<uint64_t>(tokens) * hidden);
         const EndpointDispatchInput owner_input = MakeInput(
             static_cast<uint32_t>(pe), workers, tokens, hidden, topk);
-        for (uint32_t token = 0u; correct && token < tokens; ++token) {
+        for (uint32_t token = 0u;
+             correct && !expect_combine_reject && token < tokens; ++token) {
             std::vector<uint8_t> selected(workers, 0u);
             for (uint32_t assignment = owner_input.assignment_offsets[token];
                  assignment < owner_input.assignment_offsets[token + 1u];
@@ -1052,16 +1061,37 @@ int main(int argc, char **argv)
             &combine_device_status, sizeof(combine_device_status),
             combine_status_line, sizeof(combine_device_status),
             ACL_MEMCPY_DEVICE_TO_HOST);
-        correct = status == 0 && combine_device_status == 0u;
+        correct = status == 0 &&
+            combine_device_status == expected_combine_status;
         if (!correct)
             std::cerr << "[FAIL] INC sparse Combine device_status="
                       << combine_device_status << '\n';
+        if (!correct && combine_device_status == 2u) {
+            std::vector<SparseCombineReadyDescriptor> observed;
+            if (CopyFromDevice(&observed, combine_descriptors, workers)) {
+                for (uint32_t source = 0u; source < workers; ++source) {
+                    const auto &d = observed[source];
+                    std::cerr << "[FAIL] descriptor source=" << source
+                              << " magic=" << d.magic << " abi="
+                              << d.abi_version << " bytes="
+                              << d.struct_bytes << " gen=" << d.generation
+                              << " seq=" << d.sequence << " wave="
+                              << d.wave << " src=" << d.source_rank
+                              << " rows=" << d.row_count << " hidden="
+                              << d.hidden << " dtype=" << d.partial_dtype
+                              << " slot=" << d.slot << " region="
+                              << d.source_region_id << " payload="
+                              << d.payload_bytes << " digest="
+                              << d.metadata_digest << " flags=" << d.flags
+                              << '\n';
+                }
+            }
+        }
     }
 
     if (status == 0) aclshmem_barrier_all();
     if (status_line != nullptr) aclshmem_free(status_line);
     if (combine_status_line != nullptr) aclshmem_free(combine_status_line);
-    if (combine_staging != nullptr) aclshmem_free(combine_staging);
     if (inc_combine_token_ids != nullptr)
         aclshmem_free(inc_combine_token_ids);
     if (combine_completions != nullptr) aclshmem_free(combine_completions);
@@ -1095,8 +1125,10 @@ int main(int argc, char **argv)
     std::cout << "[PASS] pe=" << pe << " workers=" << workers
               << " tokens=" << tokens << " hidden=" << hidden
               << " topk=" << topk << " aiv=" << dispatch_aiv;
-    if (expect_reject) std::cout << " expected_reject=" << fault;
-    if (!expect_reject && pe == inc_pe && e2e_us > 0.0) {
+    if (expect_reject || expect_combine_reject)
+        std::cout << " expected_reject=" << fault;
+    if (!expect_reject && !expect_combine_reject && pe == inc_pe &&
+        e2e_us > 0.0) {
         uint64_t fanout_rows = 0u;
         for (uint32_t source = 0u; source < workers; ++source) {
             const EndpointDispatchInput input = MakeInput(
