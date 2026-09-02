@@ -5,6 +5,19 @@
 
 namespace inc::dc::pull_combine {
 
+constexpr uint32_t kDevicePipelineChunkBytes = 512u * 1024u;
+constexpr uint32_t kDevicePipelineReadyStride = 64u;
+static_assert(kDevicePipelineChunkBytes % 64u == 0u,
+              "pipeline chunks must preserve RMA cache-line boundaries");
+static_assert(kDevicePipelineReadyStride >= sizeof(uint64_t),
+              "ready record must contain a generation");
+
+enum DeviceE2eStatus : uint32_t {
+    kDeviceE2eStatusOk = 0u,
+    kDeviceE2eStatusDescriptor = 1u,
+    kDeviceE2eStatusReadyTimeout = 2u,
+};
+
 enum DeviceE2eTimelinePoint : uint32_t {
     kTimelineStart = 0u,
     kTimelineDescriptorDone,

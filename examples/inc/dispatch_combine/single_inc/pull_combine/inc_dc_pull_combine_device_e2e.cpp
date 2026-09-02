@@ -20,7 +20,8 @@ extern "C" void launch_inc_dc_pull_combine_device_e2e(
     uint32_t block_dim, void *stream, uint8_t *symmetric_partials,
     uint8_t *inc_staging, uint8_t *reduced_output,
     uint8_t *descriptor_mailbox, uint8_t *ack_mailbox,
-    uint8_t *status_line, uint64_t ffts_addr, uint32_t elements,
+    uint8_t *status_line, uint8_t *ready_flags, uint64_t ffts_addr,
+    uint32_t elements,
     uint32_t worker_count, uint32_t lanes_per_worker, int32_t inc_pe,
     uint64_t generation, uint32_t wave, uint64_t digest);
 
@@ -82,6 +83,13 @@ int main(int argc, char **argv)
         (static_cast<uint64_t>(elements) + kFloatsPerCacheLine - 1u) /
         kFloatsPerCacheLine * kFloatsPerCacheLine;
     const uint64_t padded_bytes = padded_elements * sizeof(float);
+    constexpr uint64_t kPipelineChunkElements =
+        kDevicePipelineChunkBytes / sizeof(float);
+    const uint64_t chunk_count =
+        (padded_elements + kPipelineChunkElements - 1u) /
+        kPipelineChunkElements;
+    const uint64_t ready_bytes = static_cast<uint64_t>(workers) *
+        chunk_count * kDevicePipelineReadyStride;
     const int32_t device = pe + f_npu;
     aclrtStream stream = nullptr;
     bool shmem_initialized = false;
@@ -91,6 +99,7 @@ int main(int argc, char **argv)
     uint8_t *descriptors = nullptr;
     uint8_t *acks = nullptr;
     uint8_t *status_line = nullptr;
+    uint8_t *ready_flags = nullptr;
     double device_e2e_us = 0.0;
     DeviceE2eTimeline timeline{};
 
@@ -130,9 +139,10 @@ int main(int argc, char **argv)
         acks = static_cast<uint8_t *>(aclshmem_malloc(
             sizeof(CombineAck) * workers));
         status_line = static_cast<uint8_t *>(aclshmem_malloc(64u));
+        ready_flags = static_cast<uint8_t *>(aclshmem_malloc(ready_bytes));
         if (partials == nullptr || staging == nullptr || output == nullptr ||
             descriptors == nullptr || acks == nullptr ||
-            status_line == nullptr)
+            status_line == nullptr || ready_flags == nullptr)
             status = 1;
     }
 
@@ -166,6 +176,11 @@ int main(int argc, char **argv)
             status = aclrtMemcpy(status_line, sizeof(zero_status),
                                  zero_status, sizeof(zero_status),
                                  ACL_MEMCPY_HOST_TO_DEVICE);
+        zero_bytes.assign(static_cast<size_t>(ready_bytes), 0u);
+        if (status == 0)
+            status = aclrtMemcpy(ready_flags, zero_bytes.size(),
+                                 zero_bytes.data(), zero_bytes.size(),
+                                 ACL_MEMCPY_HOST_TO_DEVICE);
     }
     if (status == 0) aclshmem_barrier_all();
 
@@ -195,8 +210,8 @@ int main(int argc, char **argv)
         const auto begin = std::chrono::steady_clock::now();
         launch_inc_dc_pull_combine_device_e2e(
             workers * lanes, stream, partials, staging, output, descriptors,
-            acks, status_line, shmemx_get_ffts_config(), elements, workers,
-            lanes, inc_pe, kGeneration, kWave, kDigest);
+            acks, status_line, ready_flags, shmemx_get_ffts_config(),
+            elements, workers, lanes, inc_pe, kGeneration, kWave, kDigest);
         status = aclrtSynchronizeStream(stream);
         const auto end = std::chrono::steady_clock::now();
         device_e2e_us = std::chrono::duration<double, std::micro>(
@@ -252,6 +267,7 @@ int main(int argc, char **argv)
     }
 
     if (status == 0) aclshmem_barrier_all();
+    if (ready_flags != nullptr) aclshmem_free(ready_flags);
     if (status_line != nullptr) aclshmem_free(status_line);
     if (acks != nullptr) aclshmem_free(acks);
     if (descriptors != nullptr) aclshmem_free(descriptors);

@@ -37,8 +37,15 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
   egress；64B timeline 可拆分六个设备阶段。
 - 已完成：AIV 固定拥有 owner slice，并错开 source 顺序执行局部
   pull→reduce→push；不再等待整 wave pull 完成。
+- 已完成：大消息采用独立 pull producer / owner reducer AIV；producer 每完成
+  512 KiB 就发布带 generation 的 cache-line ready，reducer 收齐该 chunk 的所有
+  source 后立即严格 FP32 reduce 并从 UB 直接 PUT 回 owner。
+- 已完成：chunk 按 owner 条带公平调度，所有 owner 尽早获得首块，避免后半 owner
+  在单调地址 pull 中长期空转；小于两个 chunk 时自动回退到零握手 owner-slice。
+- 已完成：descriptor 或 ready 超时均 fail-closed；成功 ACK 只在 source 已消费且
+  egress 完成后发布，失败 ACK 的 `rows_consumed=0`，不会永久占住发送槽。
 - 未完成：持久化设备 server、设备 Dispatch 数据面、跨 wave 端到端
-  Dispatch+Combine gate、独立 pull/reducer 角色的真双流水、公共 API 接入。
+  Dispatch+Combine gate、公共 API 接入。
 
 设备物理 region 按 64B 向上对齐，但 descriptor 中的 `row_count` 和
 `payload_bytes` 始终是真实长度。lane 只在 cache-line 边界切分，最后一个物理
@@ -102,22 +109,37 @@ gate，不是公共 API。lane 传 0 时，从实际 `VECTOR_CORE_NUM` 取一半
 | W2 | 68 B | 非 64B、非 worker 整分 | PASS |
 | W4 | 4 B | 三个 owner 为零元素 | PASS |
 | W2/W4 | 1,000,012 B | 非 64B、非 worker 整分 | 全部 PASS |
+| W2/W4 | 524,292 / 2,500,012 B | 刚跨流水阈值、非对齐多 chunk | 全部 PASS |
 | W2/W4 | 1 MiB | UB 向量路径，各连续 5 次 | 10/10 PASS |
-| W4 | 64 MiB | 大消息 | 5 PE 全部 PASS |
+| W2/W4 | 64 MiB | 真 producer/consumer 流水，各 5 次 | 40 个 PE 进程全部 PASS |
+| W2 tiny + W4 64 MiB | 两个 HCCS 平面并发作业 | 8 个 PE 进程全部 PASS |
 
 ### 当前设备 E2E 性能
 
 计时覆盖一次 kernel 的 descriptor 校验、pull、严格 FP32 reduction、ACK 和
 selective push；`logical_rma_gb_s=(W+1)×真实字节数/时间`，不是纯链路带宽。
 输出中的六项 `phase_pct` 依次是 descriptor、数据面、order、ACK、release、最终
-同步；owner-slice 版本的数据面本身已经包含局部 pull+reduce+direct push。
+同步。流水版本的数据面包含 producer pull、generation-ready、严格 FP32 reduce
+和 UB direct push；各阶段是交叠的，不能再从该区间拆成可相加的独立耗时。
 
-| 规模 | lane/worker | staged GM | UB 直接回传 | owner slice | 当前吞吐 |
+| 规模 | lane/worker | owner-slice 稳定点 | 512 KiB 流水均值 | 代表单次 | 相对稳定点 |
 |---|---:|---:|---:|---:|---:|
-| W2×64 MiB | 12（自动） | 7.72 ms | 4.98 ms | 4.83 ms | 41.72 GB/s |
-| W4×64 MiB | 6（自动） | 7.37 ms | 4.25 ms | 4.22 ms | 79.43 GB/s |
+| W2×64 MiB | 12（自动） | 4.83 ms / 41.72 GB/s | 52.95 GB/s | 3.806 ms / 52.89 GB/s | +26.9%（均值） |
+| W4×64 MiB | 6（自动） | 4.22 ms / 79.43 GB/s | 91.81 GB/s | 3.574 ms / 93.89 GB/s | +15.6%（均值） |
 
-这仍是 qualification kernel，不是最终性能 gate：当前尚未把分块 pull、reduce、
-push 做成跨 tile 的持久化流水，因此不能用这张表宣称达到 90% roofline。
-nb 运行时报告 48 个 vector core，所以半 AIV 自动预算是 24；这也是为什么这里
-的自动 lane 是 W2=12、W4=6，而不是沿用旧 40-AIV 环境的 10/5。
+五轮 64 MiB soak 中，W2 均值 52.95 GB/s、CV 0.193%；W4 在另一 HCCS
+平面并与 W2 同时运行时均值 91.81 GB/s、CV 2.002%，全部逐元素和 ACK 通过。
+单独运行 W4 的代表值为 93.89 GB/s。
+
+纯 pull 锚点分别是 W2=41.74、W4=83.49 GB/s（只计算 `W×bytes` ingress）。
+把它换成完整 Combine 的传输受限 logical roof：
+`pull_anchor × (W+1)/W`，得到 W2=62.61、W4=104.36 GB/s。最终均值分别达到
+该实测 roof 的 84.6% 和 88.0%；W4 单独运行达到 90.0%。这个口径不会把
+`pull+push` 的 logical bytes 错当成一条物理链路带宽。W2 仍未达到 90%，所以
+不能宣称所有规模都通过最终性能 gate，但当前优化没有以牺牲正确性或稳定性换取
+峰值。
+
+nb 运行时报告 48 个 vector core，所以 Dispatch/Combine 各占一半时 Combine
+自动预算是 24 AIV；自动 lane 为 W2=12、W4=6，而不是沿用旧 40-AIV 环境的
+10/5。W2 将 reducer 并发人为降到 W4 同档后只得到 50.54 GB/s，低于自动策略，
+因此没有把机器特定的 reducer 上限写入协议。
