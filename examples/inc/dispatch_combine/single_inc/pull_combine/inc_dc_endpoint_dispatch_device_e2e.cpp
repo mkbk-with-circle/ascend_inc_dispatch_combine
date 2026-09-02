@@ -38,6 +38,38 @@ constexpr uint64_t kGeneration = 17u;
 constexpr uint32_t kWave = 5u;
 constexpr uint32_t kExpertCount = 64u;
 
+void HashBytes(uint64_t *hash, const void *data, uint64_t bytes)
+{
+    constexpr uint64_t kPrime = 1099511628211ull;
+    const uint8_t *p = static_cast<const uint8_t *>(data);
+    for (uint64_t i = 0u; i < bytes; ++i) {
+        *hash ^= p[i];
+        *hash *= kPrime;
+    }
+}
+
+uint64_t RecomputeMetadataDigest(std::vector<uint8_t> *packet)
+{
+    constexpr uint64_t kOffset = 1469598103934665603ull;
+    EndpointDispatchPacketHeader *header =
+        reinterpret_cast<EndpointDispatchPacketHeader *>(packet->data());
+    EndpointDispatchPacketHeader canonical = *header;
+    canonical.metadata_digest = 0u;
+    uint64_t hash = kOffset;
+    HashBytes(&hash, &canonical, sizeof(canonical));
+    HashBytes(&hash, packet->data() + header->counts_offset,
+              static_cast<uint64_t>(header->worker_count) *
+                  sizeof(uint32_t) * 2u);
+    HashBytes(&hash, packet->data() + header->tokens_offset,
+              static_cast<uint64_t>(header->token_count) *
+                  sizeof(EndpointDispatchTokenRecord));
+    HashBytes(&hash, packet->data() + header->assignments_offset,
+              static_cast<uint64_t>(header->assignment_count) *
+                  sizeof(EndpointDispatchAssignmentRecord));
+    header->metadata_digest = hash;
+    return hash;
+}
+
 uint8_t HiddenByte(uint32_t source, uint32_t token, uint64_t byte)
 {
     return static_cast<uint8_t>(
@@ -108,10 +140,12 @@ bool CopyFromDevice(std::vector<T> *host, uint8_t *device, uint64_t count)
 
 int main(int argc, char **argv)
 {
-    if (argc != 8 && argc != 9) {
+    if (argc < 8 || argc > 10) {
         std::cerr << "usage: " << argv[0]
                   << " <workers> <pe> <ipport> <first_npu> <tokens>"
-                     " <hidden> <topk> [aiv; 0=half of live AIV]\n";
+                     " <hidden> <topk> [aiv; 0=half of live AIV]"
+                     " [fault; 0=none, 1=digest, 2=duplicate ordinal,"
+                     " 3=nonfinite weight, 4=count mismatch]\n";
         return 2;
     }
     const uint32_t workers = static_cast<uint32_t>(std::strtoul(
@@ -125,14 +159,16 @@ int main(int argc, char **argv)
         argv[6], nullptr, 10));
     const uint32_t topk = static_cast<uint32_t>(std::strtoul(
         argv[7], nullptr, 10));
-    const uint32_t requested_aiv = argc == 9
+    const uint32_t requested_aiv = argc >= 9
         ? static_cast<uint32_t>(std::strtoul(argv[8], nullptr, 10)) : 0u;
+    const uint32_t fault = argc == 10
+        ? static_cast<uint32_t>(std::strtoul(argv[9], nullptr, 10)) : 0u;
     const uint32_t pes = workers + 1u;
     const int inc_pe = static_cast<int>(workers);
     g_npus = static_cast<int>(pes);
     if (workers < 2u || workers > 8u || pe < 0 ||
         pe >= static_cast<int>(pes) || tokens == 0u || hidden == 0u ||
-        topk == 0u || topk > 32u) {
+        topk == 0u || topk > 32u || fault > 4u) {
         return Fail("arguments", 2);
     }
 
@@ -148,6 +184,33 @@ int main(int argc, char **argv)
         EndpointDispatchStatus::OK) {
         std::cerr << packet_error << '\n';
         return Fail("build packet", 2);
+    }
+    const bool expect_reject = fault != 0u;
+    if (fault != 0u && pe == 0) {
+        EndpointDispatchPacketHeader *header =
+            reinterpret_cast<EndpointDispatchPacketHeader *>(
+                local_packet.data());
+        if (fault == 1u) {
+            local_packet[header->tokens_offset] ^= 0x1u;
+        } else if (fault == 2u) {
+            EndpointDispatchAssignmentRecord *assignment =
+                reinterpret_cast<EndpointDispatchAssignmentRecord *>(
+                    local_packet.data() + header->assignments_offset);
+            assignment[1].ordinal = assignment[0].ordinal;
+        } else if (fault == 3u) {
+            EndpointDispatchAssignmentRecord *assignment =
+                reinterpret_cast<EndpointDispatchAssignmentRecord *>(
+                    local_packet.data() + header->assignments_offset);
+            assignment[0].weight =
+                std::numeric_limits<float>::infinity();
+        } else {
+            uint32_t *counts = reinterpret_cast<uint32_t *>(
+                local_packet.data() + header->counts_offset);
+            ++counts[0];
+        }
+        if (fault != 1u)
+            local_commit.metadata_digest =
+                RecomputeMetadataDigest(&local_packet);
     }
     const uint64_t slot_bytes = local_packet.size();
     const uint64_t row_bytes = static_cast<uint64_t>(hidden) * 2u;
@@ -299,8 +362,14 @@ int main(int argc, char **argv)
         status = aclrtMemcpy(&device_status, sizeof(device_status), status_line,
                              sizeof(device_status),
                              ACL_MEMCPY_DEVICE_TO_HOST);
-        correct = status == 0 && device_status == 0u;
+        correct = status == 0 && device_status ==
+            (expect_reject ? 3u : 0u);
+        if (expect_reject) {
+            // The packet copy itself is intentionally corrupt; the gate is
+            // that INC rejects it and publishes negative completions.
+        }
         for (uint32_t source = 0u; correct && source < workers; ++source) {
+            if (expect_reject) break;
             std::vector<uint8_t> expected_packet;
             EndpointDispatchCommit expected_commit{};
             std::string error;
@@ -333,7 +402,29 @@ int main(int argc, char **argv)
             }
         }
     }
-    if (correct && pe < inc_pe) {
+    if (correct && pe < inc_pe && expect_reject) {
+        EndpointDispatchAck ack{};
+        EndpointDispatchReceiveCompletion completion{};
+        status = aclrtMemcpy(
+            &ack, sizeof(ack),
+            acks + static_cast<uint64_t>(pe) * sizeof(ack), sizeof(ack),
+            ACL_MEMCPY_DEVICE_TO_HOST);
+        if (status == 0)
+            status = aclrtMemcpy(
+                &completion, sizeof(completion),
+                completions + static_cast<uint64_t>(pe) * sizeof(completion),
+                sizeof(completion), ACL_MEMCPY_DEVICE_TO_HOST);
+        correct = status == 0 && ack.magic == kEndpointDispatchMagic &&
+            ack.generation == kGeneration && ack.source_rank ==
+                static_cast<uint32_t>(pe) && ack.status == 3u &&
+            ack.tokens_consumed == 0u &&
+            completion.magic == kEndpointDispatchMagic &&
+            completion.generation == kGeneration &&
+            completion.destination_rank == static_cast<uint32_t>(pe) &&
+            completion.status == 3u && completion.row_count == 0u &&
+            completion.assignment_count == 0u;
+    }
+    if (correct && pe < inc_pe && !expect_reject) {
         EndpointDispatchAck ack{};
         EndpointDispatchReceiveCompletion completion{};
         status = aclrtMemcpy(
@@ -513,7 +604,8 @@ int main(int argc, char **argv)
     std::cout << "[PASS] pe=" << pe << " workers=" << workers
               << " tokens=" << tokens << " hidden=" << hidden
               << " topk=" << topk << " aiv=" << dispatch_aiv;
-    if (pe == inc_pe && e2e_us > 0.0) {
+    if (expect_reject) std::cout << " expected_reject=" << fault;
+    if (!expect_reject && pe == inc_pe && e2e_us > 0.0) {
         uint64_t fanout_rows = 0u;
         for (uint32_t source = 0u; source < workers; ++source) {
             const EndpointDispatchInput input = MakeInput(

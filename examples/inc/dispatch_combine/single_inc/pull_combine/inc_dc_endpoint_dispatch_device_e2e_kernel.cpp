@@ -13,6 +13,8 @@ constexpr uint32_t kStatusInvalidCommit = 2u;
 constexpr uint32_t kStatusInvalidPacket = 3u;
 constexpr uint64_t kCommitSpinLimit = 1000000000ull;
 constexpr uint32_t kLocalPackUbBytes = 16u * 1024u;
+constexpr uint64_t kFnvOffset = 1469598103934665603ull;
+constexpr uint64_t kFnvPrime = 1099511628211ull;
 
 __aicore__ inline uint32_t DTypeBytes(uint32_t dtype)
 {
@@ -93,6 +95,53 @@ __aicore__ inline bool HeaderValid(
                 DTypeBytes(dtype) <= header->packet_bytes &&
         header->reserved[0] == 0u && header->reserved[1] == 0u &&
         header->reserved[2] == 0u;
+}
+
+__aicore__ inline uint64_t HashRange(__gm__ const uint8_t *data,
+                                     uint64_t bytes, uint64_t hash)
+{
+    for (uint64_t i = 0u; i < bytes; ++i) {
+        hash ^= data[i];
+        hash *= kFnvPrime;
+    }
+    return hash;
+}
+
+__aicore__ inline uint64_t MetadataDigest(
+    __gm__ uint8_t *packet, __gm__ EndpointDispatchPacketHeader *header)
+{
+    uint64_t hash = kFnvOffset;
+    constexpr uint64_t digest_offset =
+        __builtin_offsetof(EndpointDispatchPacketHeader, metadata_digest);
+    hash = HashRange(packet, digest_offset, hash);
+    for (uint32_t i = 0u; i < sizeof(uint64_t); ++i) {
+        hash ^= 0u;
+        hash *= kFnvPrime;
+    }
+    hash = HashRange(packet + digest_offset + sizeof(uint64_t),
+                     sizeof(EndpointDispatchPacketHeader) - digest_offset -
+                         sizeof(uint64_t),
+                     hash);
+    hash = HashRange(packet + header->counts_offset,
+                     static_cast<uint64_t>(header->worker_count) *
+                         sizeof(uint32_t) * 2u,
+                     hash);
+    hash = HashRange(packet + header->tokens_offset,
+                     static_cast<uint64_t>(header->token_count) *
+                         sizeof(EndpointDispatchTokenRecord),
+                     hash);
+    return HashRange(packet + header->assignments_offset,
+                     static_cast<uint64_t>(header->assignment_count) *
+                         sizeof(EndpointDispatchAssignmentRecord),
+                     hash);
+}
+
+__aicore__ inline bool WeightFinite(
+    __gm__ EndpointDispatchAssignmentRecord *assignment)
+{
+    const uint32_t bits =
+        reinterpret_cast<__gm__ uint32_t *>(assignment)[3];
+    return (bits & 0x7f800000u) != 0x7f800000u;
 }
 
 __aicore__ inline uint32_t ReadCount(
@@ -211,6 +260,10 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
             // compact metadata once here instead of repeating DCCI for every
             // token, assignment and destination owner.
             FlushRange(packet, header->hidden_offset);
+            if (MetadataDigest(packet, header) != header->metadata_digest) {
+                *global_status = kStatusInvalidPacket;
+                break;
+            }
         }
         AscendC::PipeBarrier<PIPE_ALL>();
         dcci_cacheline(status_line);
@@ -279,6 +332,7 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
             __gm__ EndpointDispatchPacketHeader *header =
                 reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
                     packet);
+            uint32_t expected_assignment_begin = 0u;
             for (uint32_t destination = block; destination < worker_count;
                  destination += blocks) {
                 // One cache line per (source,destination).  Different AIV
@@ -319,6 +373,8 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                     reinterpret_cast<__gm__ EndpointDispatchTokenRecord *>(
                         packet + header->tokens_offset) + token;
                 if (token_record->source_token != token ||
+                    token_record->assignment_begin !=
+                        expected_assignment_begin ||
                     token_record->assignment_begin >
                         header->assignment_count ||
                     token_record->assignment_count >
@@ -340,10 +396,23 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                                     packet + header->assignments_offset) +
                             token_record->assignment_begin + local;
                         if (assignment->destination_rank >= worker_count ||
-                            assignment->expert_id >= expert_count) {
+                            assignment->expert_id >= expert_count ||
+                            !WeightFinite(assignment)) {
                             *global_status = kStatusInvalidPacket;
                             break;
                         }
+                        for (uint32_t prior = 0u; prior < local; ++prior) {
+                            __gm__ EndpointDispatchAssignmentRecord *other =
+                                reinterpret_cast<
+                                    __gm__ EndpointDispatchAssignmentRecord *>(
+                                        packet + header->assignments_offset) +
+                                token_record->assignment_begin + prior;
+                            if (other->ordinal == assignment->ordinal) {
+                                *global_status = kStatusInvalidPacket;
+                                break;
+                            }
+                        }
+                        if (*global_status != kStatusOk) break;
                         if (assignment->destination_rank == destination)
                             ++assignments_for_destination;
                     }
@@ -453,6 +522,43 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                     destination_cursor[1] = output_assignment;
                 }
                 if (*global_status != kStatusOk) break;
+                expected_assignment_begin +=
+                    token_record->assignment_count;
+            }
+
+            if (*global_status == kStatusOk &&
+                expected_assignment_begin != header->assignment_count)
+                *global_status = kStatusInvalidPacket;
+            for (uint32_t destination = block;
+                 *global_status == kStatusOk &&
+                 destination < worker_count; destination += blocks) {
+                __gm__ uint32_t *destination_cursor = cursor +
+                    (static_cast<uint64_t>(source) * worker_count +
+                     destination) * 16u;
+                uint32_t expected_rows = ReadCount(
+                    packet, header->counts_offset, destination);
+                uint32_t expected_assignments = ReadCount(
+                    packet, header->counts_offset,
+                    worker_count + destination);
+                uint32_t row_begin = 0u;
+                uint32_t assignment_begin = 0u;
+                for (uint32_t previous = 0u; previous < source; ++previous) {
+                    __gm__ uint8_t *previous_packet = inc_packets +
+                        static_cast<uint64_t>(previous) * slot_bytes;
+                    __gm__ EndpointDispatchPacketHeader *previous_header =
+                        reinterpret_cast<
+                            __gm__ EndpointDispatchPacketHeader *>(
+                                previous_packet);
+                    row_begin += ReadCount(previous_packet,
+                        previous_header->counts_offset, destination);
+                    assignment_begin += ReadCount(previous_packet,
+                        previous_header->counts_offset,
+                        worker_count + destination);
+                }
+                if (destination_cursor[0] != row_begin + expected_rows ||
+                    destination_cursor[1] !=
+                        assignment_begin + expected_assignments)
+                    *global_status = kStatusInvalidPacket;
             }
 
             if (*global_status != kStatusOk) break;
