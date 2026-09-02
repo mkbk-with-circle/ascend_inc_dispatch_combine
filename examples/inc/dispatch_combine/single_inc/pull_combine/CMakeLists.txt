@@ -40,3 +40,21 @@ target_link_libraries(inc_dc_pull_combine_transport_probe PRIVATE
     shmem inc_dc_pull_combine_transport_probe_kernel)
 add_dependencies(inc_dc_pull_combine_transport_probe
     aclshmem_bootstrap_config_store)
+
+# First device correctness closure for ready -> pull -> FP32 reduce ->
+# selective push -> ACK.  It is a qualification binary, not the public API.
+add_library(inc_dc_pull_combine_device_e2e_kernel SHARED
+    inc_dc_pull_combine_device_e2e_kernel.cpp)
+inc_device_target(inc_dc_pull_combine_device_e2e_kernel)
+target_include_directories(inc_dc_pull_combine_device_e2e_kernel PRIVATE
+    ${INC_DC_PULL_COMBINE_DIR})
+
+add_executable(inc_dc_pull_combine_device_e2e
+    inc_dc_pull_combine_device_e2e.cpp)
+inc_host_target(inc_dc_pull_combine_device_e2e)
+target_include_directories(inc_dc_pull_combine_device_e2e PRIVATE
+    ${INC_DC_PULL_COMBINE_DIR})
+target_link_libraries(inc_dc_pull_combine_device_e2e PRIVATE
+    shmem inc_dc_pull_combine_device_e2e_kernel)
+add_dependencies(inc_dc_pull_combine_device_e2e
+    aclshmem_bootstrap_config_store)

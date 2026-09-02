@@ -29,7 +29,15 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
 - 已完成：空 wave、零路由 token、重复目的 rank、`topk > worker_count`、乱序到达、
   分块传输、提前 egress、ring 回压、负 ACK 与计划生命周期保护。
 - 已完成：910B 上高阶 SHMEM GET 正确性和 W2/W4 聚合带宽锚点。
-- 未完成：持久化设备 server、设备归约/回传、端到端 Dispatch+Combine gate、公共 API 接入。
+- 已完成：设备 qualification 路径的 descriptor→pull→严格 FP32 reduce→
+  source ACK→按 owner 选择性回传，并在 W2/W4 上逐元素验证。
+- 未完成：持久化设备 server、设备 Dispatch 数据面、向量化归约、跨 wave 端到端
+  Dispatch+Combine gate、公共 API 接入。
+
+设备物理 region 按 64B 向上对齐，但 descriptor 中的 `row_count` 和
+`payload_bytes` 始终是真实长度。lane 只在 cache-line 边界切分，最后一个物理
+span 最多包含 63B padding；因此真实元素数无需整除 worker、lane 或 cache line，
+也不会产生跨 AIV false sharing。
 
 ## 主机 gate
 
@@ -45,6 +53,18 @@ cmake --build /tmp/shmem-pull-combine-v1-build --target \
 
 随机 gate 固定种子运行 500 个 W2–W8 联合 wave；开发时另以
 `-Wall -Wextra -Werror`、ASan/UBSan 和 10,000-wave soak 通过。
+
+设备 qualification target：
+
+```bash
+cmake --build /tmp/shmem-pull-combine-v1-build --target \
+  inc_dc_pull_combine_device_e2e -j4
+```
+
+二进制参数为
+`<workers> <pe> <ipport> <first_npu> <真实字节数> <每 worker lane>`；
+同一 case 需要并发启动 `workers + 1` 个 PE，最后一个 PE 是 INC。它只用于协议
+gate，不是公共 API。
 
 ## nb-borrow 设备锚点（2026-09-02）
 
@@ -64,3 +84,20 @@ cmake --build /tmp/shmem-pull-combine-v1-build --target \
 实时 AIV 数推导 lane，而不是写死 20/20；W2 Combine 需要 4 AIV，W4 需要 8 AIV。
 低阶 UDMA 只在 Ascend 950 开启，本协议使用高阶 SHMEM RMA 自动选择 MTE、SDMA
 或 UDMA，避免把 910B 跑到不支持的 engine。
+
+### 设备端正确性 gate
+
+同样使用同一 HCCS 平面的 NPU 0–4；输出按 owner 全量逐元素检查，ACK 字段也
+逐项检查。
+
+| 规模 | 真实字节数/worker | 边界 | 结果 |
+|---|---:|---|---:|
+| W2 | 68 B | 非 64B、非 worker 整分 | PASS |
+| W4 | 4 B | 三个 owner 为零元素 | PASS |
+| W2/W4 | 1,000,012 B | 非 64B、非 worker 整分 | 全部 PASS |
+| W2/W4 | 1 MiB | 各连续 5 次 | 10/10 PASS |
+| W4 | 64 MiB | 大消息 | 5 PE 全部 PASS |
+
+这里的设备 E2E 是正确性闭环，严格 FP32 归约当前仍是 scalar reference；性能
+结论仍应使用上面的纯 transport roofline。下一阶段会在不改变 ACK、对齐布局和
+owner 选择性回传语义的前提下替换为 UB tiled vector reduction。
