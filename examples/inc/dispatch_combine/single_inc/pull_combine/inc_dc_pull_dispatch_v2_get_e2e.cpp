@@ -295,8 +295,12 @@ int main(int argc, char **argv)
         const uint32_t expected_status = expect_reject
             ? (fault == 1u ? 2u : (fault == 2u ? 3u : 1u)) : 0u;
         correct = status == 0 && ack.magic == kPullDispatchMagic &&
+            ack.session_id == kSessionId &&
+            ack.placement_epoch == kPlacementEpoch &&
             ack.generation == kGeneration && ack.sequence == kSequence &&
+            ack.dispatch_cookie == 0u &&
             ack.source_rank == static_cast<uint32_t>(pe) &&
+            ack.source_region_id == kRegionId &&
             ack.ring_slot == ring_slot && ack.status == expected_status &&
             ack.bytes_consumed ==
                 (expect_reject ? 0u : expected_slots[pe].size()) &&

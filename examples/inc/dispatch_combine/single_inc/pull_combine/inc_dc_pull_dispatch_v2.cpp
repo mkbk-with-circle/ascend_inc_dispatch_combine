@@ -301,7 +301,8 @@ Status ParseReadyAndSlot(const RegionRegistration &registration,
         header.hidden != session.hidden ||
         header.dtype != static_cast<uint32_t>(session.dtype) ||
         header.token_record_bytes != sizeof(TokenRecord) ||
-        header.assignment_record_bytes != sizeof(AssignmentRecord)) {
+        header.assignment_record_bytes != sizeof(AssignmentRecord) ||
+        header.reserved0 != 0u) {
         return Fail(Status::INVALID_HEADER, "slot header mismatch", error);
     }
 
@@ -510,9 +511,6 @@ Status CompileLayout(const std::vector<ParsedSource> &sources,
     }
 
     uint64_t cookie = kHashOffset;
-    HashValue(&cookie, generation);
-    HashValue(&cookie, sequence);
-    HashValue(&cookie, wave);
     for (uint32_t rank = 0u; rank < config.worker_count; ++rank) {
         const ParsedSource &source = *by_rank[rank];
         HashValue(&cookie, source.header.metadata_digest);

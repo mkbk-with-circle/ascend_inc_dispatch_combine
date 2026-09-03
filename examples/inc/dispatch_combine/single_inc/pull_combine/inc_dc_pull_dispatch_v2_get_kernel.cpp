@@ -117,6 +117,8 @@ void inc_dc_pull_dispatch_v2_get_kernel(
             __gm__ Ready *local = reinterpret_cast<__gm__ Ready *>(
                 ready_mailbox) + pe;
             __gm__ Ready *remote = local;
+            aclshmem_uint64_p(&remote->publication, 0u, inc_pe);
+            aclshmem_quiet();
             aclshmem_putmem(remote, local,
                             __builtin_offsetof(Ready, publication), inc_pe);
             aclshmem_quiet();
@@ -133,10 +135,18 @@ void inc_dc_pull_dispatch_v2_get_kernel(
         timeline->kernel_start = AscendC::GetSystemCycle();
         timeline->all_ready = 0u;
         timeline->headers_pulled = 0u;
-        timeline->payloads_pulled = 0u;
+        timeline->metadata_parse_begin = 0u;
+        timeline->metadata_parse_done = 0u;
+        timeline->journal_reserved = 0u;
+        timeline->hidden_get_begin = 0u;
+        timeline->hidden_get_done = 0u;
+        timeline->fanout_put_begin = 0u;
+        timeline->fanout_put_done = 0u;
+        timeline->reorg_done = 0u;
+        timeline->destination_completions_done = 0u;
         timeline->source_acks_done = 0u;
+        timeline->kernel_done = 0u;
         timeline->reserved[0] = 0u;
-        timeline->reserved[1] = 0u;
         dcci_cacheline(status_line);
 
         bool acquired[kPullDispatchMaxWorkers]{};
@@ -188,6 +198,7 @@ void inc_dc_pull_dispatch_v2_get_kernel(
             }
         }
         timeline->headers_pulled = AscendC::GetSystemCycle();
+        timeline->hidden_get_begin = timeline->headers_pulled;
         dcci_cacheline(status_line);
     }
     AscendC::SyncAll<true>();
@@ -219,7 +230,7 @@ void inc_dc_pull_dispatch_v2_get_kernel(
     AscendC::SyncAll<true>();
 
     if (block == 0u) {
-        timeline->payloads_pulled = AscendC::GetSystemCycle();
+        timeline->hidden_get_done = AscendC::GetSystemCycle();
         for (uint32_t source = 0u; source < worker_count; ++source) {
             __gm__ SourceConsumed *ack =
                 reinterpret_cast<__gm__ SourceConsumed *>(source_acks) +
@@ -228,12 +239,16 @@ void inc_dc_pull_dispatch_v2_get_kernel(
             ack->abi_version = kPullDispatchAbiVersion;
             ack->struct_bytes = sizeof(SourceConsumed);
             ack->session_id = session_id;
+            ack->placement_epoch = placement_epoch;
             ack->generation = generation;
             ack->sequence = sequence;
+            ack->dispatch_cookie = 0u;
             ack->wave = wave;
             ack->source_rank = source;
+            ack->source_region_id = region_id;
             ack->status = *status;
             ack->ring_slot = static_cast<uint16_t>(ring_slot);
+            ack->flags = 0u;
             ack->reserved0 = 0u;
             ack->bytes_consumed = 0u;
             if (*status == kPullOk) {
@@ -245,6 +260,9 @@ void inc_dc_pull_dispatch_v2_get_kernel(
             }
             ack->publication = 0u;
             dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(ack));
+            aclshmem_uint64_p(&ack->publication, 0u,
+                              static_cast<int32_t>(source));
+            aclshmem_quiet();
             aclshmem_putmem(ack, ack,
                             __builtin_offsetof(SourceConsumed, publication),
                             source);
@@ -255,6 +273,7 @@ void inc_dc_pull_dispatch_v2_get_kernel(
             aclshmem_quiet();
         }
         timeline->source_acks_done = AscendC::GetSystemCycle();
+        timeline->kernel_done = timeline->source_acks_done;
         dcci_cacheline(status_line);
     }
 }

@@ -6,7 +6,7 @@
 namespace inc::dc::pull_v2 {
 
 constexpr uint32_t kPullDispatchMagic = 0x50443249u; // 'PD2I'
-constexpr uint16_t kPullDispatchAbiVersion = 1u;
+constexpr uint16_t kPullDispatchAbiVersion = 2u;
 constexpr uint32_t kPullDispatchAlignment = 64u;
 constexpr uint32_t kPullDispatchMaxWorkers = 128u;
 
@@ -50,24 +50,64 @@ struct alignas(64) Ready {
     uint64_t publication = 0u;
 };
 static_assert(sizeof(Ready) == 64u, "pull Dispatch READY ABI drift");
+static_assert(__builtin_offsetof(Ready, publication) + sizeof(uint64_t) ==
+                  sizeof(Ready),
+              "pull Dispatch READY publication must be last");
 
 struct alignas(64) SourceConsumed {
     uint32_t magic = kPullDispatchMagic;
     uint16_t abi_version = kPullDispatchAbiVersion;
     uint16_t struct_bytes = sizeof(SourceConsumed);
     uint64_t session_id = 0u;
+    uint64_t placement_epoch = 0u;
     uint64_t generation = 0u;
     uint64_t sequence = 0u;
+    uint64_t dispatch_cookie = 0u;
     uint32_t wave = 0u;
     uint32_t source_rank = 0u;
+    uint32_t source_region_id = 0u;
     uint32_t status = 0u;
     uint16_t ring_slot = 0u;
-    uint16_t reserved0 = 0u;
+    uint16_t flags = 0u;
+    uint32_t reserved0 = 0u;
     uint64_t bytes_consumed = 0u;
+    uint64_t reserved[5]{};
+    // Publication is always the final word.  A producer clears the remote
+    // word, writes this entire prefix, then publishes the new value.
     uint64_t publication = 0u;
 };
-static_assert(sizeof(SourceConsumed) == 64u,
+static_assert(sizeof(SourceConsumed) == 128u,
               "pull Dispatch source ACK ABI drift");
+static_assert(__builtin_offsetof(SourceConsumed, publication) +
+                  sizeof(uint64_t) == sizeof(SourceConsumed),
+              "pull Dispatch source ACK publication must be last");
+
+struct alignas(64) DestinationCompletion {
+    uint32_t magic = kPullDispatchMagic;
+    uint16_t abi_version = kPullDispatchAbiVersion;
+    uint16_t struct_bytes = sizeof(DestinationCompletion);
+    uint64_t session_id = 0u;
+    uint64_t placement_epoch = 0u;
+    uint64_t generation = 0u;
+    uint64_t sequence = 0u;
+    uint64_t dispatch_cookie = 0u;
+    uint32_t wave = 0u;
+    uint32_t destination_rank = 0u;
+    uint32_t status = 0u;
+    uint32_t row_count = 0u;
+    uint32_t assignment_count = 0u;
+    uint16_t ring_slot = 0u;
+    uint16_t flags = 0u;
+    uint64_t reserved[6]{};
+    // See SourceConsumed: keeping this last makes ring-slot reuse a simple
+    // clear -> descriptor prefix -> publish protocol.
+    uint64_t publication = 0u;
+};
+static_assert(sizeof(DestinationCompletion) == 128u,
+              "pull Dispatch destination completion ABI drift");
+static_assert(__builtin_offsetof(DestinationCompletion, publication) +
+                  sizeof(uint64_t) == sizeof(DestinationCompletion),
+              "pull Dispatch completion publication must be last");
 
 struct alignas(64) PullTimeline {
     uint32_t status = 0u;
@@ -75,11 +115,20 @@ struct alignas(64) PullTimeline {
     uint64_t kernel_start = 0u;
     uint64_t all_ready = 0u;
     uint64_t headers_pulled = 0u;
-    uint64_t payloads_pulled = 0u;
+    uint64_t metadata_parse_begin = 0u;
+    uint64_t metadata_parse_done = 0u;
+    uint64_t journal_reserved = 0u;
+    uint64_t hidden_get_begin = 0u;
+    uint64_t hidden_get_done = 0u;
+    uint64_t fanout_put_begin = 0u;
+    uint64_t fanout_put_done = 0u;
+    uint64_t reorg_done = 0u;
+    uint64_t destination_completions_done = 0u;
     uint64_t source_acks_done = 0u;
-    uint64_t reserved[2]{};
+    uint64_t kernel_done = 0u;
+    uint64_t reserved[1]{};
 };
-static_assert(sizeof(PullTimeline) == 64u,
+static_assert(sizeof(PullTimeline) == 128u,
               "pull Dispatch timeline ABI drift");
 
 // Canonical source slot.  The INC first GETs this fixed header, then pulls
@@ -104,6 +153,7 @@ struct alignas(64) SlotHeader {
     uint32_t dtype = static_cast<uint32_t>(DataType::BF16);
     uint32_t token_record_bytes = 0u;
     uint32_t assignment_record_bytes = 0u;
+    uint32_t reserved0 = 0u;
     uint64_t tokens_offset = 0u;
     uint64_t assignments_offset = 0u;
     uint64_t hidden_offset = 0u;
