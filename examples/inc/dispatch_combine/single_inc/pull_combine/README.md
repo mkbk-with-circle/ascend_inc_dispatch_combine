@@ -1,4 +1,38 @@
-# 单 INC Push-Dispatch / Pull-Combine 协议 v1（实验分支）
+# 单 INC Pull-Dispatch / Pull-Combine V2（当前候选）
+
+当前入口不再由 worker 预先上传 token plan：每个 worker 只发布一次 READY/Notice，
+INC 主动拉取 metadata 与 payload。核心文件：
+
+- `inc_dc_pull_dispatch_v2.{h,cpp}` / `_device_kernel.cpp`：slot ABI、在线路由与 fan-out；
+- `inc_dc_pull_combine_v2.{h,cpp}` / `_device_kernel.cpp`：Notice、READY GET、reduce 与回传；
+- `inc_dc_pull_dispatch_v2_device_e2e.cpp`、`inc_dc_pull_combine_v2_npu_e2e.cpp`：
+  W2/W4 真机资格程序；
+- `tests/pull_v2_overlap_qualification.py`：使用独占 baseline 的 D+C 任意时序交叠测试。
+
+```text
+Dispatch: worker READY -> INC GET(metadata+hidden) -> parse -> unique fan-out PUT
+Compute:  B local experts -> local reduce per (token, B)
+Combine:  worker Notice -> INC GET READY/partials -> reduce -> owner PUT
+```
+
+INC 的普通 AIV 按实时数量动态二分，Dispatch/Combine 各用
+`floor(live_vector_cores / 2)`。正式 nb-borrow 数据、真实/理论交叠收益和原始日志见
+[`docs/inc/report/nb-borrow/pull_v2_qualified_20260904`](../../../../../docs/inc/report/nb-borrow/pull_v2_qualified_20260904/README.md)。
+
+构建最小目标：
+
+```bash
+cmake --build /tmp/shmem-pull-dispatch-v2-build -j8 --target \
+  inc_dc_pull_dispatch_v2_tests inc_dc_pull_combine_v2_tests \
+  inc_dc_pull_dispatch_v2_device_e2e inc_dc_pull_combine_v2_npu_e2e
+```
+
+下面保留的是同目录早期 Push-Dispatch/Pull-Combine v1 的设计与历史证据，不能当作
+V2 当前接口或性能结论。
+
+---
+
+# 历史：单 INC Push-Dispatch / Pull-Combine 协议 v1
 
 本目录实现新协议，不替换也不调用现有 V1 `SingleInc` 后端。当前稳定公共 API
 仍指向已验证的旧实现；新协议提供了独立的薄异步设备 API，供 gate 和后续框架

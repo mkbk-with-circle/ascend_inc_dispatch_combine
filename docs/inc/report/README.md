@@ -21,3 +21,6 @@
   profiler trace 与已失效的中间调参结果不进入当前交付。
 
 清理后如需历史过程，应从测试脚本重新生成，不应再将中间快照当作当前结论。
+
+当前 Pull V2 的 W2/W4 正式 gate、稳健性和独占 baseline 交叠报告见
+[`nb-borrow/pull_v2_qualified_20260904`](nb-borrow/pull_v2_qualified_20260904/README.md)。

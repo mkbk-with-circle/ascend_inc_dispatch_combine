@@ -31,8 +31,9 @@
 所有正式 case 必须同时满足：
 
 1. W2 或 W4 的 worker 与 INC 位于同一 HCCS 平面；运行前检查所用卡无其他进程。
-2. INC 固定使用互不相交的 24 Dispatch AIV + 24 Combine AIV。固定策略不能随
-   message、top-k、route 分布或 case 改变。
+2. INC 将实时查询到的普通 AIV 动态二分给 Dispatch/Combine：每方使用
+   `floor(live_aiv / 2)`，两组互不相交。nb-borrow 当前 48 AIV 因而是 24+24，
+   40-AIV 机器自动变为 20+20；策略不能随 message、top-k 或 route 分布改变。
 3. worker 每个 wave 只发布一个 READY。源 slot 在 `SourceConsumed` 前不可复用；
    destination 只能在 `DestinationCompletion` 成功后消费；journal 必须保留到
    Combine terminal state。
@@ -55,7 +56,7 @@ logical_dispatch_bytes =
 bandwidth = logical_dispatch_bytes / full_dispatch_makespan
 ```
 
-固定 raw gate **只适用于**完整 Dispatch、`sym_dense` 对称路由，并且每个 worker
+固定 raw gate **只适用于**完整 Dispatch、`sym_k2_balanced` 对称路由，并且每个 worker
 的 source hidden payload 恰好为 128 MiB：
 
 | 规模 | nominal raw 参考 | 92% gate |
@@ -69,20 +70,11 @@ bandwidth = logical_dispatch_bytes / full_dispatch_makespan
 
 ### 2.2 Combine
 
-51.52/103.04 GB/s 的固定 raw gate 不适用于 Combine。Combine 继续使用当前正式
-字节口径，并要求同机器、同 CANN、同 shape 的已资格化数据面，配对 A/B 回归不得
-超过 2%。这是一条独立的回归约束，不在 manifest 中标成 raw hard gate。
-
-由于旧锚点是约数（W2 约 64 GB/s、W4 约 110 GB/s），runner 不应把约数写死成
-真值。正式运行前先从冻结 binary/commit 各采 10 个样本，写入
-`environment.json` 的 `combine_reference`。有效阈值为：
-
-```text
-combine_regression_floor = 0.98 * paired_reference
-```
-
-2% 回归判定使用至少三轮交替 `reference -> candidate` 的配对 mean/median，防止
-温度或系统漂移被误判为代码回归。
+Combine 使用 `partial ingress + owner egress` 的 logical bytes，READY Notice、
+INC GET READY、FP32 reduce、owner PUT、ACK/completion 的时间全部计入分母。正式
+`sym_k2_balanced`、每个 B 恰好 128 MiB partial 的 W2/W4 case 使用相同的
+51.52/103.04 GB/s hard gate，并以 10 个 measure 的最小值判定。其他 top-k、
+非对称和小消息只要求正确、稳定、有限完成，并作为配对回归数据记录。
 
 ## 3. 固定验收矩阵
 
@@ -98,7 +90,7 @@ combine_regression_floor = 0.98 * paired_reference
 | scalar | 1 token，2/4-byte hidden row | 最小合法输入 |
 | cache tail | row bytes 62/64/66、126/128/130 | 64B control/cache-line 边界 |
 | tile tail | row bytes 8190/8192/8194 | 当前 8 KiB transport tile 前后 1 element |
-| reduce tail | hidden elements 1535/1536/1537 | Combine vector tile 尾部 |
+| reduce tail | hidden elements 2047/2048/2049 | Combine 8 KiB vector tile 尾部 |
 | count tail | token count 1/2/3/31/32/33/255/256/257 | 循环、CSR 和分块边界 |
 | arithmetic | 最大合法 `uint32` count 的 plan-only checked arithmetic | 64-bit size/offset 溢出必须拒绝，不分配 HBM |
 
@@ -109,7 +101,7 @@ host validation 阶段明确拒绝，而不是截断或补成另一个逻辑 sha
 ### 3.2 数据量阶梯
 
 Dispatch 的 size step 指**每个 worker 的 source hidden payload**；对于
-`sym_dense`，runner 再精确计算完整算子的 logical bytes。其他场景的
+`sym_k2_balanced`，runner 再精确计算完整算子的 logical bytes。其他场景的
 `target_logical_bytes` 仍指算子逻辑字节，不是含 padding 的 allocation bytes：
 
 ```text
@@ -117,7 +109,7 @@ Dispatch 的 size step 指**每个 worker 的 source hidden payload**；对于
 128 MiB, 256 MiB, 512 MiB, 1 GiB, 2 GiB, max_hbm_safe
 ```
 
-- 除“每 worker 恰好 128 MiB 的 `sym_dense` Dispatch”外，所有 size 只要求正确性、
+- 除“每 worker 恰好 128 MiB 的 `sym_k2_balanced` Dispatch/Combine”外，其他 size 只要求正确性、
   stable、no hang、bounds，并报告带宽和延迟，不适用固定 raw gate。
 - `max_hbm_safe`：runner 从所有参与卡的实时可用 HBM 最小值计算。先按 ABI 和
   workspace 公式精确计算每个候选 shape 的 source/destination/journal/partial/
@@ -134,6 +126,7 @@ Dispatch 的 size step 指**每个 worker 的 source hidden payload**；对于
 | 名称 | token 数 | 每 token top-k | destination 分布 |
 |---|---|---|---|
 | `sym_k1_rr` | 各 rank 相同 | 1 | round-robin |
+| `sym_k2_balanced` | 各 rank 相同 | 2 | 相邻目的均衡分布；正式 hard gate |
 | `sym_dense` | 各 rank 相同 | W | 每个目的 rank 一项 |
 | `same_gpu_multi_expert` | 各 rank 相同 | 2W | 每目的 rank 两个 expert；hidden 仍只发一份 |
 | `rank_token_skew` | W2=`1:7`；W4=`1:2:4:8` | W | 均匀目的 |
@@ -145,9 +138,9 @@ Dispatch 的 size step 指**每个 worker 的 source hidden payload**；对于
 
 热点和单活跃 source 的物理屋顶不同，不应错误套用 dense raw gate；它们强制正确、
 稳定、不挂死，并报告 active-link efficiency。每个非对称 case 还要匹配同 W、同
-operator、同 dtype、同 payload 档位的 `sym_dense` 参考，报告带宽退化比例和延迟
-放大比例。仅“每 worker 128 MiB”的 `sym_dense` Dispatch 是 W2/W4 92% hard gate
-workload；其他 `sym_dense` size 也不套固定 gate。
+operator、同 dtype、同 payload 档位的 `sym_k2_balanced` 参考，报告带宽退化比例和延迟
+放大比例。仅“每 worker 128 MiB”的 `sym_k2_balanced` 是 W2/W4 92% hard gate
+workload；其他 size 和 `sym_dense` 压力 case 不套固定 gate。
 
 ### 3.4 READY 时序
 
@@ -227,7 +220,7 @@ ideal_speedup   = (Td + Tc) / max(Td, Tc)       # 无资源竞争的调度上界
 gain_realized   = actual_gain / (1 - max(Td,Tc)/(Td+Tc))
 ```
 
-正确性、有限完成、24+24 AIV 不重叠是 hard gate。中大消息应有真实正收益；在双向
+正确性、有限完成、动态二分后的两组 AIV 不重叠是 hard gate。中大消息应有真实正收益；在双向
 roofline 未冻结前，`ideal_speedup` 只作为解释，不虚构固定的理论收益 gate。
 
 ## 7. 稳定性与 soak

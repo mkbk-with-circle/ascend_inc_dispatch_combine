@@ -1,0 +1,14 @@
+[STAGE] pe=2 initialized
+[STAGE] pe=2 prepared iteration=0
+[STAGE] pe=2 launch iteration=0
+[STAGE] pe=2 kernel_status=0 iteration=0
+{"test":"pull_combine_v2_npu_e2e","iteration":0,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2049,"rows":257,"ingress_bytes":4212744,"egress_bytes":2106372,"e2e_us":422.835,"logical_gb_s":14.9446379794,"status":0,"cycle_kernel_start":1028475948566967,"cycle_plan_index_done":1028475948568726,"cycle_kernel_done":1028475948576077,"correct":true}
+[STAGE] pe=2 prepared iteration=1
+[STAGE] pe=2 launch iteration=1
+[STAGE] pe=2 kernel_status=0 iteration=1
+{"test":"pull_combine_v2_npu_e2e","iteration":1,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2049,"rows":257,"ingress_bytes":4212744,"egress_bytes":2106372,"e2e_us":234.292,"logical_gb_s":26.9711129701,"status":0,"cycle_kernel_start":1028475953805084,"cycle_plan_index_done":1028475953806583,"cycle_kernel_done":1028475953813800,"correct":true}
+[STAGE] pe=2 prepared iteration=2
+[STAGE] pe=2 launch iteration=2
+[STAGE] pe=2 kernel_status=0 iteration=2
+{"test":"pull_combine_v2_npu_e2e","iteration":2,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2049,"rows":257,"ingress_bytes":4212744,"egress_bytes":2106372,"e2e_us":217.009,"logical_gb_s":29.119142524,"status":0,"cycle_kernel_start":1028475958992482,"cycle_plan_index_done":1028475958994039,"cycle_kernel_done":1028475959001000,"correct":true}
+{"test":"pull_combine_v2_npu_e2e_summary","workers":2,"workload":"sym_k2_balanced","hidden":2049,"rows":257,"measure":3,"mean_us":291.378666667,"min_logical_gb_s":14.9446379794,"mean_logical_gb_s":23.6782978245,"cv_pct":26.3430280821,"correct":true}

@@ -14,5 +14,9 @@ Fusion 数据统一入口：[`FUSION_KERNEL_RESULTS.md`](FUSION_KERNEL_RESULTS.m
   同一源码已在当前分支按 INC 核心、fusion 核心、框架接入和构建接线拆成逻辑提交。
 - [`release_validation_20260811`](release_validation_20260811/README.md)：清理后 fresh build、100 轮稳定性和 W2/W4 真机验证。
 
+当前 Pull V2 资格报告：[`pull_v2_qualified_20260904`](pull_v2_qualified_20260904/README.md)，
+包含 W2/W4 128 MiB 正式 gate、任意长度/非对称/故障稳健性和采用独占 baseline
+的 D+C 真实交叠收益。
+
 当前容器、镜像 digest、构建参数和完整复现命令见
 `examples/inc/fusion_kernel/framework/vllm_ascend/RUNBOOK_NB_VLLM.md`。

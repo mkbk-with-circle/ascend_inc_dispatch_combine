@@ -1,0 +1,10 @@
+[STAGE] pe=2 initialized
+[STAGE] pe=2 prepared iteration=0
+[STAGE] pe=2 launch iteration=0
+[STAGE] pe=2 kernel_status=0 iteration=0
+[STAGE] pe=2 prepared iteration=1
+[STAGE] pe=2 launch iteration=1
+[STAGE] pe=2 kernel_status=0 iteration=1
+[STAGE] pe=2 prepared iteration=2
+[STAGE] pe=2 launch iteration=2
+[STAGE] pe=2 kernel_status=0 iteration=2
