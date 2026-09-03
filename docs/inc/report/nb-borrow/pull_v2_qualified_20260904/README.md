@@ -71,6 +71,10 @@ real_saved          = 1 - concurrent_makespan / (D_solo + C_solo)
 - 两个 ring slot 连续复用；
 - digest、非法 assignment、缺失 READY、READY identity、busy journal 五类故障。
 
+另外，W2/W4 的 Dispatch 与 Combine 各完成 100 个连续 device wave；generation 到
+1100、wave 到 110、两个 ring slot 交替复用，四组均 100/100 正确，无 timeout、
+guard 损坏或状态泄漏。小消息 soak 的延迟离群点不用于性能 gate。
+
 未完整验证为 uniform 的 Dispatch 不再使用推测性的多 AIV general MTE relay。
 它先将每个 source hidden 只 GET 一次到 INC，再按 destination 重整并执行一次对齐
 bulk PUT。该安全路径明显慢于 uniform fast path，但保证任意合法长度、ragged 和

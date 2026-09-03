@@ -1,0 +1,402 @@
+[STAGE] pe=2 initialized
+[STAGE] pe=2 prepared iteration=0
+[STAGE] pe=2 launch iteration=0
+[STAGE] pe=2 kernel_status=0 iteration=0
+{"test":"pull_combine_v2_npu_e2e","iteration":0,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":431.856,"logical_gb_s":14.5684116928,"status":0,"cycle_kernel_start":1028659603766770,"cycle_plan_index_done":1028659603768459,"cycle_kernel_done":1028659603775674,"correct":true}
+[STAGE] pe=2 prepared iteration=1
+[STAGE] pe=2 launch iteration=1
+[STAGE] pe=2 kernel_status=0 iteration=1
+{"test":"pull_combine_v2_npu_e2e","iteration":1,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":218.221,"logical_gb_s":28.8306624935,"status":0,"cycle_kernel_start":1028659608981987,"cycle_plan_index_done":1028659608983539,"cycle_kernel_done":1028659608990724,"correct":true}
+[STAGE] pe=2 prepared iteration=2
+[STAGE] pe=2 launch iteration=2
+[STAGE] pe=2 kernel_status=0 iteration=2
+{"test":"pull_combine_v2_npu_e2e","iteration":2,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":208.743,"logical_gb_s":30.1397220506,"status":0,"cycle_kernel_start":1028659614166372,"cycle_plan_index_done":1028659614167948,"cycle_kernel_done":1028659614174836,"correct":true}
+[STAGE] pe=2 prepared iteration=3
+[STAGE] pe=2 launch iteration=3
+[STAGE] pe=2 kernel_status=0 iteration=3
+{"test":"pull_combine_v2_npu_e2e","iteration":3,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":211.084,"logical_gb_s":29.8054613329,"status":0,"cycle_kernel_start":1028659619349444,"cycle_plan_index_done":1028659619350958,"cycle_kernel_done":1028659619357817,"correct":true}
+[STAGE] pe=2 prepared iteration=4
+[STAGE] pe=2 launch iteration=4
+[STAGE] pe=2 kernel_status=0 iteration=4
+{"test":"pull_combine_v2_npu_e2e","iteration":4,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":212.51,"logical_gb_s":29.6054585667,"status":0,"cycle_kernel_start":1028659624532899,"cycle_plan_index_done":1028659624534507,"cycle_kernel_done":1028659624541392,"correct":true}
+[STAGE] pe=2 prepared iteration=5
+[STAGE] pe=2 launch iteration=5
+[STAGE] pe=2 kernel_status=0 iteration=5
+{"test":"pull_combine_v2_npu_e2e","iteration":5,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":210.556,"logical_gb_s":29.8802028914,"status":0,"cycle_kernel_start":1028659629715689,"cycle_plan_index_done":1028659629717210,"cycle_kernel_done":1028659629724029,"correct":true}
+[STAGE] pe=2 prepared iteration=6
+[STAGE] pe=2 launch iteration=6
+[STAGE] pe=2 kernel_status=0 iteration=6
+{"test":"pull_combine_v2_npu_e2e","iteration":6,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":248.233,"logical_gb_s":25.3449621928,"status":0,"cycle_kernel_start":1028659634899402,"cycle_plan_index_done":1028659634900962,"cycle_kernel_done":1028659634907888,"correct":true}
+[STAGE] pe=2 prepared iteration=7
+[STAGE] pe=2 launch iteration=7
+[STAGE] pe=2 kernel_status=0 iteration=7
+{"test":"pull_combine_v2_npu_e2e","iteration":7,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":209.378,"logical_gb_s":30.0483145316,"status":0,"cycle_kernel_start":1028659640081386,"cycle_plan_index_done":1028659640082923,"cycle_kernel_done":1028659640089731,"correct":true}
+[STAGE] pe=2 prepared iteration=8
+[STAGE] pe=2 launch iteration=8
+[STAGE] pe=2 kernel_status=0 iteration=8
+{"test":"pull_combine_v2_npu_e2e","iteration":8,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":210.394,"logical_gb_s":29.9032101676,"status":0,"cycle_kernel_start":1028659645262635,"cycle_plan_index_done":1028659645264134,"cycle_kernel_done":1028659645271032,"correct":true}
+[STAGE] pe=2 prepared iteration=9
+[STAGE] pe=2 launch iteration=9
+[STAGE] pe=2 kernel_status=0 iteration=9
+{"test":"pull_combine_v2_npu_e2e","iteration":9,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":204.079,"logical_gb_s":30.8285320881,"status":0,"cycle_kernel_start":1028659650445288,"cycle_plan_index_done":1028659650446821,"cycle_kernel_done":1028659650453674,"correct":true}
+[STAGE] pe=2 prepared iteration=10
+[STAGE] pe=2 launch iteration=10
+[STAGE] pe=2 kernel_status=0 iteration=10
+{"test":"pull_combine_v2_npu_e2e","iteration":10,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":207.916,"logical_gb_s":30.2596048404,"status":0,"cycle_kernel_start":1028659655626380,"cycle_plan_index_done":1028659655627980,"cycle_kernel_done":1028659655634763,"correct":true}
+[STAGE] pe=2 prepared iteration=11
+[STAGE] pe=2 launch iteration=11
+[STAGE] pe=2 kernel_status=0 iteration=11
+{"test":"pull_combine_v2_npu_e2e","iteration":11,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":205.354,"logical_gb_s":30.6371241856,"status":0,"cycle_kernel_start":1028659660806462,"cycle_plan_index_done":1028659660807958,"cycle_kernel_done":1028659660814863,"correct":true}
+[STAGE] pe=2 prepared iteration=12
+[STAGE] pe=2 launch iteration=12
+[STAGE] pe=2 kernel_status=0 iteration=12
+{"test":"pull_combine_v2_npu_e2e","iteration":12,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":209.727,"logical_gb_s":29.9983120914,"status":0,"cycle_kernel_start":1028659665987700,"cycle_plan_index_done":1028659665989257,"cycle_kernel_done":1028659665996141,"correct":true}
+[STAGE] pe=2 prepared iteration=13
+[STAGE] pe=2 launch iteration=13
+[STAGE] pe=2 kernel_status=0 iteration=13
+{"test":"pull_combine_v2_npu_e2e","iteration":13,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":203.667,"logical_gb_s":30.8908954322,"status":0,"cycle_kernel_start":1028659671170530,"cycle_plan_index_done":1028659671172091,"cycle_kernel_done":1028659671178875,"correct":true}
+[STAGE] pe=2 prepared iteration=14
+[STAGE] pe=2 launch iteration=14
+[STAGE] pe=2 kernel_status=0 iteration=14
+{"test":"pull_combine_v2_npu_e2e","iteration":14,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":212.005,"logical_gb_s":29.6759793401,"status":0,"cycle_kernel_start":1028659676353310,"cycle_plan_index_done":1028659676354857,"cycle_kernel_done":1028659676361766,"correct":true}
+[STAGE] pe=2 prepared iteration=15
+[STAGE] pe=2 launch iteration=15
+[STAGE] pe=2 kernel_status=0 iteration=15
+{"test":"pull_combine_v2_npu_e2e","iteration":15,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.272,"logical_gb_s":30.5007756748,"status":0,"cycle_kernel_start":1028659681537508,"cycle_plan_index_done":1028659681539045,"cycle_kernel_done":1028659681545845,"correct":true}
+[STAGE] pe=2 prepared iteration=16
+[STAGE] pe=2 launch iteration=16
+[STAGE] pe=2 kernel_status=0 iteration=16
+{"test":"pull_combine_v2_npu_e2e","iteration":16,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":205.274,"logical_gb_s":30.6490641776,"status":0,"cycle_kernel_start":1028659686722083,"cycle_plan_index_done":1028659686723610,"cycle_kernel_done":1028659686730403,"correct":true}
+[STAGE] pe=2 prepared iteration=17
+[STAGE] pe=2 launch iteration=17
+[STAGE] pe=2 kernel_status=0 iteration=17
+{"test":"pull_combine_v2_npu_e2e","iteration":17,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":214.939,"logical_gb_s":29.2708908109,"status":0,"cycle_kernel_start":1028659691903536,"cycle_plan_index_done":1028659691905071,"cycle_kernel_done":1028659691911877,"correct":true}
+[STAGE] pe=2 prepared iteration=18
+[STAGE] pe=2 launch iteration=18
+[STAGE] pe=2 kernel_status=0 iteration=18
+{"test":"pull_combine_v2_npu_e2e","iteration":18,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":207.101,"logical_gb_s":30.3786847963,"status":0,"cycle_kernel_start":1028659697085282,"cycle_plan_index_done":1028659697086835,"cycle_kernel_done":1028659697093669,"correct":true}
+[STAGE] pe=2 prepared iteration=19
+[STAGE] pe=2 launch iteration=19
+[STAGE] pe=2 kernel_status=0 iteration=19
+{"test":"pull_combine_v2_npu_e2e","iteration":19,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":209.768,"logical_gb_s":29.9924488006,"status":0,"cycle_kernel_start":1028659702266659,"cycle_plan_index_done":1028659702268158,"cycle_kernel_done":1028659702274989,"correct":true}
+[STAGE] pe=2 prepared iteration=20
+[STAGE] pe=2 launch iteration=20
+[STAGE] pe=2 kernel_status=0 iteration=20
+{"test":"pull_combine_v2_npu_e2e","iteration":20,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":213.103,"logical_gb_s":29.5230756958,"status":0,"cycle_kernel_start":1028659707447810,"cycle_plan_index_done":1028659707449350,"cycle_kernel_done":1028659707456196,"correct":true}
+[STAGE] pe=2 prepared iteration=21
+[STAGE] pe=2 launch iteration=21
+[STAGE] pe=2 kernel_status=0 iteration=21
+{"test":"pull_combine_v2_npu_e2e","iteration":21,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":238.116,"logical_gb_s":26.4218112181,"status":0,"cycle_kernel_start":1028659712630985,"cycle_plan_index_done":1028659712632499,"cycle_kernel_done":1028659712639279,"correct":true}
+[STAGE] pe=2 prepared iteration=22
+[STAGE] pe=2 launch iteration=22
+[STAGE] pe=2 kernel_status=0 iteration=22
+{"test":"pull_combine_v2_npu_e2e","iteration":22,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":211.361,"logical_gb_s":29.7663996669,"status":0,"cycle_kernel_start":1028659717812169,"cycle_plan_index_done":1028659717813686,"cycle_kernel_done":1028659717820535,"correct":true}
+[STAGE] pe=2 prepared iteration=23
+[STAGE] pe=2 launch iteration=23
+[STAGE] pe=2 kernel_status=0 iteration=23
+{"test":"pull_combine_v2_npu_e2e","iteration":23,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.29,"logical_gb_s":30.4981143051,"status":0,"cycle_kernel_start":1028659722995514,"cycle_plan_index_done":1028659722997049,"cycle_kernel_done":1028659723003895,"correct":true}
+[STAGE] pe=2 prepared iteration=24
+[STAGE] pe=2 launch iteration=24
+[STAGE] pe=2 kernel_status=0 iteration=24
+{"test":"pull_combine_v2_npu_e2e","iteration":24,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":203.492,"logical_gb_s":30.9174611287,"status":0,"cycle_kernel_start":1028659728175671,"cycle_plan_index_done":1028659728177173,"cycle_kernel_done":1028659728183952,"correct":true}
+[STAGE] pe=2 prepared iteration=25
+[STAGE] pe=2 launch iteration=25
+[STAGE] pe=2 kernel_status=0 iteration=25
+{"test":"pull_combine_v2_npu_e2e","iteration":25,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":207.19,"logical_gb_s":30.3656354071,"status":0,"cycle_kernel_start":1028659733357337,"cycle_plan_index_done":1028659733358871,"cycle_kernel_done":1028659733365715,"correct":true}
+[STAGE] pe=2 prepared iteration=26
+[STAGE] pe=2 launch iteration=26
+[STAGE] pe=2 kernel_status=0 iteration=26
+{"test":"pull_combine_v2_npu_e2e","iteration":26,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":207.712,"logical_gb_s":30.2893236789,"status":0,"cycle_kernel_start":1028659738542696,"cycle_plan_index_done":1028659738544291,"cycle_kernel_done":1028659738551121,"correct":true}
+[STAGE] pe=2 prepared iteration=27
+[STAGE] pe=2 launch iteration=27
+[STAGE] pe=2 kernel_status=0 iteration=27
+{"test":"pull_combine_v2_npu_e2e","iteration":27,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":210.259,"logical_gb_s":29.9224099801,"status":0,"cycle_kernel_start":1028659743723580,"cycle_plan_index_done":1028659743725088,"cycle_kernel_done":1028659743731911,"correct":true}
+[STAGE] pe=2 prepared iteration=28
+[STAGE] pe=2 launch iteration=28
+[STAGE] pe=2 kernel_status=0 iteration=28
+{"test":"pull_combine_v2_npu_e2e","iteration":28,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.597,"logical_gb_s":30.4527945711,"status":0,"cycle_kernel_start":1028659748904240,"cycle_plan_index_done":1028659748905801,"cycle_kernel_done":1028659748912632,"correct":true}
+[STAGE] pe=2 prepared iteration=29
+[STAGE] pe=2 launch iteration=29
+[STAGE] pe=2 kernel_status=0 iteration=29
+{"test":"pull_combine_v2_npu_e2e","iteration":29,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":210.296,"logical_gb_s":29.917145357,"status":0,"cycle_kernel_start":1028659754085230,"cycle_plan_index_done":1028659754086799,"cycle_kernel_done":1028659754093560,"correct":true}
+[STAGE] pe=2 prepared iteration=30
+[STAGE] pe=2 launch iteration=30
+[STAGE] pe=2 kernel_status=0 iteration=30
+{"test":"pull_combine_v2_npu_e2e","iteration":30,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.497,"logical_gb_s":30.4675419013,"status":0,"cycle_kernel_start":1028659759266299,"cycle_plan_index_done":1028659759267825,"cycle_kernel_done":1028659759274699,"correct":true}
+[STAGE] pe=2 prepared iteration=31
+[STAGE] pe=2 launch iteration=31
+[STAGE] pe=2 kernel_status=0 iteration=31
+{"test":"pull_combine_v2_npu_e2e","iteration":31,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":203.602,"logical_gb_s":30.9007573599,"status":0,"cycle_kernel_start":1028659764446997,"cycle_plan_index_done":1028659764448558,"cycle_kernel_done":1028659764455385,"correct":true}
+[STAGE] pe=2 prepared iteration=32
+[STAGE] pe=2 launch iteration=32
+[STAGE] pe=2 kernel_status=0 iteration=32
+{"test":"pull_combine_v2_npu_e2e","iteration":32,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":208.924,"logical_gb_s":30.113610691,"status":0,"cycle_kernel_start":1028659769628291,"cycle_plan_index_done":1028659769629825,"cycle_kernel_done":1028659769636653,"correct":true}
+[STAGE] pe=2 prepared iteration=33
+[STAGE] pe=2 launch iteration=33
+[STAGE] pe=2 kernel_status=0 iteration=33
+{"test":"pull_combine_v2_npu_e2e","iteration":33,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":204.355,"logical_gb_s":30.7868953537,"status":0,"cycle_kernel_start":1028659774813336,"cycle_plan_index_done":1028659774814872,"cycle_kernel_done":1028659774821752,"correct":true}
+[STAGE] pe=2 prepared iteration=34
+[STAGE] pe=2 launch iteration=34
+[STAGE] pe=2 kernel_status=0 iteration=34
+{"test":"pull_combine_v2_npu_e2e","iteration":34,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.876,"logical_gb_s":30.411724898,"status":0,"cycle_kernel_start":1028659779996781,"cycle_plan_index_done":1028659779998368,"cycle_kernel_done":1028659780005189,"correct":true}
+[STAGE] pe=2 prepared iteration=35
+[STAGE] pe=2 launch iteration=35
+[STAGE] pe=2 kernel_status=0 iteration=35
+{"test":"pull_combine_v2_npu_e2e","iteration":35,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":207.86,"logical_gb_s":30.2677571442,"status":0,"cycle_kernel_start":1028659785179390,"cycle_plan_index_done":1028659785180874,"cycle_kernel_done":1028659785187692,"correct":true}
+[STAGE] pe=2 prepared iteration=36
+[STAGE] pe=2 launch iteration=36
+[STAGE] pe=2 kernel_status=0 iteration=36
+{"test":"pull_combine_v2_npu_e2e","iteration":36,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":208.425,"logical_gb_s":30.1857070889,"status":0,"cycle_kernel_start":1028659790365992,"cycle_plan_index_done":1028659790367561,"cycle_kernel_done":1028659790374388,"correct":true}
+[STAGE] pe=2 prepared iteration=37
+[STAGE] pe=2 launch iteration=37
+[STAGE] pe=2 kernel_status=0 iteration=37
+{"test":"pull_combine_v2_npu_e2e","iteration":37,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":239.735,"logical_gb_s":26.2433770622,"status":0,"cycle_kernel_start":1028659795573049,"cycle_plan_index_done":1028659795574611,"cycle_kernel_done":1028659795581403,"correct":true}
+[STAGE] pe=2 prepared iteration=38
+[STAGE] pe=2 launch iteration=38
+[STAGE] pe=2 kernel_status=0 iteration=38
+{"test":"pull_combine_v2_npu_e2e","iteration":38,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":233.393,"logical_gb_s":26.9564896976,"status":0,"cycle_kernel_start":1028659800756064,"cycle_plan_index_done":1028659800757576,"cycle_kernel_done":1028659800764486,"correct":true}
+[STAGE] pe=2 prepared iteration=39
+[STAGE] pe=2 launch iteration=39
+[STAGE] pe=2 kernel_status=0 iteration=39
+{"test":"pull_combine_v2_npu_e2e","iteration":39,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.332,"logical_gb_s":30.4919062482,"status":0,"cycle_kernel_start":1028659805940578,"cycle_plan_index_done":1028659805942149,"cycle_kernel_done":1028659805948914,"correct":true}
+[STAGE] pe=2 prepared iteration=40
+[STAGE] pe=2 launch iteration=40
+[STAGE] pe=2 kernel_status=0 iteration=40
+{"test":"pull_combine_v2_npu_e2e","iteration":40,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":209.066,"logical_gb_s":30.0931571848,"status":0,"cycle_kernel_start":1028659811121904,"cycle_plan_index_done":1028659811123441,"cycle_kernel_done":1028659811130271,"correct":true}
+[STAGE] pe=2 prepared iteration=41
+[STAGE] pe=2 launch iteration=41
+[STAGE] pe=2 kernel_status=0 iteration=41
+{"test":"pull_combine_v2_npu_e2e","iteration":41,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.091,"logical_gb_s":30.5275630668,"status":0,"cycle_kernel_start":1028659816303227,"cycle_plan_index_done":1028659816304752,"cycle_kernel_done":1028659816311628,"correct":true}
+[STAGE] pe=2 prepared iteration=42
+[STAGE] pe=2 launch iteration=42
+[STAGE] pe=2 kernel_status=0 iteration=42
+{"test":"pull_combine_v2_npu_e2e","iteration":42,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":205.643,"logical_gb_s":30.5940683612,"status":0,"cycle_kernel_start":1028659821483519,"cycle_plan_index_done":1028659821485118,"cycle_kernel_done":1028659821491917,"correct":true}
+[STAGE] pe=2 prepared iteration=43
+[STAGE] pe=2 launch iteration=43
+[STAGE] pe=2 kernel_status=0 iteration=43
+{"test":"pull_combine_v2_npu_e2e","iteration":43,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":205.323,"logical_gb_s":30.6417498283,"status":0,"cycle_kernel_start":1028659826665963,"cycle_plan_index_done":1028659826667471,"cycle_kernel_done":1028659826674312,"correct":true}
+[STAGE] pe=2 prepared iteration=44
+[STAGE] pe=2 launch iteration=44
+[STAGE] pe=2 kernel_status=0 iteration=44
+{"test":"pull_combine_v2_npu_e2e","iteration":44,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.116,"logical_gb_s":30.5238603505,"status":0,"cycle_kernel_start":1028659831846172,"cycle_plan_index_done":1028659831847727,"cycle_kernel_done":1028659831854572,"correct":true}
+[STAGE] pe=2 prepared iteration=45
+[STAGE] pe=2 launch iteration=45
+[STAGE] pe=2 kernel_status=0 iteration=45
+{"test":"pull_combine_v2_npu_e2e","iteration":45,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":203.444,"logical_gb_s":30.9247557067,"status":0,"cycle_kernel_start":1028659837032061,"cycle_plan_index_done":1028659837033565,"cycle_kernel_done":1028659837040340,"correct":true}
+[STAGE] pe=2 prepared iteration=46
+[STAGE] pe=2 launch iteration=46
+[STAGE] pe=2 kernel_status=0 iteration=46
+{"test":"pull_combine_v2_npu_e2e","iteration":46,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":210.333,"logical_gb_s":29.9118825862,"status":0,"cycle_kernel_start":1028659842214294,"cycle_plan_index_done":1028659842215791,"cycle_kernel_done":1028659842222643,"correct":true}
+[STAGE] pe=2 prepared iteration=47
+[STAGE] pe=2 launch iteration=47
+[STAGE] pe=2 kernel_status=0 iteration=47
+{"test":"pull_combine_v2_npu_e2e","iteration":47,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":207.54,"logical_gb_s":30.3144261347,"status":0,"cycle_kernel_start":1028659847395994,"cycle_plan_index_done":1028659847397541,"cycle_kernel_done":1028659847404301,"correct":true}
+[STAGE] pe=2 prepared iteration=48
+[STAGE] pe=2 launch iteration=48
+[STAGE] pe=2 kernel_status=0 iteration=48
+{"test":"pull_combine_v2_npu_e2e","iteration":48,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.287,"logical_gb_s":30.4985578345,"status":0,"cycle_kernel_start":1028659852579614,"cycle_plan_index_done":1028659852581084,"cycle_kernel_done":1028659852587842,"correct":true}
+[STAGE] pe=2 prepared iteration=49
+[STAGE] pe=2 launch iteration=49
+[STAGE] pe=2 kernel_status=0 iteration=49
+{"test":"pull_combine_v2_npu_e2e","iteration":49,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":205.273,"logical_gb_s":30.6492134864,"status":0,"cycle_kernel_start":1028659857763289,"cycle_plan_index_done":1028659857764833,"cycle_kernel_done":1028659857771663,"correct":true}
+[STAGE] pe=2 prepared iteration=50
+[STAGE] pe=2 launch iteration=50
+[STAGE] pe=2 kernel_status=0 iteration=50
+{"test":"pull_combine_v2_npu_e2e","iteration":50,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":210.386,"logical_gb_s":29.9043472474,"status":0,"cycle_kernel_start":1028659862943808,"cycle_plan_index_done":1028659862945416,"cycle_kernel_done":1028659862952268,"correct":true}
+[STAGE] pe=2 prepared iteration=51
+[STAGE] pe=2 launch iteration=51
+[STAGE] pe=2 kernel_status=0 iteration=51
+{"test":"pull_combine_v2_npu_e2e","iteration":51,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":203.095,"logical_gb_s":30.9778970433,"status":0,"cycle_kernel_start":1028659868127574,"cycle_plan_index_done":1028659868129062,"cycle_kernel_done":1028659868135855,"correct":true}
+[STAGE] pe=2 prepared iteration=52
+[STAGE] pe=2 launch iteration=52
+[STAGE] pe=2 kernel_status=0 iteration=52
+{"test":"pull_combine_v2_npu_e2e","iteration":52,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":208.857,"logical_gb_s":30.1232709461,"status":0,"cycle_kernel_start":1028659873309517,"cycle_plan_index_done":1028659873311132,"cycle_kernel_done":1028659873318005,"correct":true}
+[STAGE] pe=2 prepared iteration=53
+[STAGE] pe=2 launch iteration=53
+[STAGE] pe=2 kernel_status=0 iteration=53
+{"test":"pull_combine_v2_npu_e2e","iteration":53,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":205.009,"logical_gb_s":30.6886819603,"status":0,"cycle_kernel_start":1028659878489802,"cycle_plan_index_done":1028659878491352,"cycle_kernel_done":1028659878498155,"correct":true}
+[STAGE] pe=2 prepared iteration=54
+[STAGE] pe=2 launch iteration=54
+[STAGE] pe=2 kernel_status=0 iteration=54
+{"test":"pull_combine_v2_npu_e2e","iteration":54,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":209.78,"logical_gb_s":29.990733149,"status":0,"cycle_kernel_start":1028659883671144,"cycle_plan_index_done":1028659883672730,"cycle_kernel_done":1028659883679660,"correct":true}
+[STAGE] pe=2 prepared iteration=55
+[STAGE] pe=2 launch iteration=55
+[STAGE] pe=2 kernel_status=0 iteration=55
+{"test":"pull_combine_v2_npu_e2e","iteration":55,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":203.625,"logical_gb_s":30.897267035,"status":0,"cycle_kernel_start":1028659888852493,"cycle_plan_index_done":1028659888854054,"cycle_kernel_done":1028659888860837,"correct":true}
+[STAGE] pe=2 prepared iteration=56
+[STAGE] pe=2 launch iteration=56
+[STAGE] pe=2 kernel_status=0 iteration=56
+{"test":"pull_combine_v2_npu_e2e","iteration":56,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":212.078,"logical_gb_s":29.6657644829,"status":0,"cycle_kernel_start":1028659894032702,"cycle_plan_index_done":1028659894034256,"cycle_kernel_done":1028659894041048,"correct":true}
+[STAGE] pe=2 prepared iteration=57
+[STAGE] pe=2 launch iteration=57
+[STAGE] pe=2 kernel_status=0 iteration=57
+{"test":"pull_combine_v2_npu_e2e","iteration":57,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":208.114,"logical_gb_s":30.2308158029,"status":0,"cycle_kernel_start":1028659899217306,"cycle_plan_index_done":1028659899218827,"cycle_kernel_done":1028659899225676,"correct":true}
+[STAGE] pe=2 prepared iteration=58
+[STAGE] pe=2 launch iteration=58
+[STAGE] pe=2 kernel_status=0 iteration=58
+{"test":"pull_combine_v2_npu_e2e","iteration":58,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":208.668,"logical_gb_s":30.1505549485,"status":0,"cycle_kernel_start":1028659904399877,"cycle_plan_index_done":1028659904401411,"cycle_kernel_done":1028659904408245,"correct":true}
+[STAGE] pe=2 prepared iteration=59
+[STAGE] pe=2 launch iteration=59
+[STAGE] pe=2 kernel_status=0 iteration=59
+{"test":"pull_combine_v2_npu_e2e","iteration":59,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":204.606,"logical_gb_s":30.7491275916,"status":0,"cycle_kernel_start":1028659909581319,"cycle_plan_index_done":1028659909582816,"cycle_kernel_done":1028659909589680,"correct":true}
+[STAGE] pe=2 prepared iteration=60
+[STAGE] pe=2 launch iteration=60
+[STAGE] pe=2 kernel_status=0 iteration=60
+{"test":"pull_combine_v2_npu_e2e","iteration":60,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":204.49,"logical_gb_s":30.7665704924,"status":0,"cycle_kernel_start":1028659914763132,"cycle_plan_index_done":1028659914764701,"cycle_kernel_done":1028659914771554,"correct":true}
+[STAGE] pe=2 prepared iteration=61
+[STAGE] pe=2 launch iteration=61
+[STAGE] pe=2 kernel_status=0 iteration=61
+{"test":"pull_combine_v2_npu_e2e","iteration":61,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":215.763,"logical_gb_s":29.1591051292,"status":0,"cycle_kernel_start":1028659919944411,"cycle_plan_index_done":1028659919945982,"cycle_kernel_done":1028659919952764,"correct":true}
+[STAGE] pe=2 prepared iteration=62
+[STAGE] pe=2 launch iteration=62
+[STAGE] pe=2 kernel_status=0 iteration=62
+{"test":"pull_combine_v2_npu_e2e","iteration":62,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":212.741,"logical_gb_s":29.5733121495,"status":0,"cycle_kernel_start":1028659925128151,"cycle_plan_index_done":1028659925129678,"cycle_kernel_done":1028659925136567,"correct":true}
+[STAGE] pe=2 prepared iteration=63
+[STAGE] pe=2 launch iteration=63
+[STAGE] pe=2 kernel_status=0 iteration=63
+{"test":"pull_combine_v2_npu_e2e","iteration":63,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.215,"logical_gb_s":30.5092064108,"status":0,"cycle_kernel_start":1028659930313781,"cycle_plan_index_done":1028659930315299,"cycle_kernel_done":1028659930322101,"correct":true}
+[STAGE] pe=2 prepared iteration=64
+[STAGE] pe=2 launch iteration=64
+[STAGE] pe=2 kernel_status=0 iteration=64
+{"test":"pull_combine_v2_npu_e2e","iteration":64,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":227.571,"logical_gb_s":27.6461236274,"status":0,"cycle_kernel_start":1028659935499879,"cycle_plan_index_done":1028659935501391,"cycle_kernel_done":1028659935508224,"correct":true}
+[STAGE] pe=2 prepared iteration=65
+[STAGE] pe=2 launch iteration=65
+[STAGE] pe=2 kernel_status=0 iteration=65
+{"test":"pull_combine_v2_npu_e2e","iteration":65,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":210.711,"logical_gb_s":29.858222874,"status":0,"cycle_kernel_start":1028659940684350,"cycle_plan_index_done":1028659940685873,"cycle_kernel_done":1028659940692704,"correct":true}
+[STAGE] pe=2 prepared iteration=66
+[STAGE] pe=2 launch iteration=66
+[STAGE] pe=2 kernel_status=0 iteration=66
+{"test":"pull_combine_v2_npu_e2e","iteration":66,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":223.894,"logical_gb_s":28.1001545374,"status":0,"cycle_kernel_start":1028659945868767,"cycle_plan_index_done":1028659945870357,"cycle_kernel_done":1028659945877170,"correct":true}
+[STAGE] pe=2 prepared iteration=67
+[STAGE] pe=2 launch iteration=67
+[STAGE] pe=2 kernel_status=0 iteration=67
+{"test":"pull_combine_v2_npu_e2e","iteration":67,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":224.723,"logical_gb_s":27.9964934608,"status":0,"cycle_kernel_start":1028659951054937,"cycle_plan_index_done":1028659951056433,"cycle_kernel_done":1028659951063258,"correct":true}
+[STAGE] pe=2 prepared iteration=68
+[STAGE] pe=2 launch iteration=68
+[STAGE] pe=2 kernel_status=0 iteration=68
+{"test":"pull_combine_v2_npu_e2e","iteration":68,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.662,"logical_gb_s":30.4432164597,"status":0,"cycle_kernel_start":1028659956237800,"cycle_plan_index_done":1028659956239325,"cycle_kernel_done":1028659956246148,"correct":true}
+[STAGE] pe=2 prepared iteration=69
+[STAGE] pe=2 launch iteration=69
+[STAGE] pe=2 kernel_status=0 iteration=69
+{"test":"pull_combine_v2_npu_e2e","iteration":69,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":208.576,"logical_gb_s":30.1638539429,"status":0,"cycle_kernel_start":1028659961419210,"cycle_plan_index_done":1028659961420712,"cycle_kernel_done":1028659961427578,"correct":true}
+[STAGE] pe=2 prepared iteration=70
+[STAGE] pe=2 launch iteration=70
+[STAGE] pe=2 kernel_status=0 iteration=70
+{"test":"pull_combine_v2_npu_e2e","iteration":70,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":205.623,"logical_gb_s":30.597044105,"status":0,"cycle_kernel_start":1028659966601199,"cycle_plan_index_done":1028659966602712,"cycle_kernel_done":1028659966609568,"correct":true}
+[STAGE] pe=2 prepared iteration=71
+[STAGE] pe=2 launch iteration=71
+[STAGE] pe=2 kernel_status=0 iteration=71
+{"test":"pull_combine_v2_npu_e2e","iteration":71,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":204.839,"logical_gb_s":30.7141511138,"status":0,"cycle_kernel_start":1028659971781874,"cycle_plan_index_done":1028659971783380,"cycle_kernel_done":1028659971790177,"correct":true}
+[STAGE] pe=2 prepared iteration=72
+[STAGE] pe=2 launch iteration=72
+[STAGE] pe=2 kernel_status=0 iteration=72
+{"test":"pull_combine_v2_npu_e2e","iteration":72,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":205.325,"logical_gb_s":30.6414513576,"status":0,"cycle_kernel_start":1028659976964584,"cycle_plan_index_done":1028659976966157,"cycle_kernel_done":1028659976972959,"correct":true}
+[STAGE] pe=2 prepared iteration=73
+[STAGE] pe=2 launch iteration=73
+[STAGE] pe=2 kernel_status=0 iteration=73
+{"test":"pull_combine_v2_npu_e2e","iteration":73,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":223.797,"logical_gb_s":28.1123339455,"status":0,"cycle_kernel_start":1028659982144788,"cycle_plan_index_done":1028659982146338,"cycle_kernel_done":1028659982153164,"correct":true}
+[STAGE] pe=2 prepared iteration=74
+[STAGE] pe=2 launch iteration=74
+[STAGE] pe=2 kernel_status=0 iteration=74
+{"test":"pull_combine_v2_npu_e2e","iteration":74,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":209.252,"logical_gb_s":30.0664079674,"status":0,"cycle_kernel_start":1028659987328480,"cycle_plan_index_done":1028659987330104,"cycle_kernel_done":1028659987336939,"correct":true}
+[STAGE] pe=2 prepared iteration=75
+[STAGE] pe=2 launch iteration=75
+[STAGE] pe=2 kernel_status=0 iteration=75
+{"test":"pull_combine_v2_npu_e2e","iteration":75,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":211.748,"logical_gb_s":29.7119972798,"status":0,"cycle_kernel_start":1028659992511102,"cycle_plan_index_done":1028659992512660,"cycle_kernel_done":1028659992519517,"correct":true}
+[STAGE] pe=2 prepared iteration=76
+[STAGE] pe=2 launch iteration=76
+[STAGE] pe=2 kernel_status=0 iteration=76
+{"test":"pull_combine_v2_npu_e2e","iteration":76,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":228.411,"logical_gb_s":27.5444527628,"status":0,"cycle_kernel_start":1028659997694814,"cycle_plan_index_done":1028659997696346,"cycle_kernel_done":1028659997703220,"correct":true}
+[STAGE] pe=2 prepared iteration=77
+[STAGE] pe=2 launch iteration=77
+[STAGE] pe=2 kernel_status=0 iteration=77
+{"test":"pull_combine_v2_npu_e2e","iteration":77,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":210.97,"logical_gb_s":29.8215670474,"status":0,"cycle_kernel_start":1028660002880873,"cycle_plan_index_done":1028660002882385,"cycle_kernel_done":1028660002889201,"correct":true}
+[STAGE] pe=2 prepared iteration=78
+[STAGE] pe=2 launch iteration=78
+[STAGE] pe=2 kernel_status=0 iteration=78
+{"test":"pull_combine_v2_npu_e2e","iteration":78,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":211.887,"logical_gb_s":29.6925059112,"status":0,"cycle_kernel_start":1028660008062419,"cycle_plan_index_done":1028660008063994,"cycle_kernel_done":1028660008070921,"correct":true}
+[STAGE] pe=2 prepared iteration=79
+[STAGE] pe=2 launch iteration=79
+[STAGE] pe=2 kernel_status=0 iteration=79
+{"test":"pull_combine_v2_npu_e2e","iteration":79,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":235.377,"logical_gb_s":26.7292726137,"status":0,"cycle_kernel_start":1028660013245510,"cycle_plan_index_done":1028660013247039,"cycle_kernel_done":1028660013253818,"correct":true}
+[STAGE] pe=2 prepared iteration=80
+[STAGE] pe=2 launch iteration=80
+[STAGE] pe=2 kernel_status=0 iteration=80
+{"test":"pull_combine_v2_npu_e2e","iteration":80,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":203.599,"logical_gb_s":30.9012126779,"status":0,"cycle_kernel_start":1028660018428012,"cycle_plan_index_done":1028660018429496,"cycle_kernel_done":1028660018436269,"correct":true}
+[STAGE] pe=2 prepared iteration=81
+[STAGE] pe=2 launch iteration=81
+[STAGE] pe=2 kernel_status=0 iteration=81
+{"test":"pull_combine_v2_npu_e2e","iteration":81,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":202.885,"logical_gb_s":31.0099613081,"status":0,"cycle_kernel_start":1028660023608354,"cycle_plan_index_done":1028660023609877,"cycle_kernel_done":1028660023616676,"correct":true}
+[STAGE] pe=2 prepared iteration=82
+[STAGE] pe=2 launch iteration=82
+[STAGE] pe=2 kernel_status=0 iteration=82
+{"test":"pull_combine_v2_npu_e2e","iteration":82,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":212.782,"logical_gb_s":29.5676138019,"status":0,"cycle_kernel_start":1028660028789341,"cycle_plan_index_done":1028660028790955,"cycle_kernel_done":1028660028797844,"correct":true}
+[STAGE] pe=2 prepared iteration=83
+[STAGE] pe=2 launch iteration=83
+[STAGE] pe=2 kernel_status=0 iteration=83
+{"test":"pull_combine_v2_npu_e2e","iteration":83,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.831,"logical_gb_s":30.4183415445,"status":0,"cycle_kernel_start":1028660033971483,"cycle_plan_index_done":1028660033973026,"cycle_kernel_done":1028660033979949,"correct":true}
+[STAGE] pe=2 prepared iteration=84
+[STAGE] pe=2 launch iteration=84
+[STAGE] pe=2 kernel_status=0 iteration=84
+{"test":"pull_combine_v2_npu_e2e","iteration":84,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":207.72,"logical_gb_s":30.2881571346,"status":0,"cycle_kernel_start":1028660039153938,"cycle_plan_index_done":1028660039155499,"cycle_kernel_done":1028660039162445,"correct":true}
+[STAGE] pe=2 prepared iteration=85
+[STAGE] pe=2 launch iteration=85
+[STAGE] pe=2 kernel_status=0 iteration=85
+{"test":"pull_combine_v2_npu_e2e","iteration":85,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":236.656,"logical_gb_s":26.5848150903,"status":0,"cycle_kernel_start":1028660044337279,"cycle_plan_index_done":1028660044338848,"cycle_kernel_done":1028660044345618,"correct":true}
+[STAGE] pe=2 prepared iteration=86
+[STAGE] pe=2 launch iteration=86
+[STAGE] pe=2 kernel_status=0 iteration=86
+{"test":"pull_combine_v2_npu_e2e","iteration":86,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":219.297,"logical_gb_s":28.6892023147,"status":0,"cycle_kernel_start":1028660049521508,"cycle_plan_index_done":1028660049522991,"cycle_kernel_done":1028660049529838,"correct":true}
+[STAGE] pe=2 prepared iteration=87
+[STAGE] pe=2 launch iteration=87
+[STAGE] pe=2 kernel_status=0 iteration=87
+{"test":"pull_combine_v2_npu_e2e","iteration":87,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":204.4,"logical_gb_s":30.7801174168,"status":0,"cycle_kernel_start":1028660054702005,"cycle_plan_index_done":1028660054703489,"cycle_kernel_done":1028660054710294,"correct":true}
+[STAGE] pe=2 prepared iteration=88
+[STAGE] pe=2 launch iteration=88
+[STAGE] pe=2 kernel_status=0 iteration=88
+{"test":"pull_combine_v2_npu_e2e","iteration":88,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":207.746,"logical_gb_s":30.284366486,"status":0,"cycle_kernel_start":1028660059887089,"cycle_plan_index_done":1028660059888589,"cycle_kernel_done":1028660059895433,"correct":true}
+[STAGE] pe=2 prepared iteration=89
+[STAGE] pe=2 launch iteration=89
+[STAGE] pe=2 kernel_status=0 iteration=89
+{"test":"pull_combine_v2_npu_e2e","iteration":89,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":218.047,"logical_gb_s":28.8536691631,"status":0,"cycle_kernel_start":1028660065070266,"cycle_plan_index_done":1028660065071829,"cycle_kernel_done":1028660065078698,"correct":true}
+[STAGE] pe=2 prepared iteration=90
+[STAGE] pe=2 launch iteration=90
+[STAGE] pe=2 kernel_status=0 iteration=90
+{"test":"pull_combine_v2_npu_e2e","iteration":90,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.942,"logical_gb_s":30.4020256884,"status":0,"cycle_kernel_start":1028660070251795,"cycle_plan_index_done":1028660070253375,"cycle_kernel_done":1028660070260168,"correct":true}
+[STAGE] pe=2 prepared iteration=91
+[STAGE] pe=2 launch iteration=91
+[STAGE] pe=2 kernel_status=0 iteration=91
+{"test":"pull_combine_v2_npu_e2e","iteration":91,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":213.99,"logical_gb_s":29.4007009673,"status":0,"cycle_kernel_start":1028660075432349,"cycle_plan_index_done":1028660075433845,"cycle_kernel_done":1028660075440713,"correct":true}
+[STAGE] pe=2 prepared iteration=92
+[STAGE] pe=2 launch iteration=92
+[STAGE] pe=2 kernel_status=0 iteration=92
+{"test":"pull_combine_v2_npu_e2e","iteration":92,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":206.85,"logical_gb_s":30.4155474982,"status":0,"cycle_kernel_start":1028660080615109,"cycle_plan_index_done":1028660080616670,"cycle_kernel_done":1028660080623482,"correct":true}
+[STAGE] pe=2 prepared iteration=93
+[STAGE] pe=2 launch iteration=93
+[STAGE] pe=2 kernel_status=0 iteration=93
+{"test":"pull_combine_v2_npu_e2e","iteration":93,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":207.184,"logical_gb_s":30.3665147888,"status":0,"cycle_kernel_start":1028660085797727,"cycle_plan_index_done":1028660085799268,"cycle_kernel_done":1028660085805971,"correct":true}
+[STAGE] pe=2 prepared iteration=94
+[STAGE] pe=2 launch iteration=94
+[STAGE] pe=2 kernel_status=0 iteration=94
+{"test":"pull_combine_v2_npu_e2e","iteration":94,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":217.934,"logical_gb_s":28.8686299522,"status":0,"cycle_kernel_start":1028660090984705,"cycle_plan_index_done":1028660090986283,"cycle_kernel_done":1028660090993207,"correct":true}
+[STAGE] pe=2 prepared iteration=95
+[STAGE] pe=2 launch iteration=95
+[STAGE] pe=2 kernel_status=0 iteration=95
+{"test":"pull_combine_v2_npu_e2e","iteration":95,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":212.133,"logical_gb_s":29.6580730014,"status":0,"cycle_kernel_start":1028660096168812,"cycle_plan_index_done":1028660096170296,"cycle_kernel_done":1028660096177060,"correct":true}
+[STAGE] pe=2 prepared iteration=96
+[STAGE] pe=2 launch iteration=96
+[STAGE] pe=2 kernel_status=0 iteration=96
+{"test":"pull_combine_v2_npu_e2e","iteration":96,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":211.881,"logical_gb_s":29.6933467371,"status":0,"cycle_kernel_start":1028660101353600,"cycle_plan_index_done":1028660101355105,"cycle_kernel_done":1028660101361923,"correct":true}
+[STAGE] pe=2 prepared iteration=97
+[STAGE] pe=2 launch iteration=97
+[STAGE] pe=2 kernel_status=0 iteration=97
+{"test":"pull_combine_v2_npu_e2e","iteration":97,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":213.424,"logical_gb_s":29.4786715646,"status":0,"cycle_kernel_start":1028660106538583,"cycle_plan_index_done":1028660106540154,"cycle_kernel_done":1028660106546958,"correct":true}
+[STAGE] pe=2 prepared iteration=98
+[STAGE] pe=2 launch iteration=98
+[STAGE] pe=2 kernel_status=0 iteration=98
+{"test":"pull_combine_v2_npu_e2e","iteration":98,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":210.329,"logical_gb_s":29.9124514451,"status":0,"cycle_kernel_start":1028660111722919,"cycle_plan_index_done":1028660111724492,"cycle_kernel_done":1028660111731363,"correct":true}
+[STAGE] pe=2 prepared iteration=99
+[STAGE] pe=2 launch iteration=99
+[STAGE] pe=2 kernel_status=0 iteration=99
+{"test":"pull_combine_v2_npu_e2e","iteration":99,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"ingress_bytes":4194304,"egress_bytes":2097152,"e2e_us":212.341,"logical_gb_s":29.6290212441,"status":0,"cycle_kernel_start":1028660116914221,"cycle_plan_index_done":1028660116915722,"cycle_kernel_done":1028660116922527,"correct":true}
+{"test":"pull_combine_v2_npu_e2e_summary","workers":2,"workload":"sym_k2_balanced","hidden":2048,"rows":256,"measure":100,"mean_us":213.48372,"min_logical_gb_s":14.5684116928,"mean_logical_gb_s":29.6721623437,"cv_pct":6.37240806836,"correct":true}
