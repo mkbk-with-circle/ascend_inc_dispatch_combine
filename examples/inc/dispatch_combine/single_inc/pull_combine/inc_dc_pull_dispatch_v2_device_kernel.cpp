@@ -622,16 +622,6 @@ __aicore__ inline uint32_t ParserTokenBoundary(
     return token < token_count ? static_cast<uint32_t>(token) : token_count;
 }
 
-__aicore__ inline uint32_t ParserOwnerBlock(
-    uint32_t source, uint32_t token, uint32_t token_count,
-    uint32_t cohort)
-{
-    for (uint32_t lane = 0u; lane < cohort; ++lane)
-        if (token < ParserTokenBoundary(token_count, lane + 1u, cohort))
-            return source * cohort + lane;
-    return source * cohort + cohort - 1u;
-}
-
 __aicore__ inline bool WaitParserReady(
     __gm__ uint32_t *block_status, uint64_t block_stride,
     uint32_t parser, uint64_t spin_cap)
@@ -890,16 +880,16 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinations(
         channels_per_source);
 }
 
-__attribute__((noinline)) __aicore__ void RelayNonAlignedRowsSafe(
+__attribute__((noinline)) __aicore__ void RelayDestinationPackedSafe(
     __gm__ uint8_t *source_base, __gm__ uint8_t *destination_hidden_base,
     __gm__ uint8_t *inc_slots, __gm__ uint8_t *inc_destination_rows,
     uint64_t source_slot_stride,
     uint64_t inc_destination_rows_stride_bytes, uint64_t row_bytes,
     uint32_t worker_count, __gm__ uint32_t *destination_row_counts)
 {
-    // Pull each source once into its private INC slot.  This is used only for
-    // non-cacheline row widths, where independent MTE writers could otherwise
-    // update adjacent bytes in the same remote cacheline.
+    // Pull each source once into its private INC slot.  This is the canonical
+    // safety path for arbitrary routing and for non-cacheline row widths;
+    // neither case permits independent remote MTE writers.
     for (uint32_t source = 0u; source < worker_count; ++source) {
         __gm__ uint8_t *slot = inc_slots +
             MulU64ByU32(source_slot_stride, source);
@@ -950,8 +940,17 @@ __attribute__((noinline)) __aicore__ void RelayNonAlignedRowsSafe(
                 MulU64ByU32(row_bytes, entry->source_token);
             __gm__ uint8_t *packed = destination_staging +
                 MulU64ByU32(row_bytes, row);
-            for (uint64_t byte = 0u; byte < row_bytes; ++byte)
-                packed[byte] = local[byte];
+            if ((row_bytes & 7u) == 0u) {
+                __gm__ uint64_t *packed64 =
+                    reinterpret_cast<__gm__ uint64_t *>(packed);
+                __gm__ uint64_t *local64 =
+                    reinterpret_cast<__gm__ uint64_t *>(local);
+                for (uint64_t word = 0u; word < row_bytes / 8u; ++word)
+                    packed64[word] = local64[word];
+            } else {
+                for (uint64_t byte = 0u; byte < row_bytes; ++byte)
+                    packed[byte] = local[byte];
+            }
         }
         for (uint64_t byte = logical_bytes; byte < transfer_bytes; ++byte)
             destination_staging[byte] = 0u;
@@ -2216,8 +2215,9 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     // Relay reads the compact contributor range directly; it never rescans
     // top-k assignments or row_map.
     if (*status == kStatusOk &&
-        row_bytes % kPullDispatchAlignment != 0u && block == 0u) {
-        RelayNonAlignedRowsSafe(
+        (!uniform_fast || row_bytes % kPullDispatchAlignment != 0u) &&
+        block == 0u) {
+        RelayDestinationPackedSafe(
             source_base, destination_hidden_base, inc_slots,
             inc_destination_rows,
             source_slot_stride, inc_destination_rows_stride_bytes, row_bytes,
@@ -2228,7 +2228,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             AscendC::GetSystemCycle();
         dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(relay_state));
     }
-    if (*status == kStatusOk &&
+    if (*status == kStatusOk && uniform_fast &&
         row_bytes % kPullDispatchAlignment == 0u &&
         block < required_channels) {
         // Interleave peers across physical AIV ids.  This is the qualified
@@ -2240,169 +2240,12 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             MulU64ByU32(source_slot_stride, source);
         __gm__ SlotHeader *header =
             reinterpret_cast<__gm__ SlotHeader *>(slot);
-        __ubuf__ uint8_t *ub[2]{
-            reinterpret_cast<__ubuf__ uint8_t *>(0),
-            reinterpret_cast<__ubuf__ uint8_t *>(kUbSlotBytes)};
-        bool put_busy[2]{false, false};
-        uint32_t ping = 0u;
-        uint32_t ready_parser = 0xffffffffu;
-        const uint32_t channel_begin = static_cast<uint32_t>(
-            MulU64ByU32(header->token_count, channel) /
-            channels_per_source);
-        const uint32_t channel_end = static_cast<uint32_t>(
-            MulU64ByU32(header->token_count, channel + 1u) /
-            channels_per_source);
-        const uint32_t global_source_begin =
+        RelayUniformDestinations(
+            source_base, destination_hidden_base,
             reinterpret_cast<__gm__ uint32_t *>(
-                source_token_prefix)[source];
-        __gm__ JournalSlotHeader *relay_header =
-            reinterpret_cast<__gm__ JournalSlotHeader *>(journal_header);
-        const bool relay_uniform_fast = uniform_fast &&
-            (relay_header->flags &
-             kJournalFlagUniformDestinations) != 0u;
-
-        if (relay_uniform_fast)
-            RelayUniformDestinations(
-                source_base, destination_hidden_base,
-                reinterpret_cast<__gm__ uint32_t *>(
-                    source_destination_prefix),
-                header, row_bytes, source, worker_count, channel,
-                channels_per_source);
-
-        if (!relay_uniform_fast) {
-        uint32_t token = channel_begin;
-        while (token < channel_end) {
-            const uint32_t owner_parser = ParserOwnerBlock(
-                source, token, header->token_count, parser_cohort);
-            if (owner_parser != ready_parser) {
-                if (!WaitParserReady(block_status,
-                                     scratch_layout.block_stride,
-                                     owner_parser, spin_cap)) {
-                    source_errors[static_cast<uint64_t>(source) *
-                                  scratch_layout.source_stride] =
-                        kStatusReadyTimeout;
-                    dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
-                        source_errors + static_cast<uint64_t>(source) *
-                            scratch_layout.source_stride));
-                    break;
-                }
-                ready_parser = owner_parser;
-            }
-            const uint32_t global_token =
-                global_source_begin + token;
-            __gm__ JournalTokenEntry *jtoken =
-                reinterpret_cast<__gm__ JournalTokenEntry *>(
-                    journal_tokens) + global_token;
-            const uint32_t fanout = jtoken->contributors_count;
-            if (fanout == 0u) {
-                ++token;
-                continue;
-            }
-
-            // Coalesce consecutive tokens while every contributor keeps the
-            // same destination and advances by one dense destination row.
-            // Runs never cross a parser slice that has not published ready.
-            const uint32_t owner_lane =
-                owner_parser - source * parser_cohort;
-            uint32_t run_limit = ParserTokenBoundary(
-                header->token_count, owner_lane + 1u, parser_cohort);
-            if (run_limit > channel_end) run_limit = channel_end;
-            uint32_t run_end = token + 1u;
-            while (run_end < run_limit) {
-                __gm__ JournalTokenEntry *next_token =
-                    reinterpret_cast<__gm__ JournalTokenEntry *>(
-                        journal_tokens) + global_source_begin + run_end;
-                if (next_token->contributors_count != fanout) break;
-                bool compatible = true;
-                const uint32_t delta = run_end - token;
-                for (uint32_t local = 0u; local < fanout; ++local) {
-                    __gm__ JournalContributor *first =
-                        reinterpret_cast<__gm__ JournalContributor *>(
-                            journal_contributors) +
-                        jtoken->contributors_begin + local;
-                    __gm__ JournalContributor *next =
-                        reinterpret_cast<__gm__ JournalContributor *>(
-                            journal_contributors) +
-                        next_token->contributors_begin + local;
-                    if (next->worker_rank != first->worker_rank ||
-                        static_cast<uint64_t>(next->destination_row) !=
-                            static_cast<uint64_t>(first->destination_row) +
-                                delta) {
-                        compatible = false;
-                        break;
-                    }
-                }
-                if (!compatible) break;
-                ++run_end;
-            }
-
-            const uint32_t tile_bytes = RelayTileBytes(
-                fanout, channels_per_source);
-            const uint64_t run_bytes = MulU64ByU32(
-                row_bytes, run_end - token);
-            uint64_t byte_offset = 0u;
-            uint32_t bytes = static_cast<uint32_t>(
-                run_bytes < tile_bytes ? run_bytes : tile_bytes);
-            if (put_busy[ping]) {
-                WaitPutDone(ping);
-                put_busy[ping] = false;
-            }
-            PullHiddenToUb(ub[ping],
-                source_base + header->hidden_offset +
-                    MulU64ByU32(row_bytes, token),
-                bytes, static_cast<int32_t>(source), ping);
-
-            while (byte_offset < run_bytes) {
-                WaitHiddenPull(ping);
-                const uint64_t next_offset = byte_offset + bytes;
-                const uint32_t next_ping = ping ^ 1u;
-                if (next_offset < run_bytes) {
-                    if (put_busy[next_ping]) {
-                        WaitPutDone(next_ping);
-                        put_busy[next_ping] = false;
-                    }
-                    const uint32_t next_bytes = static_cast<uint32_t>(
-                        run_bytes - next_offset < tile_bytes
-                            ? run_bytes - next_offset
-                            : tile_bytes);
-                    PullHiddenToUb(ub[next_ping],
-                        source_base + header->hidden_offset +
-                            MulU64ByU32(row_bytes, token) + next_offset,
-                        next_bytes, static_cast<int32_t>(source), next_ping);
-                }
-
-                for (uint32_t local = 0u; local < fanout; ++local) {
-                    __gm__ JournalContributor *contributor =
-                        reinterpret_cast<__gm__ JournalContributor *>(
-                            journal_contributors) +
-                        jtoken->contributors_begin + local;
-                    PutHiddenFromUb(
-                        destination_hidden_base +
-                            MulU64ByU32(row_bytes,
-                                       contributor->destination_row) +
-                            byte_offset,
-                        ub[ping], bytes,
-                        static_cast<int32_t>(contributor->worker_rank), ping);
-                }
-                SetPutDone(ping);
-                put_busy[ping] = true;
-                byte_offset = next_offset;
-                if (byte_offset >= run_bytes) break;
-                ping = next_ping;
-                bytes = static_cast<uint32_t>(
-                    run_bytes - byte_offset < tile_bytes
-                        ? run_bytes - byte_offset
-                        : tile_bytes);
-            }
-            ping ^= 1u;
-            token = run_end;
-        }
-        }
-        for (uint32_t slot_index = 0u; slot_index < 2u; ++slot_index)
-            if (put_busy[slot_index]) WaitPutDone(slot_index);
-        // Event completion releases both UB slots, while mte_quiet closes
-        // remote visibility before the cross-AIV join and completion.
-        aclshmemx_mte_quiet();
+                source_destination_prefix),
+            header, row_bytes, source, worker_count, channel,
+            channels_per_source);
         __gm__ uint32_t *relay_state = block_status +
             static_cast<uint64_t>(block) * scratch_layout.block_stride;
         *reinterpret_cast<__gm__ uint64_t *>(relay_state + 2u) =
