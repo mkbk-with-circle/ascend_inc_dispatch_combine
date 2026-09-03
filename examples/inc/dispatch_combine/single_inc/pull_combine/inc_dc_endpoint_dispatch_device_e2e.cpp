@@ -317,6 +317,9 @@ int main(int argc, char **argv)
     }
     const uint64_t counts_bytes =
         static_cast<uint64_t>(workers) * sizeof(uint32_t) * 4u;
+    const uint64_t combine_control_bytes =
+        (static_cast<uint64_t>(workers + 2u) * sizeof(uint32_t) + 63u) /
+        64u * 64u;
     constexpr uint64_t kMaxStagingBytesPerDestination = 4ull << 20;
     const uint64_t staging_bytes_per_destination =
         kMaxStagingBytesPerDestination;
@@ -433,7 +436,8 @@ int main(int argc, char **argv)
         inc_combine_token_ids = static_cast<uint8_t *>(aclshmem_malloc(
             static_cast<uint64_t>(workers) * combine_row_capacity *
             sizeof(uint64_t)));
-        combine_status_line = static_cast<uint8_t *>(aclshmem_malloc(128u));
+        combine_status_line = static_cast<uint8_t *>(
+            aclshmem_malloc(combine_control_bytes));
         status_line = static_cast<uint8_t *>(aclshmem_malloc(64u));
         if (source_packet == nullptr || inc_packets == nullptr ||
             commits == nullptr || recv_hidden == nullptr ||
@@ -535,7 +539,7 @@ int main(int argc, char **argv)
         ZeroDevice(inc_combine_token_ids,
                    static_cast<uint64_t>(workers) * combine_row_capacity *
                        sizeof(uint64_t));
-        ZeroDevice(combine_status_line, 128u);
+        ZeroDevice(combine_status_line, combine_control_bytes);
         ZeroDevice(status_line, 64u);
     }
     if (status == 0 && pe < inc_pe && !expect_reject) {

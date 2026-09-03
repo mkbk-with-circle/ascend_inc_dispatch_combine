@@ -42,7 +42,8 @@ void inc_dc_device_journal_index_kernel(
         header->struct_bytes != sizeof(DeviceJournalHeader) ||
         header->generation != generation || header->wave != wave ||
         header->worker_count != worker_count || header->status != 0u ||
-        header->flags != 0u || hash_capacity == 0u ||
+        header->flags != 0u || worker_count < 2u ||
+        worker_count > kEndpointDispatchMaxWorkers || hash_capacity == 0u ||
         (hash_capacity & (hash_capacity - 1u)) != 0u) {
         header->status = kIndexInvalidHeader;
         dcci_cacheline(journal_header);

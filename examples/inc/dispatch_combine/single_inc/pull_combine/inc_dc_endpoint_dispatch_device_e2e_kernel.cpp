@@ -22,6 +22,13 @@ __aicore__ inline uint32_t DTypeBytes(uint32_t dtype)
     return dtype == static_cast<uint32_t>(EndpointDataType::FP32) ? 4u : 2u;
 }
 
+__aicore__ inline bool DTypeValid(uint32_t dtype)
+{
+    return dtype == static_cast<uint32_t>(EndpointDataType::FP16) ||
+        dtype == static_cast<uint32_t>(EndpointDataType::BF16) ||
+        dtype == static_cast<uint32_t>(EndpointDataType::FP32);
+}
+
 __aicore__ inline void FlushRange(__gm__ uint8_t *pointer, uint64_t bytes)
 {
     AscendC::PipeBarrier<PIPE_ALL>();
@@ -53,24 +60,28 @@ __aicore__ inline void CopyLocalGm(__gm__ uint8_t *destination,
     }
 }
 
-__aicore__ inline bool WaitCommit(
-    __gm__ EndpointDispatchCommit *commit, uint32_t source,
-    uint64_t generation, uint32_t wave)
-{
-    for (uint64_t spin = 0u; spin < kCommitSpinLimit; ++spin) {
-        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(commit));
-        if (commit->generation == generation && commit->wave == wave &&
-            commit->source_rank == source)
-            return true;
-    }
-    return false;
-}
-
 __aicore__ inline bool HeaderValid(
     __gm__ const EndpointDispatchPacketHeader *header, uint32_t source,
     uint32_t worker_count, uint32_t hidden, uint32_t dtype,
     uint64_t generation, uint32_t wave, uint64_t slot_bytes)
 {
+    const uint64_t token_bytes = static_cast<uint64_t>(header->token_count) *
+        sizeof(EndpointDispatchTokenRecord);
+    const uint64_t assignment_bytes =
+        static_cast<uint64_t>(header->assignment_count) *
+        sizeof(EndpointDispatchAssignmentRecord);
+    const uint64_t hidden_elements =
+        static_cast<uint64_t>(header->token_count) * hidden;
+    const uint32_t dtype_bytes = DTypeBytes(dtype);
+    const uint64_t max_hidden_elements =
+        dtype_bytes == 4u ? 0x3fffffffffffffffull
+                          : 0x7fffffffffffffffull;
+    if (worker_count < 2u ||
+        worker_count > kEndpointDispatchMaxWorkers ||
+        !DTypeValid(dtype) ||
+        hidden_elements > max_hidden_elements)
+        return false;
+    const uint64_t hidden_bytes = hidden_elements * dtype_bytes;
     return header->magic == kEndpointDispatchMagic &&
         header->abi_version == kEndpointDispatchAbiVersion &&
         header->header_bytes == sizeof(EndpointDispatchPacketHeader) &&
@@ -79,21 +90,21 @@ __aicore__ inline bool HeaderValid(
         header->worker_count == worker_count && header->hidden == hidden &&
         header->dtype == dtype && header->flags == 0u &&
         header->packet_bytes != 0u && header->packet_bytes <= slot_bytes &&
+        header->packet_bytes % kEndpointDispatchAlignment == 0u &&
         header->counts_offset == sizeof(EndpointDispatchPacketHeader) &&
         header->tokens_offset % kEndpointDispatchAlignment == 0u &&
         header->assignments_offset % kEndpointDispatchAlignment == 0u &&
         header->hidden_offset % kEndpointDispatchAlignment == 0u &&
-        header->tokens_offset >= header->counts_offset +
-            static_cast<uint64_t>(worker_count) * sizeof(uint32_t) * 2u &&
-        header->assignments_offset >= header->tokens_offset +
-            static_cast<uint64_t>(header->token_count) *
-                sizeof(EndpointDispatchTokenRecord) &&
-        header->hidden_offset >= header->assignments_offset +
-            static_cast<uint64_t>(header->assignment_count) *
-                sizeof(EndpointDispatchAssignmentRecord) &&
-        header->hidden_offset +
-            static_cast<uint64_t>(header->token_count) * hidden *
-                DTypeBytes(dtype) <= header->packet_bytes &&
+        header->tokens_offset >= header->counts_offset &&
+        static_cast<uint64_t>(worker_count) * sizeof(uint32_t) * 2u <=
+            header->tokens_offset - header->counts_offset &&
+        header->assignments_offset >= header->tokens_offset &&
+        token_bytes <= header->assignments_offset - header->tokens_offset &&
+        header->hidden_offset >= header->assignments_offset &&
+        assignment_bytes <=
+            header->hidden_offset - header->assignments_offset &&
+        header->hidden_offset <= header->packet_bytes &&
+        hidden_bytes <= header->packet_bytes - header->hidden_offset &&
         header->reserved[0] == 0u && header->reserved[1] == 0u &&
         header->reserved[2] == 0u;
 }
@@ -270,12 +281,33 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     __gm__ uint32_t *global_status =
         reinterpret_cast<__gm__ uint32_t *>(status_line);
 
+    if (worker_count < 2u || worker_count > kEndpointDispatchMaxWorkers ||
+        slot_bytes < sizeof(EndpointDispatchPacketHeader) ||
+        slot_bytes % kEndpointDispatchAlignment != 0u ||
+        hidden == 0u || !DTypeValid(dtype)) {
+        if (pe == inc_pe && block == 0u) {
+            *global_status = kStatusInvalidCommit;
+            dcci_cacheline(status_line);
+        }
+        return;
+    }
+
     if (pe != inc_pe) {
         __gm__ EndpointDispatchPacketHeader *local_header =
             reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
                 source_packet);
         FlushRange(source_packet, sizeof(EndpointDispatchPacketHeader));
-        const uint64_t cache_lines = local_header->packet_bytes / 64u;
+        // Never trust a caller-owned packet length before the INC parser has
+        // validated it.  A corrupt length still publishes its commit and is
+        // rejected remotely, but cannot make the sender read beyond its slot.
+        const bool local_size_valid = local_header->packet_bytes >=
+                sizeof(EndpointDispatchPacketHeader) &&
+            local_header->packet_bytes <= slot_bytes &&
+            local_header->packet_bytes % kEndpointDispatchAlignment == 0u;
+        const uint64_t bytes_to_copy = local_size_valid
+            ? local_header->packet_bytes
+            : sizeof(EndpointDispatchPacketHeader);
+        const uint64_t cache_lines = bytes_to_copy / 64u;
         const uint64_t first_line = cache_lines * block / blocks;
         const uint64_t last_line = cache_lines * (block + 1u) / blocks;
         if (first_line < last_line) {
@@ -299,41 +331,58 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     if (block == 0u) {
         *global_status = kStatusOk;
         dcci_cacheline(status_line);
-        for (uint32_t source = 0u; source < worker_count; ++source) {
-            __gm__ EndpointDispatchCommit *commit =
-                reinterpret_cast<__gm__ EndpointDispatchCommit *>(
-                    commit_mailbox) + source;
-            if (!WaitCommit(commit, source, generation, wave)) {
-                *global_status = kStatusCommitTimeout;
-                break;
+        bool acquired[kEndpointDispatchMaxWorkers]{};
+        uint32_t remaining = worker_count;
+        // Poll every uncommitted source instead of blocking on rank order.  A
+        // late rank therefore cannot prevent validation of packets that are
+        // already visible, and the same loop works for arbitrary arrival
+        // timing without maintaining source-order state.
+        for (uint64_t spin = 0u;
+             spin < kCommitSpinLimit && remaining != 0u &&
+                 *global_status == kStatusOk;
+             ++spin) {
+            for (uint32_t source = 0u; source < worker_count; ++source) {
+                if (acquired[source]) continue;
+                __gm__ EndpointDispatchCommit *commit =
+                    reinterpret_cast<__gm__ EndpointDispatchCommit *>(
+                        commit_mailbox) + source;
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(commit));
+                if (commit->generation != generation ||
+                    commit->wave != wave)
+                    continue;
+                if (commit->magic != kEndpointDispatchMagic ||
+                    commit->abi_version != kEndpointDispatchAbiVersion ||
+                    commit->struct_bytes != sizeof(EndpointDispatchCommit) ||
+                    commit->source_rank != source ||
+                    commit->sequence != 1u || commit->slot != 0u ||
+                    commit->flags != 0u || commit->packet_bytes == 0u ||
+                    commit->packet_bytes > slot_bytes ||
+                    commit->reserved != 0u) {
+                    *global_status = kStatusInvalidCommit;
+                    break;
+                }
+                __gm__ uint8_t *packet = inc_packets +
+                    static_cast<uint64_t>(source) * slot_bytes;
+                FlushRange(packet, sizeof(EndpointDispatchPacketHeader));
+                __gm__ EndpointDispatchPacketHeader *header =
+                    reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
+                        packet);
+                if (!HeaderValid(header, source, worker_count, hidden, dtype,
+                                 generation, wave, slot_bytes) ||
+                    header->packet_bytes != commit->packet_bytes ||
+                    header->metadata_digest != commit->metadata_digest) {
+                    *global_status = kStatusInvalidPacket;
+                    break;
+                }
+                // Commit publication makes the packet immutable.  Invalidate
+                // compact metadata once rather than in each destination loop.
+                FlushRange(packet, header->hidden_offset);
+                acquired[source] = true;
+                --remaining;
             }
-            if (commit->magic != kEndpointDispatchMagic ||
-                commit->abi_version != kEndpointDispatchAbiVersion ||
-                commit->struct_bytes != sizeof(EndpointDispatchCommit) ||
-                commit->sequence != 1u || commit->slot != 0u ||
-                commit->flags != 0u || commit->packet_bytes == 0u ||
-                commit->packet_bytes > slot_bytes || commit->reserved != 0u) {
-                *global_status = kStatusInvalidCommit;
-                break;
-            }
-            __gm__ uint8_t *packet =
-                inc_packets + static_cast<uint64_t>(source) * slot_bytes;
-            FlushRange(packet, sizeof(EndpointDispatchPacketHeader));
-            __gm__ EndpointDispatchPacketHeader *header =
-                reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
-                    packet);
-            if (!HeaderValid(header, source, worker_count, hidden, dtype,
-                             generation, wave, slot_bytes) ||
-                header->packet_bytes != commit->packet_bytes ||
-                header->metadata_digest != commit->metadata_digest) {
-                *global_status = kStatusInvalidPacket;
-                break;
-            }
-            // Commit publication makes the packet immutable.  Invalidate its
-            // compact metadata once here instead of repeating DCCI for every
-            // token, assignment and destination owner.
-            FlushRange(packet, header->hidden_offset);
         }
+        if (remaining != 0u && *global_status == kStatusOk)
+            *global_status = kStatusCommitTimeout;
         AscendC::PipeBarrier<PIPE_ALL>();
         dcci_cacheline(status_line);
     }

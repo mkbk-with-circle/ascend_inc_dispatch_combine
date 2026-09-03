@@ -8,6 +8,9 @@ namespace inc::dc::pull_combine {
 constexpr uint32_t kEndpointDispatchMagic = 0x44503245u; // 'DP2E'
 constexpr uint16_t kEndpointDispatchAbiVersion = 1u;
 constexpr uint32_t kEndpointDispatchAlignment = 64u;
+// The device journal contributor bitmap has two 64-bit words.  Make that
+// protocol limit explicit so every layer rejects larger topologies safely.
+constexpr uint32_t kEndpointDispatchMaxWorkers = 128u;
 
 enum class EndpointDataType : uint32_t {
     FP16 = 0u,

@@ -68,6 +68,11 @@ __aicore__ inline bool DescriptorValid(
     uint32_t expected_rows, uint32_t hidden, uint64_t generation,
     uint32_t wave)
 {
+    const uint64_t payload_elements =
+        static_cast<uint64_t>(expected_rows) * hidden;
+    if (payload_elements > ~0ull / sizeof(float))
+        return false;
+    const uint64_t payload_bytes = payload_elements * sizeof(float);
     if (descriptor->magic != kSparseCombineMagic ||
         descriptor->abi_version != kSparseCombineAbiVersion ||
         descriptor->struct_bytes != sizeof(SparseCombineReadyDescriptor) ||
@@ -78,8 +83,7 @@ __aicore__ inline bool DescriptorValid(
             static_cast<uint32_t>(SparseCombineDType::FP32) ||
         descriptor->slot != 0u || descriptor->source_region_id == 0u ||
         descriptor->token_ids_offset != 0u || descriptor->payload_offset != 0u ||
-        descriptor->payload_bytes !=
-            static_cast<uint64_t>(expected_rows) * hidden * sizeof(float) ||
+        descriptor->payload_bytes != payload_bytes ||
         descriptor->metadata_digest == 0u ||
         (descriptor->flags & ~kSparseCombineFlagCanonicalRows) != 0u ||
         descriptor->reserved0 != 0u)
@@ -175,6 +179,17 @@ void inc_dc_sparse_combine_device_e2e_kernel(
     const uint32_t block = AscendC::GetBlockIdx();
     const uint32_t blocks = AscendC::GetBlockNum();
     const int32_t pe = aclshmem_my_pe();
+    __gm__ uint32_t *control =
+        reinterpret_cast<__gm__ uint32_t *>(status_line);
+    __gm__ uint32_t *status = control;
+
+    if (worker_count < 2u || worker_count > kSparseCombineMaxWorkers) {
+        if (pe == inc_pe && block == 0u) {
+            *status = kStatusInvalidJournal;
+            dcci_cacheline(status_line);
+        }
+        return;
+    }
 
     if (pe != inc_pe) {
         if (block == 0u) {
@@ -208,9 +223,6 @@ void inc_dc_sparse_combine_device_e2e_kernel(
         return;
     }
 
-    __gm__ uint32_t *control =
-        reinterpret_cast<__gm__ uint32_t *>(status_line);
-    __gm__ uint32_t *status = control;
     __gm__ uint32_t *initialized = control + 1u;
     __gm__ uint32_t *source_ready = control + 2u;
     __gm__ uint32_t *expected_rows =

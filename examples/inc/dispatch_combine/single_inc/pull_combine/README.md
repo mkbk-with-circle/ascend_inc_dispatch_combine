@@ -40,6 +40,10 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
 - 已完成：设备端严格 metadata 校验。digest、CSR 连续性、count 重算、范围、
   非有限权重和重复 ordinal 均在 fan-out 前 fail-closed；损坏包也发布负 ACK/
   completion，不会永久占住槽位。
+- 已完成：Dispatch commit 按未完成 source 轮询，不再按 rank 顺序阻塞；任一低
+  rank 晚到时，INC 仍会先校验已就绪 source。设备侧 packet/payload 大小计算带
+  溢出保护，Dispatch、journal 与 Combine 统一拒绝超过当前双 64-bit contributor
+  bitmap 所支持的 128 workers；控制区大小由 worker 数推导，不依赖固定字节数。
 - 已完成：动态 per-wave journal 主机参考状态机。它只从各 source 的 endpoint
   Dispatch packet 在线学习 token ID、原 owner/row 和 expected contributor bitmap；
   不接收预构造 token plan。Combine 可按任意跨 rank 时序、任意合法 chunk 大小提交

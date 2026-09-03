@@ -86,7 +86,8 @@ uint64_t MetadataDigest(const EndpointDispatchPacketHeader &header,
 bool ConfigValid(const EndpointDispatchConfig &config)
 {
     return config.worker_count >= 2u &&
-        config.worker_count <= 128u && config.expert_count != 0u &&
+        config.worker_count <= kEndpointDispatchMaxWorkers &&
+        config.expert_count != 0u &&
         config.hidden != 0u && DTypeBytes(config.dtype) != 0u &&
         config.source_rank < config.worker_count &&
         config.generation != 0u && config.sequence != 0u;
