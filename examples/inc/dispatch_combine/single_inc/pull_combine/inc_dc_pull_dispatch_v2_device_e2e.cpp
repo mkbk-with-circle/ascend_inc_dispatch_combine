@@ -952,7 +952,12 @@ void ApplyFault(uint32_t fault, uint32_t rank, uint32_t workers,
     if (rank != 0u || fault == 0u) return;
     SlotHeader *header = reinterpret_cast<SlotHeader *>(slot->data());
     if (fault == 1u && header->assignment_count != 0u) {
-        (*slot)[header->assignments_offset] ^= 1u;
+        // Corrupt only the least-significant byte of a finite float.  This
+        // changes the metadata digest without changing destination, expert,
+        // ordinal or the weight's exponent, so semantic validation remains
+        // valid and fault1 deterministically isolates DIGEST_MISMATCH.
+        (*slot)[header->assignments_offset +
+                __builtin_offsetof(AssignmentRecord, weight)] ^= 1u;
     } else if (fault == 2u && header->assignment_count != 0u) {
         AssignmentRecord *assignments = reinterpret_cast<AssignmentRecord *>(
             slot->data() + header->assignments_offset);
@@ -974,7 +979,8 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
     const double seconds = us * 1e-6;
     const double gbps = seconds == 0.0 ? 0.0 :
         static_cast<double>(oracle.logical_bytes) / seconds / 1e9;
-    const double protocol_us = timeline.kernel_done > timeline.all_ready
+    const double protocol_us = timeline.all_ready != 0u &&
+        timeline.kernel_done > timeline.all_ready
         ? static_cast<double>(timeline.kernel_done - timeline.all_ready) *
             kSystemCycleUs
         : 0.0;
@@ -1387,7 +1393,7 @@ int main(int argc, char **argv)
                       iteration_correct);
             if (!warmup) {
                 measured.push_back(us);
-                const double protocol_us =
+                const double protocol_us = timeline.all_ready != 0u &&
                     timeline.kernel_done > timeline.all_ready
                     ? static_cast<double>(timeline.kernel_done -
                                           timeline.all_ready) *
