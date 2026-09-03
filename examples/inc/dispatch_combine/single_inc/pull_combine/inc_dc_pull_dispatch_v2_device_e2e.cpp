@@ -9,6 +9,7 @@
 #include <limits>
 #include <numeric>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "acl/acl.h"
@@ -99,6 +100,8 @@ struct Options {
     uint32_t measure = 0u;
     uint64_t seed = 0u;
     uint32_t fault = 0u;
+    uint32_t token_skew_percent = 0u;
+    uint32_t ready_skew_us = 0u;
 };
 
 struct WaveOracle {
@@ -256,7 +259,12 @@ uint32_t TokensForSource(const Options &o, uint32_t source,
 {
     if (o.payload_bytes == 0u) return 0u;
     uint64_t base = (o.payload_bytes + row_bytes - 1u) / row_bytes;
-    if (o.workload == Workload::RAGGED) {
+    if (o.token_skew_percent != 0u) {
+        if (source != 0u) {
+            const uint32_t retained = 100u - o.token_skew_percent;
+            base = (base * retained + 99u) / 100u;
+        }
+    } else if (o.workload == Workload::RAGGED) {
         // 100%, 75%, 50%, 25%, ...; never silently turn nonzero input into
         // an empty source.  This deliberately exercises unequal READY sizes.
         static constexpr uint32_t numerator[4]{4u, 3u, 2u, 1u};
@@ -651,7 +659,13 @@ bool ValidateDestinationRows(const uint8_t *device,
                   << " source_token=" << actual[i].source_token << "/"
                   << expected[i].source_token
                   << " row=" << actual[i].destination_row << "/"
-                  << expected[i].destination_row << '\n';
+                  << expected[i].destination_row
+                  << " assignments_begin=" << actual[i].assignments_begin
+                  << "/" << expected[i].assignments_begin
+                  << " assignments_count=" << actual[i].assignments_count
+                  << "/" << expected[i].assignments_count
+                  << " reserved=" << actual[i].reserved << "/"
+                  << expected[i].reserved << '\n';
         return false;
     }
     return true;
@@ -1000,6 +1014,8 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
               << ",\"ring_slot\":" << oracle.ring_slot
               << ",\"requested_payload_bytes_per_worker\":"
               << o.payload_bytes
+              << ",\"token_skew_percent\":" << o.token_skew_percent
+              << ",\"ready_skew_us\":" << o.ready_skew_us
               << ",\"ingress_hidden_bytes\":"
               << oracle.ingress_hidden_bytes
               << ",\"egress_hidden_bytes\":"
@@ -1041,7 +1057,7 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
 
 int main(int argc, char **argv)
 {
-    if (argc != 14) {
+    if (argc != 14 && argc != 16) {
         std::cerr
             << "usage: " << argv[0]
             << " <workers> <pe> <ipport> <first_npu>"
@@ -1050,7 +1066,9 @@ int main(int argc, char **argv)
                " <hidden> <expert_count> <channels_per_source>"
                " <warmup> <measure> <seed>"
                " <fault:0=none,1=digest,2=assignment,3=missing_ready,"
-               "4=ready_identity,5=busy_journal>\n";
+               "4=ready_identity,5=busy_journal>"
+               " [token_skew_percent:0|25|50|75|100]"
+               " [ready_skew_us]\n";
         return 2;
     }
     Options o{};
@@ -1069,6 +1087,12 @@ int main(int argc, char **argv)
     o.measure = static_cast<uint32_t>(std::strtoul(argv[11], nullptr, 10));
     o.seed = std::strtoull(argv[12], nullptr, 10);
     o.fault = static_cast<uint32_t>(std::strtoul(argv[13], nullptr, 10));
+    if (argc == 16) {
+        o.token_skew_percent = static_cast<uint32_t>(
+            std::strtoul(argv[14], nullptr, 10));
+        o.ready_skew_us = static_cast<uint32_t>(
+            std::strtoul(argv[15], nullptr, 10));
+    }
     const uint32_t pes = o.workers + 1u;
     const int inc_pe = static_cast<int>(o.workers);
     g_npus = static_cast<int>(pes);
@@ -1076,7 +1100,11 @@ int main(int argc, char **argv)
         o.workers < 2u || o.workers > 8u || o.pe < 0 ||
         o.pe >= static_cast<int>(pes) || o.hidden == 0u ||
         o.expert_count == 0u || o.channels == 0u || o.measure == 0u ||
-        o.fault > 5u || (o.fault != 0u && o.payload_bytes == 0u &&
+        o.fault > 5u ||
+        (o.token_skew_percent != 0u && o.token_skew_percent != 25u &&
+         o.token_skew_percent != 50u && o.token_skew_percent != 75u &&
+         o.token_skew_percent != 100u) ||
+        (o.fault != 0u && o.payload_bytes == 0u &&
                          (o.fault == 1u || o.fault == 2u)))
         return Fail("arguments", 2);
     const uint64_t row_bytes = static_cast<uint64_t>(o.hidden) * 2u;
@@ -1332,6 +1360,13 @@ int main(int argc, char **argv)
         }
 
         const auto begin = std::chrono::steady_clock::now();
+        if (o.pe < inc_pe && o.ready_skew_us != 0u) {
+            const uint32_t denominator = o.workers > 1u
+                ? o.workers - 1u : 1u;
+            const uint64_t delay = static_cast<uint64_t>(o.ready_skew_us) *
+                static_cast<uint32_t>(o.pe) / denominator;
+            std::this_thread::sleep_for(std::chrono::microseconds(delay));
+        }
         launch_inc_dc_pull_dispatch_v2_device(
             dispatch_aiv_budget, stream, source_region.data,
             ready_mailbox.data, inc_slots.data, source_acks.data,

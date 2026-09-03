@@ -209,9 +209,20 @@ __aicore__ inline bool IsFinite(float value)
 
 __aicore__ inline void FlushRange(__gm__ uint8_t *base, uint64_t bytes)
 {
-    for (uint64_t offset = 0u; offset < bytes;
-         offset += kPullDispatchAlignment)
-        dcci_cacheline(base + offset);
+    if (bytes == 0u) return;
+    const uint64_t address = reinterpret_cast<uint64_t>(base);
+    const uint64_t begin = address &
+        ~(static_cast<uint64_t>(kPullDispatchAlignment) - 1u);
+    uint64_t end = 0u;
+    uint64_t aligned_end = 0u;
+    // All callers pass validated HBM ranges.  Keep overflow handling local so
+    // a malformed range can never wrap the dcci loop across address zero.
+    if (!AddU64(address, bytes, &end) ||
+        !AlignU64(end, kPullDispatchAlignment, &aligned_end))
+        return;
+    for (uint64_t line = begin; line < aligned_end;
+         line += kPullDispatchAlignment)
+        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(line));
 }
 
 __aicore__ inline void PutGmRange(__gm__ uint8_t *remote,
@@ -2179,15 +2190,18 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                        static_cast<uint64_t>(expert_count) *
                            sizeof(uint32_t));
             if (rows != 0u)
-                PutGmRangeAligned(destination_rows_base, row_source,
-                    static_cast<uint64_t>(rows) * sizeof(DestinationRow),
-                    tail, static_cast<int32_t>(side));
+                PutGmRange(destination_rows_base, row_source,
+                    (static_cast<uint64_t>(rows) * sizeof(DestinationRow) +
+                     kPullDispatchAlignment - 1u) &
+                        ~(static_cast<uint64_t>(kPullDispatchAlignment) - 1u),
+                    static_cast<int32_t>(side));
             if (assignment_count != 0u)
-                PutGmRangeAligned(destination_assignments_base,
-                    assignment_source,
-                    static_cast<uint64_t>(assignment_count) *
-                        sizeof(ExpertAssignment),
-                    tail, static_cast<int32_t>(side));
+                PutGmRange(destination_assignments_base, assignment_source,
+                    (static_cast<uint64_t>(assignment_count) *
+                         sizeof(ExpertAssignment) +
+                     kPullDispatchAlignment - 1u) &
+                        ~(static_cast<uint64_t>(kPullDispatchAlignment) - 1u),
+                    static_cast<int32_t>(side));
             PutGmRangeAligned(destination_expert_counts_base, expert_source,
                 static_cast<uint64_t>(expert_count) * sizeof(uint32_t), tail,
                 static_cast<int32_t>(side));
@@ -2325,13 +2339,17 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         FlushRange(expert_source,
                    static_cast<uint64_t>(expert_count) * sizeof(uint32_t));
         if (rows != 0u)
-            PutGmRangeAligned(destination_rows_base, row_source,
-                static_cast<uint64_t>(rows) * sizeof(DestinationRow), tail,
+            PutGmRange(destination_rows_base, row_source,
+                (static_cast<uint64_t>(rows) * sizeof(DestinationRow) +
+                 kPullDispatchAlignment - 1u) &
+                    ~(static_cast<uint64_t>(kPullDispatchAlignment) - 1u),
                 static_cast<int32_t>(destination));
         if (assignments != 0u)
-            PutGmRangeAligned(destination_assignments_base, assignment_source,
-                static_cast<uint64_t>(assignments) *
-                    sizeof(ExpertAssignment), tail,
+            PutGmRange(destination_assignments_base, assignment_source,
+                (static_cast<uint64_t>(assignments) *
+                     sizeof(ExpertAssignment) +
+                 kPullDispatchAlignment - 1u) &
+                    ~(static_cast<uint64_t>(kPullDispatchAlignment) - 1u),
                 static_cast<int32_t>(destination));
         PutGmRangeAligned(destination_expert_counts_base, expert_source,
             static_cast<uint64_t>(expert_count) * sizeof(uint32_t), tail,
