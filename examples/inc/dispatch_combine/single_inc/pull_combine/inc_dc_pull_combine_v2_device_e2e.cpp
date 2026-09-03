@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -206,6 +207,42 @@ void RunCase(uint32_t workers, uint32_t hidden,
     Check(CompileCombinePullPlan(layout, config, &plan) ==
               CombineV2Status::OK,
           "CompileCombinePullPlan failed");
+    Check(plan.pull_next.size() == plan.pulls.size() &&
+              plan.accumulator_heads.size() == plan.accumulator_count &&
+              plan.accumulator_contributor_counts.size() ==
+                  plan.accumulator_count &&
+              plan.accumulator_result_index.size() ==
+                  plan.accumulator_count,
+          "immutable reduction index has wrong shape");
+    const uint32_t invalid = std::numeric_limits<uint32_t>::max();
+    uint64_t indexed_pulls = 0u;
+    for (uint32_t accumulator = 0u;
+         accumulator < plan.accumulator_count; ++accumulator) {
+        uint32_t current = plan.accumulator_heads[accumulator];
+        uint32_t previous = 0u;
+        uint32_t visited = 0u;
+        while (current != invalid) {
+            Check(current < plan.pulls.size() &&
+                      plan.pulls[current].accumulator_index == accumulator &&
+                      (visited == 0u || current > previous),
+                  "immutable reduction chain is not canonical");
+            previous = current;
+            current = plan.pull_next[current];
+            ++visited;
+        }
+        Check(visited ==
+                  plan.accumulator_contributor_counts[accumulator],
+              "immutable reduction count mismatch");
+        const uint32_t result =
+            plan.accumulator_result_index[accumulator];
+        Check(result < plan.results.size() &&
+                  plan.results[result].accumulator_index == accumulator &&
+                  plan.results[result].expected_contributors == visited,
+              "immutable result index mismatch");
+        indexed_pulls += visited;
+    }
+    Check(indexed_pulls == plan.pulls.size(),
+          "immutable reduction index does not cover pulls");
 
     std::vector<CombineRegionRegistration> registrations(workers);
     for (uint32_t source = 0u; source < workers; ++source) {
@@ -248,6 +285,23 @@ void RunCase(uint32_t workers, uint32_t hidden,
         ready.payload_bytes = static_cast<uint64_t>(ready.row_count) *
             hidden * sizeof(float);
         ready.publication = CombineReadyPublication(ready);
+        CombineReadyNoticeV2 notice{};
+        notice.session_id = config.session_id;
+        notice.placement_epoch = config.placement_epoch;
+        notice.generation = plan.generation;
+        notice.sequence = plan.sequence;
+        notice.wave = plan.wave;
+        notice.source_rank = source;
+        notice.ring_slot = plan.ring_slot;
+        notice.publication = CombineReadyNoticePublication(notice);
+        Check(notice.publication != 0u,
+              "READY notice publication is zero");
+        CombineReadyNoticeV2 changed_notice = notice;
+        ++changed_notice.sequence;
+        changed_notice.publication = 0u;
+        Check(CombineReadyNoticePublication(changed_notice) !=
+                  notice.publication,
+              "READY notice digest does not bind wave identity");
         Check(ValidateCombineReady(ready, registrations[source], config,
                                    plan) == CombineV2Status::OK,
               "READY validation failed");
@@ -371,10 +425,10 @@ int main()
     try {
         RunCase(2u, 7u, {0u, 0u}, "zero");
         RunCase(2u, 1u, {1u, 2u}, "small");
-        RunCase(2u, 1537u, {3u, 1u}, "tail");
+        RunCase(2u, 2049u, {3u, 1u}, "tail");
         RunCase(4u, 7u, {0u, 0u, 0u, 0u}, "zero");
         RunCase(4u, 3u, {1u, 2u, 3u, 1u}, "small-asymmetric");
-        RunCase(4u, 1537u, {3u, 1u, 4u, 2u}, "tail-asymmetric");
+        RunCase(4u, 2049u, {3u, 1u, 4u, 2u}, "tail-asymmetric");
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

@@ -57,6 +57,19 @@ target_compile_options(inc_dc_pull_combine_v2_contract_tests PRIVATE
 target_link_libraries(inc_dc_pull_combine_v2_contract_tests PRIVATE
     inc_dc_pull_combine_v2_protocol)
 
+add_executable(inc_dc_pull_combine_v2_npu_e2e
+    inc_dc_pull_combine_v2_npu_e2e.cpp)
+inc_host_target(inc_dc_pull_combine_v2_npu_e2e)
+target_include_directories(inc_dc_pull_combine_v2_npu_e2e PRIVATE
+    ${INC_DC_PULL_COMBINE_DIR})
+target_compile_options(inc_dc_pull_combine_v2_npu_e2e PRIVATE
+    -Wall -Wextra -Werror -Wno-missing-field-initializers)
+target_link_libraries(inc_dc_pull_combine_v2_npu_e2e PRIVATE
+    shmem inc_dc_pull_dispatch_v2_protocol
+    inc_dc_pull_combine_v2_protocol inc_dc_pull_combine_v2_device_kernel)
+add_dependencies(inc_dc_pull_combine_v2_npu_e2e
+    aclshmem_bootstrap_config_store)
+
 add_library(inc_dc_pull_dispatch_v2_get_kernel SHARED
     inc_dc_pull_dispatch_v2_get_kernel.cpp)
 inc_device_target(inc_dc_pull_dispatch_v2_get_kernel)

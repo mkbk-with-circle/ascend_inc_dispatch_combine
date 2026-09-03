@@ -84,7 +84,8 @@ bool HeaderCanonical(const JournalSlotHeader &header)
         header.struct_bytes == sizeof(JournalSlotHeader) &&
         header.generation != 0u && header.sequence != 0u &&
         header.dispatch_cookie != 0u && header.status == 0u &&
-        header.flags == 0u && ReservedZero(header.reserved, 1u);
+        (header.flags & ~kJournalFlagDenseAllDestinations) == 0u &&
+        ReservedZero(header.reserved, 1u);
 }
 
 } // namespace
@@ -113,6 +114,24 @@ uint64_t CombineReadyPublication(const CombineReadyV2 &ready)
     HashValue(&hash, ready.source_offset);
     HashValue(&hash, ready.payload_bytes);
     for (uint64_t value : ready.reserved) HashValue(&hash, value);
+    return hash == 0u ? 1u : hash;
+}
+
+uint64_t CombineReadyNoticePublication(const CombineReadyNoticeV2 &notice)
+{
+    uint64_t hash = kHashOffset;
+    HashValue(&hash, notice.magic);
+    HashValue(&hash, notice.abi_version);
+    HashValue(&hash, notice.struct_bytes);
+    HashValue(&hash, notice.session_id);
+    HashValue(&hash, notice.placement_epoch);
+    HashValue(&hash, notice.generation);
+    HashValue(&hash, notice.sequence);
+    HashValue(&hash, notice.wave);
+    HashValue(&hash, notice.source_rank);
+    HashValue(&hash, notice.ring_slot);
+    HashValue(&hash, notice.flags);
+    HashValue(&hash, notice.reserved0);
     return hash == 0u ? 1u : hash;
 }
 
@@ -314,6 +333,56 @@ CombineV2Status CompileCombinePullPlan(const CompiledLayout &dispatch,
     if (result != built.results.size())
         return Fail(CombineV2Status::INVALID_JOURNAL,
                     "result plan contains an out-of-range owner", error);
+
+    // Build the immutable source-major reduction chains once at Dispatch
+    // seal/plan compilation time. Reverse insertion yields strictly
+    // increasing pull indices, so reduction order is deterministic and does
+    // not depend on AIV scheduling or READY arrival order.
+    if (built.pulls.size() > std::numeric_limits<uint32_t>::max())
+        return Fail(CombineV2Status::CAPACITY_EXCEEDED,
+                    "pull index exceeds device index width", error);
+    constexpr uint32_t invalid = std::numeric_limits<uint32_t>::max();
+    built.pull_next.assign(built.pulls.size(), invalid);
+    built.accumulator_heads.assign(built.accumulator_count, invalid);
+    built.accumulator_contributor_counts.assign(
+        built.accumulator_count, 0u);
+    built.accumulator_result_index.assign(built.accumulator_count, invalid);
+    for (size_t raw = built.pulls.size(); raw != 0u; --raw) {
+        const uint32_t index = static_cast<uint32_t>(raw - 1u);
+        const CombinePullOp &op = built.pulls[index];
+        if (op.accumulator_index >= built.accumulator_count)
+            return Fail(CombineV2Status::INVALID_JOURNAL,
+                        "pull names an out-of-range accumulator", error);
+        for (uint32_t previous =
+                 built.accumulator_heads[op.accumulator_index];
+             previous != invalid; previous = built.pull_next[previous]) {
+            if (built.pulls[previous].source_rank == op.source_rank)
+                return Fail(CombineV2Status::DUPLICATE_SOURCE,
+                            "accumulator has duplicate source", error);
+        }
+        built.pull_next[index] =
+            built.accumulator_heads[op.accumulator_index];
+        built.accumulator_heads[op.accumulator_index] = index;
+        ++built.accumulator_contributor_counts[op.accumulator_index];
+    }
+    for (uint32_t index = 0u; index < built.results.size(); ++index) {
+        const CombineResultOp &op = built.results[index];
+        if (op.accumulator_index >= built.accumulator_count ||
+            built.accumulator_result_index[op.accumulator_index] != invalid ||
+            op.expected_contributors !=
+                built.accumulator_contributor_counts[
+                    op.accumulator_index]) {
+            return Fail(CombineV2Status::INVALID_JOURNAL,
+                        "result does not match its reduction index", error);
+        }
+        built.accumulator_result_index[op.accumulator_index] = index;
+    }
+    if (std::find(built.accumulator_result_index.begin(),
+                  built.accumulator_result_index.end(), invalid) !=
+        built.accumulator_result_index.end()) {
+        return Fail(CombineV2Status::INVALID_JOURNAL,
+                    "reduction index does not cover all accumulators", error);
+    }
 
     *plan = std::move(built);
     if (error != nullptr) error->clear();

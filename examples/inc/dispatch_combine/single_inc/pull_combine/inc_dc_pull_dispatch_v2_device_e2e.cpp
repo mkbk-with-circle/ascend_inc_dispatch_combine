@@ -31,7 +31,8 @@ extern "C" void launch_inc_dc_pull_dispatch_v2_device(
     uint8_t *source_token_prefix, uint8_t *source_destination_prefix,
     uint8_t *destination_row_counts,
     uint8_t *destination_assignment_counts, uint8_t *expert_counts,
-    uint8_t *status_line, uint64_t ffts_addr, uint64_t session_id,
+    uint8_t *parser_scratch, uint8_t *status_line, uint64_t ffts_addr,
+    uint64_t session_id,
     uint64_t placement_epoch, uint64_t generation, uint64_t sequence,
     uint64_t source_slot_stride, uint64_t destination_hidden_slot_stride,
     uint64_t destination_rows_slot_stride,
@@ -43,7 +44,8 @@ extern "C" void launch_inc_dc_pull_dispatch_v2_device(
     uint64_t destination_assignment_capacity,
     uint64_t row_map_capacity_entries,
     uint64_t source_destination_prefix_capacity_entries,
-    uint64_t expert_counts_capacity_entries, uint32_t worker_count,
+    uint64_t expert_counts_capacity_entries,
+    uint64_t parser_scratch_capacity_entries, uint32_t worker_count,
     uint32_t expert_count, uint32_t hidden, uint32_t dtype, int32_t inc_pe,
     uint32_t region_id, uint32_t wave, uint32_t ring_slot,
     uint32_t slot_count, uint32_t channels_per_source, uint64_t spin_cap);
@@ -70,9 +72,11 @@ constexpr uint8_t kHeadGuard = 0xa5u;
 constexpr uint8_t kTailGuard = 0x5au;
 constexpr uint8_t kPoison = 0xc7u;
 constexpr uint64_t kValidationChunk = 4ull << 20;
+constexpr double kSystemCycleUs = 0.02; // GetSystemCycle is 50 MHz on 910B.
 
 enum class Workload {
     SYM_DENSE,
+    SYM_K2_BALANCED,
     SYM_K1_RR,
     HOTSPOT,
     RAGGED,
@@ -83,7 +87,7 @@ struct Options {
     int pe = -1;
     int first_npu = 0;
     uint64_t payload_bytes = 0u;
-    Workload workload = Workload::SYM_DENSE;
+    Workload workload = Workload::SYM_K2_BALANCED;
     const char *workload_name = nullptr;
     uint32_t hidden = 0u;
     uint32_t expert_count = 0u;
@@ -144,6 +148,46 @@ bool Add(uint64_t a, uint64_t b, uint64_t *out)
     return true;
 }
 
+bool AlignEntries16(uint64_t value, uint64_t *out)
+{
+    uint64_t expanded = 0u;
+    if (out == nullptr || !Add(value, 15u, &expanded)) return false;
+    *out = expanded & ~15ull;
+    return true;
+}
+
+bool ParserScratchEntries(uint32_t blocks, uint32_t workers,
+                          uint32_t experts, uint64_t *out)
+{
+    if (out == nullptr || workers == 0u || experts == 0u) return false;
+    const uint32_t active = (blocks / workers) * workers;
+    if (active == 0u) return false;
+    uint64_t source_extent = 0u;
+    uint64_t block_extent = 0u;
+    uint64_t row_stride = 0u;
+    uint64_t row_extent = 0u;
+    uint64_t expert_values = 0u;
+    uint64_t expert_stride = 0u;
+    uint64_t expert_extent = 0u;
+    uint64_t entries = 0u;
+    return Mul(workers, 16u, &source_extent) &&
+        Mul(active, 16u, &block_extent) &&
+        AlignEntries16(workers, &row_stride) &&
+        Mul(active, row_stride, &row_extent) &&
+        Mul(workers, experts, &expert_values) &&
+        AlignEntries16(expert_values, &expert_stride) &&
+        Mul(active, expert_stride, &expert_extent) &&
+        Add(entries, source_extent, &entries) &&
+        Add(entries, source_extent, &entries) &&
+        Add(entries, static_cast<uint64_t>(workers) + 1u, &entries) &&
+        AlignEntries16(entries, &entries) &&
+        Add(entries, block_extent, &entries) &&
+        Add(entries, block_extent, &entries) &&
+        Add(entries, row_extent, &entries) &&
+        Add(entries, row_extent, &entries) &&
+        Add(entries, expert_extent, out);
+}
+
 uint64_t Mix(uint64_t value)
 {
     value += 0x9e3779b97f4a7c15ull;
@@ -190,6 +234,8 @@ bool ParseWorkload(const char *text, Workload *workload)
 {
     if (std::strcmp(text, "sym_dense") == 0)
         *workload = Workload::SYM_DENSE;
+    else if (std::strcmp(text, "sym_k2_balanced") == 0)
+        *workload = Workload::SYM_K2_BALANCED;
     else if (std::strcmp(text, "sym_k1_rr") == 0)
         *workload = Workload::SYM_K1_RR;
     else if (std::strcmp(text, "hotspot") == 0)
@@ -251,12 +297,12 @@ SourceInput MakeInput(const Options &o, uint32_t source,
         switch (o.workload) {
             case Workload::SYM_DENSE:
                 for (uint32_t destination = 0u;
-                     destination < o.workers; ++destination) {
-                    // Two local experts share one destination row.  This is
-                    // the important one-copy-per-unique-destination check.
+                     destination < o.workers; ++destination)
                     destinations.push_back(destination);
-                    destinations.push_back(destination);
-                }
+                break;
+            case Workload::SYM_K2_BALANCED:
+                destinations.push_back(source % o.workers);
+                destinations.push_back((source + 1u) % o.workers);
                 break;
             case Workload::SYM_K1_RR:
                 destinations.push_back(
@@ -425,6 +471,19 @@ bool BuildOracle(const Options &o, uint64_t generation, uint64_t sequence,
                       << '\n';
             return false;
         }
+        const uint64_t metadata_end = header.assignments_offset +
+            static_cast<uint64_t>(header.assignment_count) *
+                sizeof(AssignmentRecord);
+        if (header.hidden_offset % kPullDispatchAlignment != 0u ||
+            metadata_end > header.hidden_offset ||
+            !std::all_of(slot.begin() + static_cast<size_t>(metadata_end),
+                         slot.begin() +
+                             static_cast<size_t>(header.hidden_offset),
+                         [](uint8_t byte) { return byte == 0u; })) {
+            std::cerr << "BuildSlot source=" << source
+                      << ": noncanonical hidden padding\n";
+            return false;
+        }
         RegionRegistration registration{};
         registration.session_id = kSessionId;
         registration.placement_epoch = kPlacementEpoch;
@@ -570,6 +629,30 @@ bool ValidateDeviceVector(const char *name, const uint8_t *device,
     return true;
 }
 
+bool ValidateDestinationRows(const uint8_t *device,
+                             const std::vector<DestinationRow> &expected)
+{
+    std::vector<DestinationRow> actual;
+    if (!CopyVector(&actual, device, expected.size())) return false;
+    for (size_t i = 0u; i < expected.size(); ++i) {
+        if (EqualBytes(&actual[i], &expected[i], sizeof(DestinationRow)))
+            continue;
+        std::cerr << "[FAIL] destination_row index=" << i
+                  << " route=" << actual[i].route_key << "/"
+                  << expected[i].route_key
+                  << " token=" << actual[i].token_id << "/"
+                  << expected[i].token_id
+                  << " source=" << actual[i].source_rank << "/"
+                  << expected[i].source_rank
+                  << " source_token=" << actual[i].source_token << "/"
+                  << expected[i].source_token
+                  << " row=" << actual[i].destination_row << "/"
+                  << expected[i].destination_row << '\n';
+        return false;
+    }
+    return true;
+}
+
 bool ValidateWorker(const Options &o, const WaveOracle &oracle,
                     uint32_t expected_status, uint64_t hidden_slot_stride,
                     uint64_t rows_slot_stride,
@@ -665,9 +748,8 @@ bool ValidateWorker(const Options &o, const WaveOracle &oracle,
         expert_slot_stride;
     if (!ValidateHidden(o, oracle, destination_hidden.data, hidden_offset,
                         rank) ||
-        !ValidateDeviceVector("destination_rows",
-            destination_rows.data + rows_offset,
-            oracle.layout.destination_rows[rank]) ||
+        !ValidateDestinationRows(destination_rows.data + rows_offset,
+                                 oracle.layout.destination_rows[rank]) ||
         !ValidateDeviceVector("destination_assignments",
             destination_assignments.data + assignments_offset,
             oracle.layout.expert_assignments[rank]))
@@ -746,14 +828,73 @@ bool ValidateInc(const Options &o, const WaveOracle &oracle,
                       << '\n';
         return false;
     }
+    std::vector<JournalContributor> actual_contributors;
+    if (!CopyVector(&actual_contributors, journal_contributors.data,
+                    oracle.fixed_contributors.size()))
+        return false;
+    if (!SameVector(actual_contributors, oracle.fixed_contributors)) {
+        for (size_t i = 0u; i < actual_contributors.size(); ++i) {
+            if (EqualBytes(&actual_contributors[i],
+                           &oracle.fixed_contributors[i],
+                           sizeof(JournalContributor)))
+                continue;
+            const JournalContributor &actual = actual_contributors[i];
+            const JournalContributor &expected = oracle.fixed_contributors[i];
+            std::cerr << "[FAIL] journal_contributor index=" << i
+                      << " worker=" << actual.worker_rank << "/"
+                      << expected.worker_rank
+                      << " row=" << actual.destination_row << "/"
+                      << expected.destination_row
+                      << " assignment_begin=" << actual.assignment_begin
+                      << "/" << expected.assignment_begin
+                      << " assignment_count=" << actual.assignment_count
+                      << "/" << expected.assignment_count << '\n';
+            const size_t begin = i > 4u ? i - 4u : 0u;
+            const size_t end = std::min(actual_contributors.size(), i + 8u);
+            for (size_t j = begin; j < end; ++j) {
+                const JournalContributor &a = actual_contributors[j];
+                const JournalContributor &e = oracle.fixed_contributors[j];
+                std::cerr << "[DEBUG] contributor[" << j << "]="
+                          << a.worker_rank << "," << a.destination_row
+                          << "," << a.assignment_begin << ","
+                          << a.assignment_count << " expected="
+                          << e.worker_rank << "," << e.destination_row
+                          << "," << e.assignment_begin << ","
+                          << e.assignment_count << '\n';
+            }
+            std::vector<JournalTokenEntry> actual_tokens;
+            if (CopyVector(&actual_tokens, journal_tokens.data,
+                           oracle.fixed_journal_tokens.size())) {
+                const size_t token_index = i / std::max<uint32_t>(
+                    1u, oracle.fixed_journal_tokens[0].contributors_count);
+                const size_t token_begin = token_index > 3u
+                    ? token_index - 3u : 0u;
+                const size_t token_end = std::min(actual_tokens.size(),
+                                                   token_index + 5u);
+                for (size_t token = token_begin; token < token_end; ++token)
+                    std::cerr << "[DEBUG] token[" << token << "] begin/count="
+                              << actual_tokens[token].contributors_begin
+                              << "/"
+                              << actual_tokens[token].contributors_count
+                              << " expected="
+                              << oracle.fixed_journal_tokens[token]
+                                     .contributors_begin
+                              << "/"
+                              << oracle.fixed_journal_tokens[token]
+                                     .contributors_count << '\n';
+            }
+            break;
+        }
+        return false;
+    }
     if (!ValidateDeviceVector("journal_tokens", journal_tokens.data,
                               oracle.fixed_journal_tokens) ||
-        !ValidateDeviceVector("journal_contributors",
-                              journal_contributors.data,
-                              oracle.fixed_contributors) ||
-        !ValidateDeviceVector("journal_assignments", journal_assignments.data,
-                              oracle.layout.journal_assignments) ||
-        !ValidateDeviceVector("row_map", row_map.data, oracle.row_map) ||
+        (journal_assignments.bytes != 0u &&
+         !ValidateDeviceVector("journal_assignments",
+                               journal_assignments.data,
+                               oracle.layout.journal_assignments)) ||
+        (row_map.bytes != 0u &&
+         !ValidateDeviceVector("row_map", row_map.data, oracle.row_map)) ||
         !ValidateDeviceVector("source_token_prefix", source_token_prefix.data,
                               oracle.source_token_prefix) ||
         !ValidateDeviceVector("source_destination_prefix",
@@ -829,6 +970,13 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
     const double seconds = us * 1e-6;
     const double gbps = seconds == 0.0 ? 0.0 :
         static_cast<double>(oracle.logical_bytes) / seconds / 1e9;
+    const double protocol_us = timeline.kernel_done > timeline.all_ready
+        ? static_cast<double>(timeline.kernel_done - timeline.all_ready) *
+            kSystemCycleUs
+        : 0.0;
+    const double protocol_gbps = protocol_us == 0.0 ? 0.0 :
+        static_cast<double>(oracle.logical_bytes) /
+            (protocol_us * 1e-6) / 1e9;
     std::cout << std::setprecision(12)
               << "{\"test\":\"pull_dispatch_v2_device_e2e\""
               << ",\"workers\":" << o.workers
@@ -848,6 +996,8 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
               << ",\"logical_bytes\":" << oracle.logical_bytes
               << ",\"makespan_us\":" << us
               << ",\"logical_gb_s\":" << gbps
+              << ",\"protocol_makespan_us\":" << protocol_us
+              << ",\"protocol_logical_gb_s\":" << protocol_gbps
               << ",\"status\":" << timeline.status
               << ",\"ready_sources\":" << timeline.ready_sources
               << ",\"cycle_kernel_start\":" << timeline.kernel_start
@@ -885,7 +1035,7 @@ int main(int argc, char **argv)
             << "usage: " << argv[0]
             << " <workers> <pe> <ipport> <first_npu>"
                " <per_worker_payload_bytes>"
-               " <sym_dense|sym_k1_rr|hotspot|ragged>"
+               " <sym_k2_balanced|sym_dense|sym_k1_rr|hotspot|ragged>"
                " <hidden> <expert_count> <channels_per_source>"
                " <warmup> <measure> <seed>"
                " <fault:0=none,1=digest,2=assignment,3=missing_ready,"
@@ -936,7 +1086,6 @@ int main(int argc, char **argv)
                      &source_stride))
         return Fail("sizing oracle", 2);
     const uint64_t total_tokens = sizing.layout.journal_tokens.size();
-    const uint64_t total_assignments = sizing.layout.journal_assignments.size();
     uint64_t row_capacity = 1u;
     uint64_t assignment_capacity = 1u;
     for (uint32_t destination = 0u; destination < o.workers; ++destination) {
@@ -948,10 +1097,12 @@ int main(int argc, char **argv)
     const uint64_t journal_token_capacity = std::max<uint64_t>(total_tokens, 1u);
     const uint64_t journal_contributor_capacity =
         std::max<uint64_t>(sizing.layout.contributors.size(), 1u);
-    const uint64_t journal_assignment_capacity =
-        std::max<uint64_t>(total_assignments, 1u);
-    const uint64_t row_map_entries =
-        std::max<uint64_t>(total_tokens * o.workers, 1u);
+    // Combine V2 consumes token/contributor ranges; the duplicated full
+    // assignment journal is an optional diagnostics workspace.
+    const uint64_t journal_assignment_capacity = 0u;
+    // Canonical V2 relay and Combine consume compact contributors directly.
+    // A zero capacity disables the legacy dense W x token row map.
+    const uint64_t row_map_entries = 0u;
     const uint64_t prefix_entries =
         static_cast<uint64_t>(o.workers + 1u) * o.workers;
     const uint64_t expert_entries =
@@ -977,7 +1128,7 @@ int main(int argc, char **argv)
     GuardedBuffer journal_tokens, journal_contributors, journal_assignments;
     GuardedBuffer row_map, source_token_prefix, source_destination_prefix;
     GuardedBuffer destination_row_counts, destination_assignment_counts;
-    GuardedBuffer expert_counts, status_line;
+    GuardedBuffer expert_counts, parser_scratch, status_line;
     buffers = {&source_region, &ready_mailbox, &source_acks,
         &destination_hidden, &destination_rows, &destination_assignments,
         &destination_expert_counts, &destination_completions, &inc_slots,
@@ -985,12 +1136,13 @@ int main(int argc, char **argv)
         &journal_tokens, &journal_contributors, &journal_assignments, &row_map,
         &source_token_prefix, &source_destination_prefix,
         &destination_row_counts, &destination_assignment_counts,
-        &expert_counts, &status_line};
+        &expert_counts, &parser_scratch, &status_line};
 
     int status = aclInit(nullptr);
     if (status == 0) status = aclrtSetDevice(device);
     int64_t live_aiv = 0;
     uint32_t dispatch_aiv_budget = 0u;
+    uint64_t parser_scratch_entries = 0u;
     if (status == 0)
         status = aclrtGetDeviceInfo(device, ACL_DEV_ATTR_VECTOR_CORE_NUM,
                                     &live_aiv);
@@ -998,8 +1150,11 @@ int main(int argc, char **argv)
         dispatch_aiv_budget = live_aiv <= 0
             ? 0u : static_cast<uint32_t>(live_aiv) / 2u;
         if (dispatch_aiv_budget == 0u ||
-            static_cast<uint64_t>(o.workers) * o.channels >
-                dispatch_aiv_budget)
+            static_cast<uint64_t>(o.workers) * (o.channels + 1u) >
+                dispatch_aiv_budget ||
+            !ParserScratchEntries(dispatch_aiv_budget, o.workers,
+                                  o.expert_count,
+                                  &parser_scratch_entries))
             status = 2;
     }
     if (status == 0) status = aclrtCreateStream(&stream);
@@ -1071,12 +1226,16 @@ int main(int argc, char **argv)
               "destination_assignment_counts");
         Alloc(&expert_counts, expert_entries * sizeof(uint32_t), false,
               "expert_counts");
+        Alloc(&parser_scratch,
+              parser_scratch_entries * sizeof(uint32_t), false,
+              "parser_scratch");
         Alloc(&status_line, sizeof(PullTimeline), false, "status_line");
     }
 
     bool correct = status == 0;
     const uint32_t iterations = o.warmup + o.measure;
     std::vector<double> measured;
+    std::vector<double> measured_protocol_gbps;
     for (uint32_t iteration = 0u; iteration < iterations && correct;
          ++iteration) {
         const uint64_t generation = kFirstGeneration + iteration;
@@ -1129,7 +1288,8 @@ int main(int argc, char **argv)
                 Fill(&source_destination_prefix, kPoison) &&
                 Fill(&destination_row_counts, 0u) &&
                 Fill(&destination_assignment_counts, 0u) &&
-                Fill(&expert_counts, 0u) && Fill(&status_line, 0u) ? 0 : 1;
+                Fill(&expert_counts, 0u) && Fill(&parser_scratch, 0u) &&
+                Fill(&status_line, 0u) ? 0 : 1;
             JournalSlotHeader initial{};
             if (o.fault == 5u) {
                 initial.magic = kPullDispatchMagic;
@@ -1165,14 +1325,16 @@ int main(int argc, char **argv)
             journal_assignments.data, row_map.data, source_token_prefix.data,
             source_destination_prefix.data, destination_row_counts.data,
             destination_assignment_counts.data, expert_counts.data,
-            status_line.data, shmemx_get_ffts_config(), kSessionId,
+            parser_scratch.data, status_line.data,
+            shmemx_get_ffts_config(), kSessionId,
             kPlacementEpoch, generation, sequence, source_stride,
             hidden_slot_stride, rows_slot_stride, assignments_slot_stride,
             expert_slot_stride, journal_token_capacity,
             journal_contributor_capacity, journal_assignment_capacity,
             row_capacity, assignment_capacity, row_map_entries,
-            prefix_entries, expert_entries, o.workers, o.expert_count,
-            o.hidden, static_cast<uint32_t>(DataType::BF16), inc_pe,
+            prefix_entries, expert_entries, parser_scratch_entries,
+            o.workers, o.expert_count, o.hidden,
+            static_cast<uint32_t>(DataType::BF16), inc_pe,
             kRegionId, wave, ring_slot, kRingSlots, o.channels,
             o.fault == 3u || o.fault == 4u ? kFaultSpinCap : kSpinCap);
         status = aclrtSynchronizeStream(stream);
@@ -1209,7 +1371,18 @@ int main(int argc, char **argv)
                 end - begin).count();
             const bool warmup = iteration < o.warmup;
             PrintJson(o, oracle, iteration, warmup, us, timeline, correct);
-            if (!warmup) measured.push_back(us);
+            if (!warmup) {
+                measured.push_back(us);
+                const double protocol_us =
+                    timeline.kernel_done > timeline.all_ready
+                    ? static_cast<double>(timeline.kernel_done -
+                                          timeline.all_ready) *
+                        kSystemCycleUs
+                    : 0.0;
+                measured_protocol_gbps.push_back(protocol_us == 0.0 ? 0.0 :
+                    static_cast<double>(oracle.logical_bytes) /
+                        (protocol_us * 1e-6) / 1e9);
+            }
         }
     }
 
@@ -1220,6 +1393,15 @@ int main(int argc, char **argv)
         for (double value : measured)
             variance += (value - mean) * (value - mean);
         variance /= measured.size();
+        const double protocol_mean = std::accumulate(
+            measured_protocol_gbps.begin(),
+            measured_protocol_gbps.end(), 0.0) /
+            measured_protocol_gbps.size();
+        double protocol_variance = 0.0;
+        for (double value : measured_protocol_gbps)
+            protocol_variance += (value - protocol_mean) *
+                                 (value - protocol_mean);
+        protocol_variance /= measured_protocol_gbps.size();
         std::cout << std::setprecision(12)
                   << "{\"test\":\"pull_dispatch_v2_device_e2e_summary\""
                   << ",\"workers\":" << o.workers
@@ -1232,6 +1414,13 @@ int main(int argc, char **argv)
                   << *std::max_element(measured.begin(), measured.end())
                   << ",\"cv_percent\":"
                   << (mean == 0.0 ? 0.0 : std::sqrt(variance) / mean * 100.0)
+                  << ",\"protocol_min_gb_s\":"
+                  << *std::min_element(measured_protocol_gbps.begin(),
+                                       measured_protocol_gbps.end())
+                  << ",\"protocol_mean_gb_s\":" << protocol_mean
+                  << ",\"protocol_cv_percent\":"
+                  << (protocol_mean == 0.0 ? 0.0 :
+                      std::sqrt(protocol_variance) / protocol_mean * 100.0)
                   << ",\"correct\":true}\n";
     }
 

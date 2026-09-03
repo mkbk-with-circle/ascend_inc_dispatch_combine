@@ -24,10 +24,14 @@ using namespace inc::dc::pull_v2;
 
 namespace {
 
-constexpr uint32_t kTileElements = 1536u;
+constexpr uint32_t kTileElements = 2048u;
+constexpr uint32_t kTileElementShift = 11u;
 constexpr uint32_t kTileBytes = kTileElements * sizeof(float);
 constexpr uint32_t kInvalidIndex = ~0u;
 constexpr uint64_t kHashOffset = 1469598103934665603ull;
+constexpr uint64_t kSourceScratchStride = kPullCombineV2Alignment;
+constexpr uint64_t kSourceAcceptedCycleOffset = 8u;
+constexpr uint64_t kWaveAllTwoContributorsOffset = 16u;
 
 constexpr uint32_t kVecPingMte2V = 0u;
 constexpr uint32_t kVecPingVMte2 = 1u;
@@ -38,6 +42,8 @@ constexpr uint32_t kVecVMte3 = 5u;
 
 static_assert(kTileBytes * 3u <= INC_VEC_UB_BUDGET_BYTES,
               "Pull-Combine V2 ping/pong/accumulator exceeds AIV UB");
+static_assert(kTileElements == (1u << kTileElementShift),
+              "Pull-Combine V2 tile shift does not match tile elements");
 
 // Values intentionally match CombineV2Status so a device failure can be
 // passed through the thin host API without translation.
@@ -229,11 +235,88 @@ __aicore__ inline uint64_t ReadyPublication(
     return hash == 0u ? 1u : hash;
 }
 
+__aicore__ inline uint64_t ReadyNoticePublication(
+    __gm__ const CombineReadyNoticeV2 *notice)
+{
+    uint64_t hash = kHashOffset;
+    hash = HashU32(hash, notice->magic);
+    hash = HashU16(hash, notice->abi_version);
+    hash = HashU16(hash, notice->struct_bytes);
+    hash = HashU64(hash, notice->session_id);
+    hash = HashU64(hash, notice->placement_epoch);
+    hash = HashU64(hash, notice->generation);
+    hash = HashU64(hash, notice->sequence);
+    hash = HashU32(hash, notice->wave);
+    hash = HashU32(hash, notice->source_rank);
+    hash = HashU16(hash, notice->ring_slot);
+    hash = HashU16(hash, notice->flags);
+    hash = HashU32(hash, notice->reserved0);
+    return hash == 0u ? 1u : hash;
+}
+
+__aicore__ inline bool ReadyNoticeValid(
+    __gm__ const CombineReadyNoticeV2 *notice, uint32_t source,
+    uint32_t workers, uint32_t slots, uint64_t session_id,
+    uint64_t placement_epoch, uint64_t generation, uint64_t sequence,
+    uint32_t wave, uint16_t ring_slot)
+{
+    return source < workers && notice->magic == kPullCombineV2Magic &&
+        notice->abi_version == kPullCombineV2AbiVersion &&
+        notice->struct_bytes == sizeof(CombineReadyNoticeV2) &&
+        notice->session_id == session_id &&
+        notice->placement_epoch == placement_epoch &&
+        notice->generation == generation && notice->sequence == sequence &&
+        notice->wave == wave && notice->source_rank == source &&
+        notice->ring_slot == ring_slot && notice->ring_slot < slots &&
+        notice->flags == 0u && notice->reserved0 == 0u &&
+        notice->publication != 0u &&
+        notice->publication == ReadyNoticePublication(notice);
+}
+
 __aicore__ inline void FlushRange(__gm__ uint8_t *base, uint64_t bytes)
 {
     for (uint64_t offset = 0u; offset < bytes;
          offset += kPullCombineV2Alignment)
         dcci_cacheline(base + offset);
+}
+
+__aicore__ inline __gm__ uint32_t *SourceReadyAddress(
+    __gm__ uint8_t *source_ready, uint32_t source)
+{
+    return reinterpret_cast<__gm__ uint32_t *>(
+        source_ready + MulU64ByU32(kSourceScratchStride, source));
+}
+
+__aicore__ inline __gm__ uint64_t *SourceAcceptedCycleAddress(
+    __gm__ uint8_t *source_ready, uint32_t source)
+{
+    return reinterpret_cast<__gm__ uint64_t *>(
+        source_ready + MulU64ByU32(kSourceScratchStride, source) +
+        kSourceAcceptedCycleOffset);
+}
+
+__aicore__ inline __gm__ uint32_t *WaveAllTwoContributorsAddress(
+    __gm__ uint8_t *source_ready)
+{
+    return reinterpret_cast<__gm__ uint32_t *>(
+        source_ready + kWaveAllTwoContributorsOffset);
+}
+
+__aicore__ inline __gm__ uint64_t *SourcePayloadOffsetAddress(
+    __gm__ uint8_t *source_payload_offsets, uint32_t source)
+{
+    return reinterpret_cast<__gm__ uint64_t *>(
+        source_payload_offsets +
+        MulU64ByU32(kSourceScratchStride, source));
+}
+
+__aicore__ inline uint64_t LoadSourcePayloadOffset(
+    __gm__ uint8_t *source_payload_offsets, uint32_t source)
+{
+    __gm__ uint64_t *offset =
+        SourcePayloadOffsetAddress(source_payload_offsets, source);
+    dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(offset));
+    return *reinterpret_cast<__gm__ volatile uint64_t *>(offset);
 }
 
 __aicore__ inline void SetFailure(__gm__ uint32_t *status,
@@ -325,26 +408,56 @@ __aicore__ inline uint32_t ValidateReady(
     return kStatusOk;
 }
 
-__aicore__ inline void PublishReadyToInc(
-    __gm__ CombineReadyV2 *local, __gm__ CombineReadyV2 *remote,
+// Publish a 128-byte control record whose commit word lives in its second
+// cacheline.  A scalar remote store is not a reliable cacheline publication
+// primitive on the target platform: a polling peer can continue observing an
+// old mapped line long after the scalar operation completed.  Use full-line
+// RMA plus quiet boundaries instead.
+//
+// The first transfer revokes any previous generation before line zero is
+// replaced.  This prevents a consumer from combining a new identity line
+// with an old, non-zero commit word.  The final transfer carries the complete
+// second line and the non-zero commit word together.
+__aicore__ inline void PublishControlRecord128(
+    __gm__ uint8_t *local, __gm__ uint8_t *remote,
+    uint32_t publication_offset, uint64_t publication, int32_t remote_pe)
+{
+    __gm__ uint64_t *local_publication =
+        reinterpret_cast<__gm__ uint64_t *>(local + publication_offset);
+    constexpr uint32_t kSecondLineOffset = kPullCombineV2Alignment;
+
+    *local_publication = 0u;
+    AscendC::PipeBarrier<PIPE_ALL>();
+    dcci_cacheline(local + kSecondLineOffset);
+    aclshmem_putmem(remote + kSecondLineOffset,
+                    local + kSecondLineOffset,
+                    kPullCombineV2Alignment, remote_pe);
+    aclshmem_quiet();
+
+    *local_publication = publication;
+    AscendC::PipeBarrier<PIPE_ALL>();
+    dcci_cacheline(local);
+    dcci_cacheline(local + kSecondLineOffset);
+    aclshmem_putmem(remote, local, kPullCombineV2Alignment, remote_pe);
+    aclshmem_quiet();
+    aclshmem_putmem(remote + kSecondLineOffset,
+                    local + kSecondLineOffset,
+                    kPullCombineV2Alignment, remote_pe);
+    aclshmem_quiet();
+}
+
+__aicore__ inline void PublishReadyNoticeToInc(
+    __gm__ CombineReadyNoticeV2 *local,
+    __gm__ CombineReadyNoticeV2 *remote,
     int32_t inc_pe)
 {
-    const uint64_t publication = local->publication;
-    // CombineReadyV2 predates the final-publication layout rule and has
-    // reserved words after publication.  Transfer both immutable ranges,
-    // then publish the one logical signal as the last remote store.
-    aclshmem_uint64_p(&remote->publication, 0u, inc_pe);
-    aclshmem_quiet();
-    aclshmem_putmem(remote, local,
-                    __builtin_offsetof(CombineReadyV2, publication), inc_pe);
-    aclshmem_putmem(
-        reinterpret_cast<__gm__ uint8_t *>(remote) +
-            __builtin_offsetof(CombineReadyV2, reserved),
-        reinterpret_cast<__gm__ uint8_t *>(local) +
-            __builtin_offsetof(CombineReadyV2, reserved),
-        sizeof(local->reserved), inc_pe);
-    aclshmem_quiet();
-    aclshmem_uint64_p(&remote->publication, publication, inc_pe);
+    // A notice is exactly one cacheline and is the worker's sole remote
+    // control transfer for this wave.  READY and payload remain local until
+    // the INC observes this notice and actively pulls them.
+    __gm__ uint8_t *local_line =
+        reinterpret_cast<__gm__ uint8_t *>(local);
+    dcci_cacheline(local_line);
+    aclshmem_putmem(remote, local, sizeof(*local), inc_pe);
     aclshmem_quiet();
 }
 
@@ -378,15 +491,11 @@ __aicore__ inline void PublishSourceAck(
         kHashOffset, reinterpret_cast<__gm__ uint8_t *>(ack),
         __builtin_offsetof(CombineSourceAckV2, publication));
     if (publication == 0u) publication = 1u;
-    aclshmem_uint64_p(&ack->publication, 0u, static_cast<int32_t>(source));
-    aclshmem_quiet();
-    aclshmem_putmem(ack, ack,
-                    __builtin_offsetof(CombineSourceAckV2, publication),
-                    static_cast<int32_t>(source));
-    aclshmem_quiet();
-    aclshmem_uint64_p(&ack->publication, publication,
-                      static_cast<int32_t>(source));
-    aclshmem_quiet();
+    PublishControlRecord128(
+        reinterpret_cast<__gm__ uint8_t *>(ack),
+        reinterpret_cast<__gm__ uint8_t *>(ack),
+        __builtin_offsetof(CombineSourceAckV2, publication), publication,
+        static_cast<int32_t>(source));
 }
 
 __aicore__ inline void PublishOwnerCompletion(
@@ -420,17 +529,11 @@ __aicore__ inline void PublishOwnerCompletion(
         kHashOffset, reinterpret_cast<__gm__ uint8_t *>(completion),
         __builtin_offsetof(CombineOwnerCompletionV2, publication));
     if (publication == 0u) publication = 1u;
-    aclshmem_uint64_p(&completion->publication, 0u,
-                      static_cast<int32_t>(owner));
-    aclshmem_quiet();
-    aclshmem_putmem(
-        completion, completion,
+    PublishControlRecord128(
+        reinterpret_cast<__gm__ uint8_t *>(completion),
+        reinterpret_cast<__gm__ uint8_t *>(completion),
         __builtin_offsetof(CombineOwnerCompletionV2, publication),
-        static_cast<int32_t>(owner));
-    aclshmem_quiet();
-    aclshmem_uint64_p(&completion->publication, publication,
-                      static_cast<int32_t>(owner));
-    aclshmem_quiet();
+        publication, static_cast<int32_t>(owner));
 }
 
 __aicore__ inline void PullFp32ToUb(
@@ -457,13 +560,13 @@ __aicore__ inline void PutFp32ToOwner(
     AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
 }
 
-__aicore__ inline bool SourceReady(__gm__ uint32_t *source_ready,
+__aicore__ inline bool SourceReady(__gm__ uint8_t *source_ready,
                                     uint32_t source)
 {
-    __gm__ uint8_t *address = reinterpret_cast<__gm__ uint8_t *>(
-        source_ready + source);
+    __gm__ uint32_t *state = SourceReadyAddress(source_ready, source);
+    __gm__ uint8_t *address = reinterpret_cast<__gm__ uint8_t *>(state);
     dcci_cacheline(address);
-    return source_ready[source] == 1u;
+    return *reinterpret_cast<__gm__ volatile uint32_t *>(state) == 1u;
 }
 
 __aicore__ inline bool SeenSource(uint64_t low, uint64_t high,
@@ -485,10 +588,11 @@ __aicore__ inline void MarkSource(uint64_t *low, uint64_t *high,
 
 __aicore__ inline uint32_t FindReadyContributor(
     __gm__ const CombinePullOp *pulls, __gm__ const uint32_t *pull_next,
-    __gm__ uint32_t *source_ready, uint32_t head, uint64_t seen_low,
+    __gm__ uint8_t *source_ready, uint32_t head, uint64_t seen_low,
     uint64_t seen_high, uint64_t spin_cap, __gm__ uint32_t *status)
 {
-    for (uint64_t spin = 0u; spin < spin_cap; ++spin) {
+    const uint64_t wait_begin = AscendC::GetSystemCycle();
+    while (AscendC::GetSystemCycle() - wait_begin < spin_cap) {
         for (uint32_t index = head; index != kInvalidIndex;
              index = pull_next[index]) {
             const uint32_t source = pulls[index].source_rank;
@@ -503,6 +607,20 @@ __aicore__ inline uint32_t FindReadyContributor(
     return kInvalidIndex;
 }
 
+__aicore__ inline bool WaitSourceReady(
+    __gm__ uint8_t *source_ready, uint32_t source, uint64_t spin_cap,
+    __gm__ uint32_t *status)
+{
+    const uint64_t wait_begin = AscendC::GetSystemCycle();
+    while (AscendC::GetSystemCycle() - wait_begin < spin_cap) {
+        if (SourceReady(source_ready, source)) return true;
+        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(status));
+        if (*status != kStatusOk) return false;
+    }
+    SetFailure(status, kStatusNotReady);
+    return false;
+}
+
 __aicore__ inline bool ReduceAccumulatorTile(
     __gm__ uint8_t *symmetric_partials,
     __gm__ uint8_t *owner_output_base,
@@ -511,8 +629,8 @@ __aicore__ inline bool ReduceAccumulatorTile(
     __gm__ const uint32_t *accumulator_counts,
     __gm__ const uint32_t *accumulator_result_index,
     __gm__ const CombineResultOp *results,
-    __gm__ uint32_t *source_ready,
-    __gm__ const uint64_t *source_payload_offsets,
+    __gm__ uint8_t *source_ready,
+    __gm__ uint8_t *source_payload_offsets,
     uint32_t accumulator, uint64_t element_begin, uint32_t elements,
     uint64_t row_bytes, uint64_t output_slot_offset,
     uint64_t spin_cap, __gm__ uint32_t *status)
@@ -553,7 +671,9 @@ __aicore__ inline bool ReduceAccumulatorTile(
             return false;
         }
         __gm__ float *remote = reinterpret_cast<__gm__ float *>(
-            symmetric_partials + source_payload_offsets[op_source_rank] +
+            symmetric_partials +
+            LoadSourcePayloadOffset(source_payload_offsets,
+                                    op_source_rank) +
             op_row_offset);
         PullFp32ToUb(ping_ub, remote + element_begin, elements,
                       static_cast<int32_t>(op_source_rank), ping);
@@ -591,7 +711,8 @@ __aicore__ inline bool ReduceAccumulatorTile(
                 }
                 __gm__ float *remote = reinterpret_cast<__gm__ float *>(
                     symmetric_partials +
-                    source_payload_offsets[next_source_rank] +
+                    LoadSourcePayloadOffset(source_payload_offsets,
+                                            next_source_rank) +
                     next_row_offset);
                 PullFp32ToUb(next_ping == 0u ? ping_ub : pong_ub,
                               remote + element_begin, elements,
@@ -632,11 +753,154 @@ __aicore__ inline bool ReduceAccumulatorTile(
     return true;
 }
 
+// Uniform top-k=2 fast path. Each AIV owns one contiguous task range. The
+// previous result PUT stays in flight while the next task issues its two
+// source GETs; only the Add waits for the output UB slot to become reusable.
+// The accumulator starts directly from input0+input1, eliminating zero-fill
+// and two serial accumulator Adds from the generic path.
+__aicore__ inline bool ReduceTwoContributorTaskRange(
+    __gm__ uint8_t *symmetric_partials,
+    __gm__ uint8_t *owner_output_base,
+    __gm__ const CombinePullOp *pulls, __gm__ const uint32_t *pull_next,
+    __gm__ const uint32_t *accumulator_heads,
+    __gm__ const uint32_t *accumulator_result_index,
+    __gm__ const CombineResultOp *results, __gm__ uint8_t *source_ready,
+    __gm__ uint8_t *source_payload_offsets, uint64_t task_begin,
+    uint64_t task_end, uint64_t tiles_per_row, uint32_t hidden,
+    uint64_t row_bytes, uint64_t output_slot_offset, uint64_t spin_cap,
+    __gm__ uint32_t *status)
+{
+    __ubuf__ uint8_t *input0_ub = reinterpret_cast<__ubuf__ uint8_t *>(0);
+    __ubuf__ uint8_t *input1_ub = input0_ub + kTileBytes;
+    __ubuf__ uint8_t *output_ub = input1_ub + kTileBytes;
+    AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
+    AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
+    AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+
+    bool input0_inflight = false;
+    bool input1_inflight = false;
+    bool ok = true;
+    for (uint64_t task = task_begin; task < task_end; ++task) {
+        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(status));
+        if (*status != kStatusOk) {
+            ok = false;
+            break;
+        }
+        const uint32_t accumulator = static_cast<uint32_t>(
+            task / tiles_per_row);
+        const uint64_t tile = task % tiles_per_row;
+        const uint64_t element_begin = tile << kTileElementShift;
+        const uint32_t elements = static_cast<uint32_t>(
+            hidden - element_begin < kTileElements
+                ? hidden - element_begin
+                : kTileElements);
+
+        const uint32_t head = accumulator_heads[accumulator];
+        const uint32_t first = head;
+        const uint32_t second = pull_next[first];
+        const uint32_t first_source = pulls[first].source_rank;
+        if (!WaitSourceReady(source_ready, first_source, spin_cap, status)) {
+            ok = false;
+            break;
+        }
+        const uint32_t first_row = pulls[first].source_row;
+        uint64_t first_row_offset = 0u;
+        if (!CheckedMulU64ByU32(row_bytes, first_row,
+                                &first_row_offset)) {
+            SetFailure(status, kStatusSizeOverflow);
+            ok = false;
+            break;
+        }
+        __gm__ float *first_remote = reinterpret_cast<__gm__ float *>(
+            symmetric_partials +
+            LoadSourcePayloadOffset(source_payload_offsets, first_source) +
+            first_row_offset);
+        PullFp32ToUb(input0_ub, first_remote + element_begin, elements,
+                      static_cast<int32_t>(first_source), 0u);
+        input0_inflight = true;
+
+        const uint32_t second_source = pulls[second].source_rank;
+        if (!WaitSourceReady(source_ready, second_source, spin_cap,
+                             status)) {
+            ok = false;
+            break;
+        }
+        const uint32_t second_row = pulls[second].source_row;
+        uint64_t second_row_offset = 0u;
+        if (!CheckedMulU64ByU32(row_bytes, second_row,
+                                &second_row_offset)) {
+            SetFailure(status, kStatusSizeOverflow);
+            ok = false;
+            break;
+        }
+        __gm__ float *second_remote = reinterpret_cast<__gm__ float *>(
+            symmetric_partials +
+            LoadSourcePayloadOffset(source_payload_offsets, second_source) +
+            second_row_offset);
+        PullFp32ToUb(input1_ub, second_remote + element_begin, elements,
+                      static_cast<int32_t>(second_source), 1u);
+        input1_inflight = true;
+
+        AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(kVecPingMte2V);
+        input0_inflight = false;
+        AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(kVecPongMte2V);
+        input1_inflight = false;
+        // This wait is deliberately after both GETs: it is the credit for the
+        // single output UB slot used by the previous task's remote PUT.
+        AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+
+        AscendC::LocalTensor<float> input0 =
+            IncVecBindFloatUb(input0_ub, elements * sizeof(float));
+        AscendC::LocalTensor<float> input1 =
+            IncVecBindFloatUb(input1_ub, elements * sizeof(float));
+        AscendC::LocalTensor<float> output =
+            IncVecBindFloatUb(output_ub, elements * sizeof(float));
+        AscendC::Add(output, input0, input1, elements);
+        AscendC::PipeBarrier<PIPE_V>();
+        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
+        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
+
+        const uint32_t result_index =
+            accumulator_result_index[accumulator];
+        const uint32_t owner = results[result_index].owner_rank;
+        const uint32_t owner_row = results[result_index].owner_row;
+        uint64_t result_row_offset = 0u;
+        if (!CheckedMulU64ByU32(row_bytes, owner_row,
+                                &result_row_offset)) {
+            SetFailure(status, kStatusSizeOverflow);
+            // Restore the output-credit event consumed above.
+            AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+            ok = false;
+            break;
+        }
+        __gm__ float *owner_output = reinterpret_cast<__gm__ float *>(
+            owner_output_base + output_slot_offset + result_row_offset);
+        AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(kVecVMte3);
+        PutFp32ToOwner(output_ub, owner_output + element_begin, elements,
+                       static_cast<int32_t>(owner));
+    }
+
+    if (input0_inflight) {
+        AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(kVecPingMte2V);
+        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
+    }
+    if (input1_inflight) {
+        AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(kVecPongMte2V);
+        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
+    }
+    AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+    AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
+    AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
+    aclshmemx_mte_quiet();
+    return ok && *status == kStatusOk;
+}
+
 } // namespace
 
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__
 void inc_dc_pull_combine_v2_device_kernel(
-    GM_ADDR symmetric_partials, GM_ADDR ready_mailbox, GM_ADDR registrations,
+    GM_ADDR symmetric_partials, GM_ADDR ready_records,
+    GM_ADDR ready_notices, GM_ADDR ready_staging, GM_ADDR registrations,
     GM_ADDR source_acks, GM_ADDR owner_output, GM_ADDR owner_completions,
     GM_ADDR source_offsets, GM_ADDR pulls, GM_ADDR owner_offsets,
     GM_ADDR results, GM_ADDR journal_header, GM_ADDR pull_next,
@@ -646,8 +910,8 @@ void inc_dc_pull_combine_v2_device_kernel(
     uint64_t session_id, uint64_t placement_epoch, uint64_t generation,
     uint64_t sequence, uint64_t dispatch_cookie,
     uint64_t owner_output_slot_stride, uint64_t pull_count,
-    uint64_t result_count, uint64_t pull_next_capacity,
-    uint64_t accumulator_scratch_capacity,
+    uint64_t result_count, uint64_t pull_index_capacity,
+    uint64_t accumulator_index_capacity,
     uint64_t source_scratch_capacity, uint32_t accumulator_count,
     uint32_t worker_count, uint32_t hidden, uint32_t partial_dtype,
     int32_t inc_pe, uint32_t wave, uint32_t ring_slot,
@@ -680,24 +944,32 @@ void inc_dc_pull_combine_v2_device_kernel(
         ring_slot < slot_count && slot_count != 0u && spin_cap != 0u &&
         pull_count <= 0xffffffffull && result_count <= 0xffffffffull &&
         result_count == accumulator_count &&
-        pull_count <= pull_next_capacity &&
-        accumulator_count <= accumulator_scratch_capacity &&
+        pull_count <= pull_index_capacity &&
+        accumulator_count <= accumulator_index_capacity &&
         worker_count <= source_scratch_capacity &&
         CheckedMulU64ByU32(sizeof(float), hidden, &row_bytes) &&
         CheckedMulU64ByU32(owner_output_slot_stride, ring_slot,
                            &output_slot_offset) &&
         CheckedMulU64ByU32(tiles_per_row, accumulator_count, &total_tasks);
 
-    // Each worker publishes exactly one READY and does no payload movement.
+    // Each worker publishes one cacheline notice. READY and payload stay in
+    // its registered local region and are pulled by the INC.
     if (pe != inc_pe) {
         if (launch_valid && block == 0u && pe >= 0 &&
             static_cast<uint32_t>(pe) < worker_count) {
-            __gm__ CombineReadyV2 *local =
-                reinterpret_cast<__gm__ CombineReadyV2 *>(ready_mailbox) +
+            __gm__ CombineReadyV2 *local_ready =
+                reinterpret_cast<__gm__ CombineReadyV2 *>(ready_records) +
                 static_cast<uint64_t>(ring_slot * worker_count) + pe;
-            dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(local));
-            dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(local) + 64u);
-            PublishReadyToInc(local, local, inc_pe);
+            dcci_cacheline(
+                reinterpret_cast<__gm__ uint8_t *>(local_ready));
+            dcci_cacheline(
+                reinterpret_cast<__gm__ uint8_t *>(local_ready) + 64u);
+            AscendC::PipeBarrier<PIPE_ALL>();
+            __gm__ CombineReadyNoticeV2 *local =
+                reinterpret_cast<__gm__ CombineReadyNoticeV2 *>(
+                    ready_notices) +
+                static_cast<uint64_t>(ring_slot * worker_count) + pe;
+            PublishReadyNoticeToInc(local, local, inc_pe);
         }
         return;
     }
@@ -735,7 +1007,8 @@ void inc_dc_pull_combine_v2_device_kernel(
                     JournalSlotState::DISPATCH_SEALED) &&
                 header->token_count == accumulator_count &&
                 header->contributor_count == pull_count &&
-                header->status == 0u && header->flags == 0u &&
+                header->status == 0u &&
+                (header->flags & ~kJournalFlagDenseAllDestinations) == 0u &&
                 header->reserved[0] == 0u;
             if (!journal_identity)
                 *status = kStatusInvalidJournal;
@@ -748,24 +1021,10 @@ void inc_dc_pull_combine_v2_device_kernel(
 
         __gm__ uint64_t *by_source =
             reinterpret_cast<__gm__ uint64_t *>(source_offsets);
-        __gm__ CombinePullOp *pull_plan =
-            reinterpret_cast<__gm__ CombinePullOp *>(pulls);
         __gm__ uint64_t *by_owner =
             reinterpret_cast<__gm__ uint64_t *>(owner_offsets);
-        __gm__ CombineResultOp *result_plan =
-            reinterpret_cast<__gm__ CombineResultOp *>(results);
-        __gm__ uint32_t *next = reinterpret_cast<__gm__ uint32_t *>(
-            pull_next);
-        __gm__ uint32_t *heads = reinterpret_cast<__gm__ uint32_t *>(
-            accumulator_heads);
         __gm__ uint32_t *counts = reinterpret_cast<__gm__ uint32_t *>(
             accumulator_contributor_counts);
-        __gm__ uint32_t *result_index =
-            reinterpret_cast<__gm__ uint32_t *>(
-                accumulator_result_index);
-        __gm__ uint32_t *ready_state =
-            reinterpret_cast<__gm__ uint32_t *>(source_ready_state);
-
         if (*status == kStatusOk) {
             for (uint32_t source = 0u; source < worker_count; ++source) {
                 __gm__ CombineRegionRegistration *registration =
@@ -777,18 +1036,14 @@ void inc_dc_pull_combine_v2_device_kernel(
                     *status = kStatusInvalidRegistration;
                     break;
                 }
-                ready_state[source] = 0u;
-                reinterpret_cast<__gm__ uint64_t *>(
-                    source_payload_offsets)[source] = 0u;
+                *SourceReadyAddress(source_ready_state, source) = 0u;
+                *SourceAcceptedCycleAddress(source_ready_state, source) =
+                    0u;
+                *SourcePayloadOffsetAddress(source_payload_offsets, source) =
+                    0u;
             }
         }
-        for (uint32_t accumulator = 0u;
-             accumulator < accumulator_count; ++accumulator) {
-            heads[accumulator] = kInvalidIndex;
-            counts[accumulator] = 0u;
-            result_index[accumulator] = kInvalidIndex;
-        }
-
+        *WaveAllTwoContributorsAddress(source_ready_state) = 0u;
         if (*status == kStatusOk &&
             (by_source[0] != 0u ||
              by_source[worker_count] != pull_count ||
@@ -796,82 +1051,26 @@ void inc_dc_pull_combine_v2_device_kernel(
              by_owner[worker_count] != result_count))
             *status = kStatusInvalidJournal;
 
-        // Reverse iteration plus head insertion preserves source-major order.
-        for (uint64_t raw = pull_count;
-             raw != 0u && *status == kStatusOk; --raw) {
-            const uint32_t index = static_cast<uint32_t>(raw - 1u);
-            const uint32_t op_source_rank =
-                pull_plan[index].source_rank;
-            const uint32_t op_source_row = pull_plan[index].source_row;
-            const uint32_t op_journal_token =
-                pull_plan[index].journal_token;
-            const uint32_t op_accumulator_index =
-                pull_plan[index].accumulator_index;
-            if (op_source_rank >= worker_count ||
-                op_accumulator_index >= accumulator_count ||
-                op_journal_token >= accumulator_count ||
-                index < by_source[op_source_rank] ||
-                index >= by_source[op_source_rank + 1u] ||
-                op_source_row != index - by_source[op_source_rank]) {
-                *status = kStatusInvalidJournal;
-                break;
-            }
-            // Dispatch emits at most one contributor per unique B.
-            for (uint32_t previous = heads[op_accumulator_index];
-                 previous != kInvalidIndex; previous = next[previous]) {
-                if (pull_plan[previous].source_rank == op_source_rank) {
-                    *status = kStatusDuplicateSource;
-                    break;
-                }
-            }
-            if (*status != kStatusOk) break;
-            next[index] = heads[op_accumulator_index];
-            heads[op_accumulator_index] = index;
-            ++counts[op_accumulator_index];
-        }
-
-        uint32_t expected_owner_row = 0u;
-        uint32_t current_owner = 0u;
-        for (uint32_t index = 0u;
-             index < result_count && *status == kStatusOk; ++index) {
-            const uint32_t result_owner_rank =
-                result_plan[index].owner_rank;
-            const uint32_t result_owner_row = result_plan[index].owner_row;
-            const uint32_t result_journal_token =
-                result_plan[index].journal_token;
-            const uint32_t result_accumulator_index =
-                result_plan[index].accumulator_index;
-            const uint32_t result_expected_contributors =
-                result_plan[index].expected_contributors;
-            while (current_owner < worker_count &&
-                   index == by_owner[current_owner + 1u]) {
-                ++current_owner;
-                expected_owner_row = 0u;
-            }
-            if (current_owner >= worker_count ||
-                index < by_owner[current_owner] ||
-                index >= by_owner[current_owner + 1u] ||
-                result_owner_rank != current_owner ||
-                result_owner_row != expected_owner_row++ ||
-                result_journal_token >= accumulator_count ||
-                result_accumulator_index >= accumulator_count ||
-                result_expected_contributors !=
-                    counts[result_accumulator_index] ||
-                result_plan[index].reserved[0] != 0u ||
-                result_plan[index].reserved[1] != 0u ||
-                result_plan[index].reserved[2] != 0u ||
-                result_index[result_accumulator_index] != kInvalidIndex) {
-                *status = kStatusInvalidJournal;
-                break;
-            }
-            result_index[result_accumulator_index] = index;
-        }
+        // Prove that the immutable per-accumulator chains cover every pull.
+        // The detailed structural validation is distributed across all AIVs
+        // after the first synchronization below.
+        uint64_t indexed_pulls = 0u;
+        bool all_two_contributors = accumulator_count != 0u;
         for (uint32_t accumulator = 0u;
              accumulator < accumulator_count && *status == kStatusOk;
              ++accumulator) {
-            if (result_index[accumulator] == kInvalidIndex)
+            if (counts[accumulator] != 2u)
+                all_two_contributors = false;
+            if (counts[accumulator] > worker_count ||
+                !AddU64(indexed_pulls, counts[accumulator],
+                        &indexed_pulls) || indexed_pulls > pull_count)
                 *status = kStatusInvalidJournal;
         }
+        if (*status == kStatusOk && indexed_pulls != pull_count)
+            *status = kStatusInvalidJournal;
+        *WaveAllTwoContributorsAddress(source_ready_state) =
+            all_two_contributors ? 1u : 0u;
+
         uint64_t maximum_owner_bytes = 0u;
         for (uint32_t owner = 0u;
              owner < worker_count && *status == kStatusOk; ++owner) {
@@ -898,21 +1097,113 @@ void inc_dc_pull_combine_v2_device_kernel(
             *status = kStatusCapacityExceeded;
 
         AscendC::PipeBarrier<PIPE_ALL>();
-        FlushRange(pull_next, pull_count << 2u);
-        FlushRange(accumulator_heads,
-                   static_cast<uint64_t>(accumulator_count) << 2u);
-        FlushRange(accumulator_contributor_counts,
-                   static_cast<uint64_t>(accumulator_count) << 2u);
-        FlushRange(accumulator_result_index,
-                   static_cast<uint64_t>(accumulator_count) << 2u);
         FlushRange(source_ready_state,
-                   static_cast<uint64_t>(worker_count) << 2u);
+                   MulU64ByU32(kSourceScratchStride, worker_count));
         FlushRange(source_payload_offsets,
-                   static_cast<uint64_t>(worker_count) << 3u);
-        timeline->plan_index_done = AscendC::GetSystemCycle();
+                   MulU64ByU32(kSourceScratchStride, worker_count));
         dcci_cacheline(status_line);
     }
 
+    AscendC::SyncAll<true>();
+    dcci_cacheline(status_line);
+    if (*status != kStatusOk) goto finalize;
+
+    // Strong, read-only validation of the sealed deterministic index. Pull
+    // records and accumulator chains are partitioned across ordinary AIVs;
+    // no atomics or scheduling-dependent link construction is required.
+    {
+        __gm__ const uint64_t *by_source =
+            reinterpret_cast<__gm__ const uint64_t *>(source_offsets);
+        __gm__ const uint64_t *by_owner =
+            reinterpret_cast<__gm__ const uint64_t *>(owner_offsets);
+        __gm__ const CombinePullOp *pull_plan =
+            reinterpret_cast<__gm__ const CombinePullOp *>(pulls);
+        __gm__ const CombineResultOp *result_plan =
+            reinterpret_cast<__gm__ const CombineResultOp *>(results);
+        __gm__ const uint32_t *next =
+            reinterpret_cast<__gm__ const uint32_t *>(pull_next);
+        __gm__ const uint32_t *heads =
+            reinterpret_cast<__gm__ const uint32_t *>(accumulator_heads);
+        __gm__ const uint32_t *counts =
+            reinterpret_cast<__gm__ const uint32_t *>(
+                accumulator_contributor_counts);
+        __gm__ const uint32_t *result_index =
+            reinterpret_cast<__gm__ const uint32_t *>(
+                accumulator_result_index);
+
+        for (uint64_t raw = block; raw < pull_count; raw += blocks) {
+            const uint32_t index = static_cast<uint32_t>(raw);
+            const uint32_t source = pull_plan[index].source_rank;
+            const uint32_t accumulator =
+                pull_plan[index].accumulator_index;
+            const uint32_t successor = next[index];
+            if (source >= worker_count ||
+                accumulator >= accumulator_count ||
+                pull_plan[index].journal_token >= accumulator_count ||
+                index < by_source[source] ||
+                index >= by_source[source + 1u] ||
+                pull_plan[index].source_row !=
+                    index - by_source[source] ||
+                (successor != kInvalidIndex &&
+                 (successor <= index || successor >= pull_count ||
+                  pull_plan[successor].accumulator_index != accumulator))) {
+                SetFailure(status, kStatusInvalidJournal);
+                break;
+            }
+        }
+
+        for (uint32_t accumulator = block;
+             accumulator < accumulator_count; accumulator += blocks) {
+            const uint32_t expected = counts[accumulator];
+            const uint32_t result = result_index[accumulator];
+            if (result >= result_count ||
+                result_plan[result].accumulator_index != accumulator ||
+                result_plan[result].journal_token >= accumulator_count ||
+                result_plan[result].expected_contributors != expected ||
+                result_plan[result].owner_rank >= worker_count ||
+                result < by_owner[result_plan[result].owner_rank] ||
+                result >= by_owner[result_plan[result].owner_rank + 1u] ||
+                result_plan[result].owner_row !=
+                    result - by_owner[result_plan[result].owner_rank] ||
+                result_plan[result].reserved[0] != 0u ||
+                result_plan[result].reserved[1] != 0u ||
+                result_plan[result].reserved[2] != 0u) {
+                SetFailure(status, kStatusInvalidJournal);
+                break;
+            }
+
+            uint64_t seen_low = 0u;
+            uint64_t seen_high = 0u;
+            uint32_t current = heads[accumulator];
+            uint32_t processed = 0u;
+            while (processed < expected) {
+                if (current == kInvalidIndex || current >= pull_count ||
+                    pull_plan[current].accumulator_index != accumulator ||
+                    pull_plan[current].journal_token !=
+                        result_plan[result].journal_token ||
+                    SeenSource(seen_low, seen_high,
+                               pull_plan[current].source_rank)) {
+                    SetFailure(status, kStatusInvalidJournal);
+                    break;
+                }
+                MarkSource(&seen_low, &seen_high,
+                           pull_plan[current].source_rank);
+                current = next[current];
+                ++processed;
+            }
+            if (processed != expected || current != kInvalidIndex) {
+                SetFailure(status, kStatusInvalidJournal);
+                break;
+            }
+        }
+    }
+
+    AscendC::SyncAll<true>();
+    dcci_cacheline(status_line);
+    if (block == 0u) {
+        timeline->plan_index_done = AscendC::GetSystemCycle();
+        dcci_cacheline(status_line);
+    }
     AscendC::SyncAll<true>();
     dcci_cacheline(status_line);
     if (*status != kStatusOk) goto finalize;
@@ -921,34 +1212,62 @@ void inc_dc_pull_combine_v2_device_kernel(
     // all of them every pass, so a ready high-rank source is not hidden behind
     // a late low-rank source.  Other AIVs can already reduce ready sources.
     {
-        __gm__ uint32_t *ready_state =
-            reinterpret_cast<__gm__ uint32_t *>(source_ready_state);
         uint32_t owned = 0u;
         for (uint32_t source = block; source < worker_count;
              source += blocks)
             ++owned;
         uint32_t remaining = owned;
-        for (uint64_t spin = 0u;
-             spin < spin_cap && remaining != 0u && *status == kStatusOk;
-             ++spin) {
+        const uint64_t wait_begin = AscendC::GetSystemCycle();
+        while (AscendC::GetSystemCycle() - wait_begin < spin_cap &&
+               remaining != 0u && *status == kStatusOk) {
             for (uint32_t source = block; source < worker_count;
                  source += blocks) {
-                if (ready_state[source] != 0u) continue;
-                __gm__ CombineReadyV2 *ready =
-                    reinterpret_cast<__gm__ CombineReadyV2 *>(
-                        ready_mailbox) +
+                __gm__ uint32_t *ready_flag =
+                    SourceReadyAddress(source_ready_state, source);
+                dcci_cacheline(
+                    reinterpret_cast<__gm__ uint8_t *>(ready_flag));
+                if (*reinterpret_cast<__gm__ volatile uint32_t *>(
+                        ready_flag) != 0u)
+                    continue;
+                __gm__ CombineReadyNoticeV2 *notice =
+                    reinterpret_cast<__gm__ CombineReadyNoticeV2 *>(
+                        ready_notices) +
                     static_cast<uint64_t>(ring_slot * worker_count) +
                     source;
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(notice));
+                const uint64_t observed_publication =
+                    *reinterpret_cast<__gm__ volatile uint64_t *>(
+                        reinterpret_cast<__gm__ uint8_t *>(notice) +
+                        __builtin_offsetof(CombineReadyNoticeV2,
+                                           publication));
+                if (observed_publication == 0u) continue;
+                AscendC::PipeBarrier<PIPE_ALL>();
+                // Ignore an old notice in a reused ring slot. A notice with
+                // the current identity but a bad digest fails closed.
+                if (notice->generation != generation ||
+                    notice->sequence != sequence || notice->wave != wave ||
+                    notice->ring_slot != ring_slot)
+                    continue;
+                if (!ReadyNoticeValid(
+                        notice, source, worker_count, slot_count, session_id,
+                        placement_epoch, generation, sequence, wave,
+                        static_cast<uint16_t>(ring_slot))) {
+                    SetFailure(status, kStatusInvalidReady);
+                    break;
+                }
+
+                __gm__ CombineReadyV2 *remote_ready =
+                    reinterpret_cast<__gm__ CombineReadyV2 *>(
+                        ready_records) +
+                    static_cast<uint64_t>(ring_slot * worker_count) + source;
+                __gm__ CombineReadyV2 *ready =
+                    reinterpret_cast<__gm__ CombineReadyV2 *>(
+                        ready_staging) + source;
+                aclshmem_getmem(ready, remote_ready, sizeof(*ready),
+                                static_cast<int32_t>(source));
                 dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(ready));
                 dcci_cacheline(
                     reinterpret_cast<__gm__ uint8_t *>(ready) + 64u);
-                if (ready->publication == 0u) continue;
-                // Ignore a terminal descriptor from another ring generation.
-                // A current identity with a bad cookie or digest fails closed.
-                if (ready->generation != generation ||
-                    ready->sequence != sequence || ready->wave != wave ||
-                    ready->ring_slot != ring_slot)
-                    continue;
                 __gm__ CombineRegionRegistration *registration =
                     reinterpret_cast<__gm__ CombineRegionRegistration *>(
                         registrations) + source;
@@ -962,15 +1281,18 @@ void inc_dc_pull_combine_v2_device_kernel(
                     SetFailure(status, ready_status);
                     break;
                 }
-                reinterpret_cast<__gm__ uint64_t *>(
-                    source_payload_offsets)[source] = ready->source_offset;
+                *SourcePayloadOffsetAddress(source_payload_offsets, source) =
+                    ready->source_offset;
                 AscendC::PipeBarrier<PIPE_ALL>();
-                ready_state[source] = 1u;
                 dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
-                    reinterpret_cast<__gm__ uint64_t *>(
-                        source_payload_offsets) + source));
-                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
-                    ready_state + source));
+                    SourcePayloadOffsetAddress(source_payload_offsets,
+                                               source)));
+                *SourceAcceptedCycleAddress(source_ready_state, source) =
+                    AscendC::GetSystemCycle();
+                *ready_flag = 1u;
+                AscendC::PipeBarrier<PIPE_ALL>();
+                dcci_cacheline(
+                    reinterpret_cast<__gm__ uint8_t *>(ready_flag));
                 --remaining;
             }
             dcci_cacheline(status_line);
@@ -980,41 +1302,65 @@ void inc_dc_pull_combine_v2_device_kernel(
     }
 
     if (*status == kStatusOk) {
-        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
-        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
-        AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
-        for (uint64_t task = block; task < total_tasks; task += blocks) {
-            const uint32_t accumulator = static_cast<uint32_t>(
-                task / tiles_per_row);
-            const uint64_t tile = task % tiles_per_row;
-            const uint64_t element_begin =
-                (tile << 10u) + (tile << 9u); // tile * 1536
-            const uint32_t elements = static_cast<uint32_t>(
-                hidden - element_begin < kTileElements
-                    ? hidden - element_begin
-                    : kTileElements);
-            if (!ReduceAccumulatorTile(
-                    symmetric_partials, owner_output,
-                    reinterpret_cast<__gm__ CombinePullOp *>(pulls),
-                    reinterpret_cast<__gm__ uint32_t *>(pull_next),
-                    reinterpret_cast<__gm__ uint32_t *>(accumulator_heads),
-                    reinterpret_cast<__gm__ uint32_t *>(
-                        accumulator_contributor_counts),
-                    reinterpret_cast<__gm__ uint32_t *>(
-                        accumulator_result_index),
-                    reinterpret_cast<__gm__ CombineResultOp *>(results),
-                    reinterpret_cast<__gm__ uint32_t *>(
-                        source_ready_state),
-                    reinterpret_cast<__gm__ uint64_t *>(
-                        source_payload_offsets),
-                    accumulator, element_begin, elements, row_bytes,
-                    output_slot_offset, spin_cap, status))
-                break;
+        __gm__ uint32_t *all_two =
+            WaveAllTwoContributorsAddress(source_ready_state);
+        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(all_two));
+        const bool use_two_contributor_pipeline =
+            *reinterpret_cast<__gm__ volatile uint32_t *>(all_two) == 1u;
+        if (use_two_contributor_pipeline) {
+            const uint64_t tasks_per_block = total_tasks / blocks;
+            const uint64_t extra = total_tasks % blocks;
+            const uint64_t task_begin =
+                MulU64ByU32(tasks_per_block, block) +
+                (block < extra ? block : extra);
+            const uint64_t task_end = task_begin + tasks_per_block +
+                (block < extra ? 1u : 0u);
+            ReduceTwoContributorTaskRange(
+                symmetric_partials, owner_output,
+                reinterpret_cast<__gm__ CombinePullOp *>(pulls),
+                reinterpret_cast<__gm__ uint32_t *>(pull_next),
+                reinterpret_cast<__gm__ uint32_t *>(accumulator_heads),
+                reinterpret_cast<__gm__ uint32_t *>(
+                    accumulator_result_index),
+                reinterpret_cast<__gm__ CombineResultOp *>(results),
+                source_ready_state, source_payload_offsets, task_begin,
+                task_end, tiles_per_row, hidden, row_bytes,
+                output_slot_offset, spin_cap, status);
+        } else {
+            AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
+            AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
+            AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+            for (uint64_t task = block; task < total_tasks;
+                 task += blocks) {
+                const uint32_t accumulator = static_cast<uint32_t>(
+                    task / tiles_per_row);
+                const uint64_t tile = task % tiles_per_row;
+                const uint64_t element_begin = tile << kTileElementShift;
+                const uint32_t elements = static_cast<uint32_t>(
+                    hidden - element_begin < kTileElements
+                        ? hidden - element_begin
+                        : kTileElements);
+                if (!ReduceAccumulatorTile(
+                        symmetric_partials, owner_output,
+                        reinterpret_cast<__gm__ CombinePullOp *>(pulls),
+                        reinterpret_cast<__gm__ uint32_t *>(pull_next),
+                        reinterpret_cast<__gm__ uint32_t *>(
+                            accumulator_heads),
+                        reinterpret_cast<__gm__ uint32_t *>(
+                            accumulator_contributor_counts),
+                        reinterpret_cast<__gm__ uint32_t *>(
+                            accumulator_result_index),
+                        reinterpret_cast<__gm__ CombineResultOp *>(results),
+                        source_ready_state, source_payload_offsets,
+                        accumulator, element_begin, elements, row_bytes,
+                        output_slot_offset, spin_cap, status))
+                    break;
+            }
+            AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+            AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
+            AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
+            aclshmemx_mte_quiet();
         }
-        AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
-        AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
-        AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
-        aclshmemx_mte_quiet();
     }
 
 finalize:
@@ -1046,6 +1392,28 @@ finalize:
             reinterpret_cast<__gm__ uint64_t *>(source_offsets);
         __gm__ uint64_t *by_owner =
             reinterpret_cast<__gm__ uint64_t *>(owner_offsets);
+        uint32_t ready_sources = 0u;
+        uint64_t first_ready = 0u;
+        uint64_t all_ready = 0u;
+        if (launch_valid) {
+            for (uint32_t source = 0u; source < worker_count; ++source) {
+                __gm__ uint32_t *ready =
+                    SourceReadyAddress(source_ready_state, source);
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(ready));
+                if (*reinterpret_cast<__gm__ volatile uint32_t *>(ready) !=
+                    1u)
+                    continue;
+                const uint64_t accepted =
+                    *SourceAcceptedCycleAddress(source_ready_state, source);
+                ++ready_sources;
+                if (first_ready == 0u || accepted < first_ready)
+                    first_ready = accepted;
+                if (accepted > all_ready) all_ready = accepted;
+            }
+        }
+        timeline->ready_sources = ready_sources;
+        timeline->first_ready = first_ready;
+        timeline->all_ready = all_ready;
         for (uint32_t source = 0u; source < worker_count; ++source) {
             const uint32_t rows = static_cast<uint32_t>(
                 by_source[source + 1u] - by_source[source]);
@@ -1080,7 +1448,6 @@ finalize:
                 wave, static_cast<uint16_t>(ring_slot));
         }
         timeline->owner_completions_done = AscendC::GetSystemCycle();
-        timeline->all_ready = timeline->owner_completions_done;
         timeline->last_get = timeline->owner_completions_done;
         timeline->last_reduce = timeline->owner_completions_done;
         timeline->last_owner_put = timeline->owner_completions_done;
@@ -1091,7 +1458,8 @@ finalize:
 
 extern "C" void launch_inc_dc_pull_combine_v2_device(
     uint32_t block_dim, void *stream, uint8_t *symmetric_partials,
-    uint8_t *ready_mailbox, uint8_t *registrations,
+    uint8_t *ready_records, uint8_t *ready_notices,
+    uint8_t *ready_staging, uint8_t *registrations,
     uint8_t *source_acks, uint8_t *owner_output,
     uint8_t *owner_completions, uint8_t *source_offsets, uint8_t *pulls,
     uint8_t *owner_offsets, uint8_t *results, uint8_t *journal_header,
@@ -1102,22 +1470,23 @@ extern "C" void launch_inc_dc_pull_combine_v2_device(
     uint64_t ffts_addr, uint64_t session_id, uint64_t placement_epoch,
     uint64_t generation, uint64_t sequence, uint64_t dispatch_cookie,
     uint64_t owner_output_slot_stride, uint64_t pull_count,
-    uint64_t result_count, uint64_t pull_next_capacity,
-    uint64_t accumulator_scratch_capacity,
+    uint64_t result_count, uint64_t pull_index_capacity,
+    uint64_t accumulator_index_capacity,
     uint64_t source_scratch_capacity, uint32_t accumulator_count,
     uint32_t worker_count, uint32_t hidden, uint32_t partial_dtype,
     int32_t inc_pe, uint32_t wave, uint32_t ring_slot,
     uint32_t slot_count, uint64_t spin_cap)
 {
     inc_dc_pull_combine_v2_device_kernel<<<block_dim, nullptr, stream>>>(
-        symmetric_partials, ready_mailbox, registrations, source_acks,
-        owner_output, owner_completions, source_offsets, pulls,
-        owner_offsets, results, journal_header, pull_next, accumulator_heads,
-        accumulator_contributor_counts, accumulator_result_index,
-        source_ready_state, source_payload_offsets, status_line, ffts_addr,
-        session_id, placement_epoch, generation, sequence, dispatch_cookie,
+        symmetric_partials, ready_records, ready_notices, ready_staging,
+        registrations, source_acks, owner_output, owner_completions,
+        source_offsets, pulls, owner_offsets, results, journal_header,
+        pull_next, accumulator_heads, accumulator_contributor_counts,
+        accumulator_result_index, source_ready_state,
+        source_payload_offsets, status_line, ffts_addr, session_id,
+        placement_epoch, generation, sequence, dispatch_cookie,
         owner_output_slot_stride, pull_count, result_count,
-        pull_next_capacity, accumulator_scratch_capacity,
+        pull_index_capacity, accumulator_index_capacity,
         source_scratch_capacity, accumulator_count, worker_count, hidden,
         partial_dtype, inc_pe, wave, ring_slot, slot_count, spin_cap);
 }

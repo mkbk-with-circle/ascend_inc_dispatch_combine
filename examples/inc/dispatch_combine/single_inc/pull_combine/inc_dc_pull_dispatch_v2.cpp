@@ -169,10 +169,14 @@ Status BuildSlot(const SourceInput &input, std::vector<uint8_t> *slot,
                     "hidden payload size mismatch", error);
 
     std::vector<TokenRecord> tokens(input.token_ids.size());
+    bool uniform_destinations = !tokens.empty();
+    std::vector<uint8_t> reference_destinations(
+        input.session.worker_count, 0u);
     for (uint32_t token = 0u; token < tokens.size(); ++token) {
         const uint32_t begin = input.assignment_offsets[token];
         const uint32_t end = input.assignment_offsets[token + 1u];
         std::vector<uint8_t> ordinals(end - begin, 0u);
+        std::vector<uint8_t> destinations(input.session.worker_count, 0u);
         for (uint32_t i = begin; i < end; ++i) {
             const AssignmentRecord &assignment = input.assignments[i];
             if (assignment.destination_rank >= input.session.worker_count ||
@@ -184,7 +188,14 @@ Status BuildSlot(const SourceInput &input, std::vector<uint8_t> *slot,
                             "invalid token assignment", error);
             }
             ordinals[assignment.ordinal] = 1u;
+            if (destinations[assignment.destination_rank] != 0u)
+                uniform_destinations = false;
+            destinations[assignment.destination_rank] = 1u;
         }
+        if (token == 0u)
+            reference_destinations = destinations;
+        else if (destinations != reference_destinations)
+            uniform_destinations = false;
         tokens[token].token_id = input.token_ids[token];
         tokens[token].source_token = token;
         tokens[token].assignment_begin = begin;
@@ -210,6 +221,8 @@ Status BuildSlot(const SourceInput &input, std::vector<uint8_t> *slot,
     built.dtype = static_cast<uint32_t>(input.session.dtype);
     built.token_record_bytes = sizeof(TokenRecord);
     built.assignment_record_bytes = sizeof(AssignmentRecord);
+    if (uniform_destinations)
+        built.flags |= kSlotFlagUniformDestinations;
     if (!Mul(tokens.size(), sizeof(TokenRecord), &token_bytes) ||
         !Mul(input.assignments.size(), sizeof(AssignmentRecord),
              &assignment_bytes) ||
@@ -289,7 +302,8 @@ Status ParseReadyAndSlot(const RegionRegistration &registration,
     std::memcpy(&header, slot, sizeof(header));
     if (header.magic != kPullDispatchMagic ||
         header.abi_version != kPullDispatchAbiVersion ||
-        header.header_bytes != sizeof(SlotHeader) || header.flags != 0u ||
+        header.header_bytes != sizeof(SlotHeader) ||
+        (header.flags & ~kSlotFlagUniformDestinations) != 0u ||
         header.session_id != ready.session_id ||
         header.placement_epoch != ready.placement_epoch ||
         header.generation != ready.generation ||
@@ -338,6 +352,11 @@ Status ParseReadyAndSlot(const RegionRegistration &registration,
         return Fail(Status::INVALID_HEADER,
                     "noncanonical slot offsets", error);
     }
+    const uint64_t metadata_end = canonical_assignments + assignment_bytes;
+    for (uint64_t offset = metadata_end; offset < canonical_hidden; ++offset)
+        if (slot[offset] != 0u)
+            return Fail(Status::INVALID_HEADER,
+                        "hidden alignment padding is not zero", error);
     if (MetadataDigest(header, slot) != header.metadata_digest)
         return Fail(Status::DIGEST_MISMATCH,
                     "slot metadata digest mismatch", error);
@@ -560,6 +579,42 @@ Status CompileLayout(const std::vector<ParsedSource> &sources,
         JournalSlotState::DISPATCH_SEALED);
     built.journal_header.token_count = built.journal_tokens.size();
     built.journal_header.contributor_count = built.contributors.size();
+    // Derive this independently of SlotHeader::flags.  The wire bit is only
+    // an optimization request; the compiled journal advertises the semantic
+    // property only after checking every token itself.
+    bool uniform_destinations = true;
+    for (uint32_t rank = 0u; rank < config.worker_count; ++rank) {
+        const ParsedSource &source = *by_rank[rank];
+        if (source.tokens.empty()) {
+            uniform_destinations = false;
+            break;
+        }
+        std::vector<uint8_t> reference(config.worker_count, 0u);
+        for (uint32_t token = 0u; token < source.tokens.size(); ++token) {
+            const TokenRecord &record = source.tokens[token];
+            std::vector<uint8_t> destinations(config.worker_count, 0u);
+            for (uint32_t local = 0u; local < record.assignment_count;
+                 ++local) {
+                const uint32_t destination = source.assignments[
+                    record.assignment_begin + local].destination_rank;
+                if (destinations[destination] != 0u) {
+                    uniform_destinations = false;
+                    break;
+                }
+                destinations[destination] = 1u;
+            }
+            if (!uniform_destinations) break;
+            if (token == 0u)
+                reference = destinations;
+            else if (destinations != reference) {
+                uniform_destinations = false;
+                break;
+            }
+        }
+        if (!uniform_destinations) break;
+    }
+    if (uniform_destinations)
+        built.journal_header.flags |= kJournalFlagUniformDestinations;
     *layout = std::move(built);
     if (error != nullptr) error->clear();
     return Status::OK;

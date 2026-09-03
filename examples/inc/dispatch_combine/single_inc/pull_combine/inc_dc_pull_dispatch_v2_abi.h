@@ -9,6 +9,19 @@ constexpr uint32_t kPullDispatchMagic = 0x50443249u; // 'PD2I'
 constexpr uint16_t kPullDispatchAbiVersion = 2u;
 constexpr uint32_t kPullDispatchAlignment = 64u;
 constexpr uint32_t kPullDispatchMaxWorkers = 128u;
+// The source promises that every token has exactly the same set of unique
+// destinations and exactly one assignment for each selected destination.
+// Destination sets may differ between source ranks.  This is a hint only:
+// both host and INC derive/verify the property independently before success.
+constexpr uint16_t kSlotFlagUniformDestinations = 1u << 0u;
+constexpr uint32_t kJournalFlagUniformDestinations = 1u << 0u;
+// Source compatibility for the in-flight Combine V2 implementation.  These
+// aliases preserve the numeric ABI while Dispatch migrates to the general
+// subset semantics.
+constexpr uint16_t kSlotFlagDenseAllDestinations =
+    kSlotFlagUniformDestinations;
+constexpr uint32_t kJournalFlagDenseAllDestinations =
+    kJournalFlagUniformDestinations;
 
 enum class DataType : uint32_t {
     FP16 = 0u,

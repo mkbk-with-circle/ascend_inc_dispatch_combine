@@ -1,6 +1,7 @@
 #ifndef INC_DC_PULL_COMBINE_V2_H
 #define INC_DC_PULL_COMBINE_V2_H
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -52,8 +53,9 @@ struct alignas(64) CombineRegionRegistration {
 static_assert(sizeof(CombineRegionRegistration) == 64u,
               "pull Combine V2 registration ABI drift");
 
-// B publishes exactly one READY after all locally reduced rows in its slot
-// are remotely visible. publication is written last by the device side.
+// B keeps this full READY in its registered local region after all locally
+// reduced rows are visible.  It publishes only one cacheline-sized notice;
+// the INC pulls this record after observing that notice.
 struct alignas(64) CombineReadyV2 {
     uint32_t magic = kPullCombineV2Magic;
     uint16_t abi_version = kPullCombineV2AbiVersion;
@@ -78,6 +80,31 @@ struct alignas(64) CombineReadyV2 {
 };
 static_assert(sizeof(CombineReadyV2) == 128u,
               "pull Combine V2 READY ABI drift");
+
+// The only worker->INC control transfer for one source/wave.  This fits one
+// cacheline and keeps publication as the final word.  It identifies where in
+// the agreed READY ring the INC should pull; the pulled READY carries the
+// cookie, payload offset and full validation digest.
+struct alignas(64) CombineReadyNoticeV2 {
+    uint32_t magic = kPullCombineV2Magic;
+    uint16_t abi_version = kPullCombineV2AbiVersion;
+    uint16_t struct_bytes = sizeof(CombineReadyNoticeV2);
+    uint64_t session_id = 0u;
+    uint64_t placement_epoch = 0u;
+    uint64_t generation = 0u;
+    uint64_t sequence = 0u;
+    uint32_t wave = 0u;
+    uint32_t source_rank = 0u;
+    uint16_t ring_slot = 0u;
+    uint16_t flags = 0u;
+    uint32_t reserved0 = 0u;
+    uint64_t publication = 0u;
+};
+static_assert(sizeof(CombineReadyNoticeV2) == 64u,
+              "pull Combine V2 READY notice ABI drift");
+static_assert(offsetof(CombineReadyNoticeV2, publication) +
+                  sizeof(uint64_t) == sizeof(CombineReadyNoticeV2),
+              "READY notice publication must be last");
 
 struct CombineV2Config {
     uint64_t session_id = 0u;
@@ -130,6 +157,12 @@ struct CombinePullPlan {
     // Results are grouped by owner rank for contiguous INC->A publication.
     std::vector<uint64_t> owner_offsets;
     std::vector<CombineResultOp> results;
+    // Immutable, deterministic reduction index produced together with the
+    // sealed Dispatch journal. Combine consumes these arrays read-only.
+    std::vector<uint32_t> pull_next;
+    std::vector<uint32_t> accumulator_heads;
+    std::vector<uint32_t> accumulator_contributor_counts;
+    std::vector<uint32_t> accumulator_result_index;
 };
 
 CombineV2Status ValidateCombineRegistration(
@@ -142,6 +175,7 @@ CombineV2Status CompileCombinePullPlan(const CompiledLayout &dispatch,
                                        std::string *error = nullptr);
 
 uint64_t CombineReadyPublication(const CombineReadyV2 &ready);
+uint64_t CombineReadyNoticePublication(const CombineReadyNoticeV2 &notice);
 
 CombineV2Status ValidateCombineReady(
     const CombineReadyV2 &ready,
