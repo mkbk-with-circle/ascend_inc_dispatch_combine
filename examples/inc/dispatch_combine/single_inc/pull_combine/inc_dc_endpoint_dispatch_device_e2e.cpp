@@ -14,49 +14,10 @@
 
 #include "inc_dc_endpoint_dispatch_packet.h"
 #include "inc_dc_device_journal_abi.h"
+#include "inc_dc_endpoint_device_api.h"
 #include "inc_dc_sparse_combine_abi.h"
 
 using namespace inc::dc::pull_combine;
-
-extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
-    uint32_t block_dim, void *stream, uint8_t *source_packet,
-    uint8_t *inc_packets, uint8_t *commit_mailbox, uint8_t *recv_hidden,
-    uint8_t *recv_rows, uint8_t *recv_assignments, uint8_t *recv_counts,
-    uint8_t *ack_mailbox, uint8_t *completion_mailbox, uint8_t *cursors,
-    uint8_t *hidden_staging, uint8_t *journal_header,
-    uint8_t *status_line,
-    uint64_t ffts_addr,
-    uint64_t slot_bytes, uint64_t staging_bytes_per_destination,
-    uint64_t row_capacity, uint64_t assignment_capacity,
-    uint32_t hidden,
-    uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
-    int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
-    uint32_t ring_slot);
-
-extern "C" void launch_inc_dc_device_journal_index(
-    uint32_t block_dim, void *stream, uint8_t *inc_packets,
-    uint8_t *journal_header, uint8_t *journal_entries,
-    uint8_t *journal_hash, uint8_t *journal_row_map,
-    uint8_t *destination_rows, uint64_t ffts_addr, uint64_t slot_bytes,
-    uint64_t entry_capacity, uint64_t hash_capacity, uint32_t worker_count,
-    int32_t inc_pe, uint64_t generation, uint32_t wave);
-
-extern "C" void launch_inc_dc_sparse_combine_device_e2e(
-    uint32_t block_dim, void *stream, uint8_t *symmetric_token_ids,
-    uint8_t *symmetric_partials, uint8_t *reduced_output,
-    uint8_t *descriptor_mailbox, uint8_t *ack_mailbox,
-    uint8_t *completion_mailbox, uint8_t *journal_header,
-    uint8_t *journal_entries, uint8_t *journal_hash,
-    uint8_t *journal_row_map, uint8_t *combine_row_map,
-    uint8_t *destination_rows,
-    uint8_t *inc_token_ids,
-    uint8_t *status_line, uint64_t ffts_addr,
-    uint64_t journal_capacity, uint64_t journal_hash_capacity,
-    uint64_t row_capacity, uint64_t token_ids_region_bytes,
-    uint64_t partials_region_bytes, uint32_t hidden, uint32_t worker_count,
-    int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
-    uint32_t ring_slot, int32_t delay_rank, uint64_t delay_cycles,
-    uint32_t combine_flags);
 
 int g_npus = 5;
 const char *ipport = "tcp://127.0.0.1:28780";
@@ -323,8 +284,7 @@ int main(int argc, char **argv)
     const uint64_t counts_bytes =
         static_cast<uint64_t>(workers) * sizeof(uint32_t) * 4u;
     const uint64_t combine_control_bytes =
-        (static_cast<uint64_t>(workers + 2u) * sizeof(uint32_t) + 63u) /
-        64u * 64u;
+        SparseCombineControlBytes(workers);
     const uint64_t combine_token_region_bytes =
         kQualificationRegionPrefix +
         combine_row_capacity * sizeof(uint64_t);
@@ -619,18 +579,37 @@ int main(int argc, char **argv)
 
     if (status == 0) {
         const auto begin = std::chrono::steady_clock::now();
-        launch_inc_dc_endpoint_dispatch_device_e2e(
-            dispatch_aiv, stream, source_packet, inc_packets, commits,
-            recv_hidden,
-            recv_rows, recv_assignments, recv_counts, acks, completions,
-            cursors, hidden_staging, journal_header, status_line,
-            shmemx_get_ffts_config(),
-            slot_bytes, staging_bytes_per_destination,
-            row_capacity,
-            assignment_capacity, hidden,
-            static_cast<uint32_t>(EndpointDataType::BF16), kExpertCount,
-            workers, inc_pe, kGeneration, 1u, kWave, 0u);
-        status = aclrtSynchronizeStream(stream);
+        EndpointDispatchDeviceArgs args{};
+        args.source_packet = source_packet;
+        args.inc_packets = inc_packets;
+        args.commit_mailbox = commits;
+        args.recv_hidden = recv_hidden;
+        args.recv_rows = recv_rows;
+        args.recv_assignments = recv_assignments;
+        args.recv_counts = recv_counts;
+        args.ack_mailbox = acks;
+        args.completion_mailbox = completions;
+        args.cursors = cursors;
+        args.hidden_staging = hidden_staging;
+        args.journal_header = journal_header;
+        args.status_line = status_line;
+        args.ffts_addr = shmemx_get_ffts_config();
+        args.slot_bytes = slot_bytes;
+        args.staging_bytes_per_aiv = staging_bytes_per_destination;
+        args.row_capacity = row_capacity;
+        args.assignment_capacity = assignment_capacity;
+        args.hidden = hidden;
+        args.dtype = static_cast<uint32_t>(EndpointDataType::BF16);
+        args.expert_count = kExpertCount;
+        args.worker_count = workers;
+        args.inc_pe = inc_pe;
+        args.generation = kGeneration;
+        args.sequence = 1u;
+        args.wave = kWave;
+        if (LaunchEndpointDispatch(dispatch_aiv, stream, args) !=
+            EndpointLaunchStatus::OK)
+            status = 2;
+        if (status == 0) status = aclrtSynchronizeStream(stream);
         const auto end = std::chrono::steady_clock::now();
         e2e_us = std::chrono::duration<double, std::micro>(end - begin).count();
     }
@@ -638,13 +617,25 @@ int main(int argc, char **argv)
 
     if (status == 0 && !expect_reject) {
         const auto begin = std::chrono::steady_clock::now();
-        launch_inc_dc_device_journal_index(
-            1u, stream, inc_packets, journal_header, journal_entries,
-            journal_hash, journal_row_map, destination_rows,
-            shmemx_get_ffts_config(), slot_bytes,
-            journal_capacity, journal_hash_capacity, workers, inc_pe,
-            kGeneration, kWave);
-        status = aclrtSynchronizeStream(stream);
+        DeviceJournalIndexArgs args{};
+        args.inc_packets = inc_packets;
+        args.journal_header = journal_header;
+        args.journal_entries = journal_entries;
+        args.journal_hash = journal_hash;
+        args.journal_row_map = journal_row_map;
+        args.destination_rows = destination_rows;
+        args.ffts_addr = shmemx_get_ffts_config();
+        args.slot_bytes = slot_bytes;
+        args.entry_capacity = journal_capacity;
+        args.hash_capacity = journal_hash_capacity;
+        args.worker_count = workers;
+        args.inc_pe = inc_pe;
+        args.generation = kGeneration;
+        args.wave = kWave;
+        if (LaunchDeviceJournalIndex(stream, args) !=
+            EndpointLaunchStatus::OK)
+            status = 2;
+        if (status == 0) status = aclrtSynchronizeStream(stream);
         const auto end = std::chrono::steady_clock::now();
         index_us = std::chrono::duration<double, std::micro>(end - begin)
             .count();
@@ -653,20 +644,41 @@ int main(int argc, char **argv)
 
     if (status == 0 && !expect_reject) {
         const auto begin = std::chrono::steady_clock::now();
-        launch_inc_dc_sparse_combine_device_e2e(
-            dispatch_aiv, stream, combine_token_ids, combine_partials,
-            combine_output, combine_descriptors, combine_acks,
-            combine_completions, journal_header, journal_entries,
-            journal_hash, journal_row_map, combine_row_map,
-            destination_rows, inc_combine_token_ids, combine_status_line,
-            shmemx_get_ffts_config(), journal_capacity,
-            journal_hash_capacity, combine_row_capacity,
-            combine_token_region_bytes, combine_partial_region_bytes,
-            hidden, workers,
-            inc_pe, kGeneration, 1u, kWave, 0u, delay_rank, delay_cycles,
-            reorder_combine_rows == 0u
-                ? kSparseCombineFlagCanonicalRows : 0u);
-        status = aclrtSynchronizeStream(stream);
+        SparseCombineDeviceArgs args{};
+        args.symmetric_token_ids = combine_token_ids;
+        args.symmetric_partials = combine_partials;
+        args.reduced_output = combine_output;
+        args.descriptor_mailbox = combine_descriptors;
+        args.ack_mailbox = combine_acks;
+        args.completion_mailbox = combine_completions;
+        args.journal_header = journal_header;
+        args.journal_entries = journal_entries;
+        args.journal_hash = journal_hash;
+        args.journal_row_map = journal_row_map;
+        args.combine_row_map = combine_row_map;
+        args.destination_rows = destination_rows;
+        args.inc_token_ids = inc_combine_token_ids;
+        args.status_line = combine_status_line;
+        args.ffts_addr = shmemx_get_ffts_config();
+        args.journal_capacity = journal_capacity;
+        args.journal_hash_capacity = journal_hash_capacity;
+        args.row_capacity = combine_row_capacity;
+        args.token_ids_region_bytes = combine_token_region_bytes;
+        args.partials_region_bytes = combine_partial_region_bytes;
+        args.hidden = hidden;
+        args.worker_count = workers;
+        args.inc_pe = inc_pe;
+        args.generation = kGeneration;
+        args.sequence = 1u;
+        args.wave = kWave;
+        args.delay_rank = delay_rank;
+        args.delay_cycles = delay_cycles;
+        args.flags = reorder_combine_rows == 0u
+            ? kSparseCombineFlagCanonicalRows : 0u;
+        if (LaunchSparseCombine(dispatch_aiv, stream, args) !=
+            EndpointLaunchStatus::OK)
+            status = 2;
+        if (status == 0) status = aclrtSynchronizeStream(stream);
         const auto end = std::chrono::steady_clock::now();
         combine_us = std::chrono::duration<double, std::micro>(end - begin)
             .count();

@@ -1,7 +1,8 @@
 # 单 INC Push-Dispatch / Pull-Combine 协议 v1（实验分支）
 
-本目录实现新协议，不替换也不调用现有 V1 `SingleInc` 后端。当前公共 API
-仍指向已验证的旧实现；只有设备 gate 全部通过后，才会另行接入。
+本目录实现新协议，不替换也不调用现有 V1 `SingleInc` 后端。当前稳定公共 API
+仍指向已验证的旧实现；新协议提供了独立的薄异步设备 API，供 gate 和后续框架
+接入共用。
 
 ## 协议
 
@@ -62,7 +63,8 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
   行通过 token hash 恢复。随后由 24 个普通 AIV 直接从 B HBM 拉到 UB，严格 FP32
   reduce，并仅向原 owner PUT 一份结果。
 - 已完成：Combine descriptor 采用 generation commit-word 两阶段发布，避免 128B
-  descriptor 跨 cache-line 撕裂；journal 的 `INDEX_READY` 也只在 entries/hash/
+  descriptor 跨 cache-line 撕裂；发布前会显式写回两条 cache line，避免第二条中的
+  offset/digest 偶发残留旧值。journal 的 `INDEX_READY` 也只在 entries/hash/
   row-map/counts 全部 flush 后发布。
 - 已完成：B 晚到、行重排、空 batch、非 tile 对齐 hidden、top-k 大于 worker 数、
   descriptor 损坏及 token ID 损坏的设备 gate；失败均负 ACK/负 completion，无挂死。
@@ -84,14 +86,37 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
   在单调地址 pull 中长期空转；小于两个 chunk 时自动回退到零握手 owner-slice。
 - 已完成：descriptor 或 ready 超时均 fail-closed；成功 ACK 只在 source 已消费且
   egress 完成后发布，失败 ACK 的 `rows_consumed=0`，不会永久占住发送槽。
-- 未完成：跨 wave ring 的持久化设备 server、公共 API 接入。当前 endpoint Dispatch
-  是完整单 wave 算子，但 destination 侧 wire-view 筛选还只在 qualification
-  harness 中校验，尚未与正式 expert packing kernel 融合。
+- 未完成：跨 wave ring 的持久化设备 server、高层 workspace/session owning API。
+  当前 endpoint Dispatch 是完整单 wave 算子，但 destination 侧 wire-view 筛选还只
+  在 qualification harness 中校验，尚未与正式 expert packing kernel 融合。
 
 设备物理 region 按 64B 向上对齐，但 descriptor 中的 `row_count` 和
 `payload_bytes` 始终是真实长度。lane 只在 cache-line 边界切分，最后一个物理
-span 最多包含 63B padding；因此真实元素数无需整除 worker、lane 或 cache line，
-也不会产生跨 AIV false sharing。
+ span 最多包含 63B padding；因此真实元素数无需整除 worker、lane 或 cache line，
+ 也不会产生跨 AIV false sharing。
+
+## 薄异步设备 API
+
+集成入口是 `inc_dc_endpoint_device_api.h`。调用者只需持有一次初始化好的 SHMEM
+session、对称 HBM workspace 和自己的 ACL stream；API 不分配、不 barrier、不做
+host synchronize，因此没有新增设备关键路径。一次 wave 的最短调用顺序为：
+
+```cpp
+EndpointDispatchDeviceArgs dispatch = {/* workspace + shape + epoch */};
+LaunchEndpointDispatch(aiv_count, stream, dispatch);
+
+// B 侧收到 completion 后执行本地 expert，并写 token_ids + local-reduce rows。
+
+DeviceJournalIndexArgs index = {/* Dispatch-retained packet + journal */};
+LaunchDeviceJournalIndex(stream, index);  // 可与 B 侧 expert compute 交叠
+
+SparseCombineDeviceArgs combine = {/* B regions + journal + owner output */};
+LaunchSparseCombine(aiv_count, stream, combine);
+```
+
+三个参数结构体显式携带容量与 `generation/sequence/wave/ring_slot`；Combine 的
+token/partial offset 是注册 region 内真实偏移，越界会由 INC 负 ACK。当前 API 是
+低层异步提交面，不隐藏 workspace 生命周期，便于 Megatron/vLLM 直接复用已有内存。
 
 ## 主机 gate
 

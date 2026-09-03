@@ -97,15 +97,31 @@ target_include_directories(inc_dc_sparse_combine_device_e2e_kernel PRIVATE
     ${INC_DC_PULL_COMBINE_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/../../common/platform)
 
+# Thin asynchronous integration API.  It owns no buffers and adds no device
+# synchronization; production runtimes keep their SHMEM session/workspace.
+add_library(inc_dc_endpoint_device_api STATIC
+    inc_dc_endpoint_device_api.cpp)
+inc_host_target(inc_dc_endpoint_device_api)
+target_include_directories(inc_dc_endpoint_device_api PUBLIC
+    ${INC_DC_PULL_COMBINE_DIR})
+target_link_libraries(inc_dc_endpoint_device_api PUBLIC
+    inc_dc_endpoint_dispatch_device_e2e_kernel
+    inc_dc_device_journal_index_kernel
+    inc_dc_sparse_combine_device_e2e_kernel)
+
+add_executable(inc_dc_endpoint_device_api_tests
+    ${INC_DC_PULL_COMBINE_TEST_DIR}/test_inc_dc_endpoint_device_api.cpp)
+inc_host_target(inc_dc_endpoint_device_api_tests)
+target_compile_options(inc_dc_endpoint_device_api_tests PRIVATE -UNDEBUG)
+target_link_libraries(inc_dc_endpoint_device_api_tests PRIVATE
+    inc_dc_endpoint_device_api)
+
 add_executable(inc_dc_endpoint_dispatch_device_e2e
     inc_dc_endpoint_dispatch_device_e2e.cpp)
 inc_host_target(inc_dc_endpoint_dispatch_device_e2e)
 target_include_directories(inc_dc_endpoint_dispatch_device_e2e PRIVATE
     ${INC_DC_PULL_COMBINE_DIR})
 target_link_libraries(inc_dc_endpoint_dispatch_device_e2e PRIVATE
-    shmem inc_dc_pull_combine_protocol
-    inc_dc_endpoint_dispatch_device_e2e_kernel
-    inc_dc_device_journal_index_kernel
-    inc_dc_sparse_combine_device_e2e_kernel)
+    shmem inc_dc_pull_combine_protocol inc_dc_endpoint_device_api)
 add_dependencies(inc_dc_endpoint_dispatch_device_e2e
     aclshmem_bootstrap_config_store)

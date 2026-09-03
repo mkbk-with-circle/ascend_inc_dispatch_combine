@@ -222,6 +222,8 @@ void inc_dc_sparse_combine_device_e2e_kernel(
             descriptor->generation = 0u;
             AscendC::PipeBarrier<PIPE_ALL>();
             dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(descriptor));
+            dcci_cacheline(
+                reinterpret_cast<__gm__ uint8_t *>(descriptor) + 64u);
             aclshmem_putmem(descriptor, descriptor,
                             sizeof(SparseCombineReadyDescriptor), inc_pe);
             aclshmem_quiet();
