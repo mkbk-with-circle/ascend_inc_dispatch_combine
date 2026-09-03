@@ -29,6 +29,7 @@ namespace {
 
 constexpr uint64_t kGeneration = 17u;
 constexpr uint32_t kWave = 5u;
+constexpr uint32_t kRingSlot = 1u;
 constexpr uint32_t kExpertCount = 64u;
 constexpr uint64_t kQualificationRegionPrefix = 64u;
 
@@ -108,6 +109,7 @@ EndpointDispatchInput MakeInput(uint32_t source, uint32_t workers,
     input.config.source_rank = source;
     input.config.generation = kGeneration;
     input.config.sequence = 1u;
+    input.config.ring_slot = kRingSlot;
     input.assignment_offsets.push_back(0u);
     for (uint32_t token = 0u; token < tokens; ++token) {
         input.token_ids.push_back(
@@ -542,6 +544,7 @@ int main(int argc, char **argv)
         descriptor.generation = kGeneration;
         descriptor.sequence = 1u;
         descriptor.wave = kWave;
+        descriptor.slot = kRingSlot;
         descriptor.source_rank = static_cast<uint32_t>(pe);
         descriptor.row_count = ids.size();
         descriptor.hidden = hidden;
@@ -606,6 +609,7 @@ int main(int argc, char **argv)
         args.generation = kGeneration;
         args.sequence = 1u;
         args.wave = kWave;
+        args.ring_slot = kRingSlot;
         if (LaunchEndpointDispatch(dispatch_aiv, stream, args) !=
             EndpointLaunchStatus::OK)
             status = 2;
@@ -671,6 +675,7 @@ int main(int argc, char **argv)
         args.generation = kGeneration;
         args.sequence = 1u;
         args.wave = kWave;
+        args.ring_slot = kRingSlot;
         args.delay_rank = delay_rank;
         args.delay_cycles = delay_cycles;
         args.flags = reorder_combine_rows == 0u

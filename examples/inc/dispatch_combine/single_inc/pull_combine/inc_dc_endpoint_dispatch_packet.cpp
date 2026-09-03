@@ -245,6 +245,7 @@ EndpointDispatchStatus BuildEndpointDispatchPacket(
     built_commit.sequence = header.sequence;
     built_commit.wave = header.wave;
     built_commit.source_rank = header.source_rank;
+    built_commit.slot = input.config.ring_slot;
     built_commit.packet_bytes = header.packet_bytes;
     built_commit.metadata_digest = header.metadata_digest;
     *commit = built_commit;

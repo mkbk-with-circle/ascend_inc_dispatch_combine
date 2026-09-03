@@ -29,6 +29,7 @@ EndpointDispatchInput BasicInput()
     input.config.source_rank = 1u;
     input.config.generation = 7u;
     input.config.sequence = 3u;
+    input.config.ring_slot = 5u;
     input.token_ids = {100u, 101u};
     input.assignment_offsets = {0u, 3u, 4u};
     input.assignments = {
@@ -52,6 +53,7 @@ void TestBasic()
            EndpointDispatchStatus::OK);
     assert(commit.generation == input.config.generation);
     assert(commit.sequence == input.config.sequence);
+    assert(commit.slot == input.config.ring_slot);
     assert(commit.packet_bytes == packet.size());
     assert(commit.metadata_digest != 0u);
 

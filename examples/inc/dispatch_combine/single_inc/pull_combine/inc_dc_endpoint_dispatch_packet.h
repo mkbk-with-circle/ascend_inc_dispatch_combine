@@ -34,6 +34,7 @@ struct EndpointDispatchConfig {
     uint32_t source_rank = 0u;
     uint64_t generation = 0u;
     uint64_t sequence = 0u;
+    uint32_t ring_slot = 0u;
 };
 
 // assignment_offsets is CSR with token_ids.size()+1 entries.  This is the
