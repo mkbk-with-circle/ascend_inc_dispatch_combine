@@ -19,6 +19,8 @@
 #include "shmem.h"
 #include "utils.h"
 
+#include "inc_dc_pull_v2_test_start_gate.h"
+
 using namespace inc::dc::pull_v2;
 
 extern "C" void launch_inc_dc_pull_combine_v2_device(
@@ -898,6 +900,11 @@ int main(int argc, char **argv)
             std::cerr << "[STAGE] pe=" << o.pe << " prepared iteration="
                       << iteration << '\n' << std::flush;
         if (status == 0) aclshmem_barrier_all();
+        if (status == 0 && !test::WaitForExternalStartGate(
+                               "combine", o.pe, iteration)) {
+            std::cerr << "[FAIL] combine external start gate\n";
+            status = 2;
+        }
         if (status != 0) { correct = false; break; }
 
         if (o.workload == Workload::READY_SKEW && o.pe < inc_pe) {
@@ -909,7 +916,7 @@ int main(int argc, char **argv)
         // The standalone processes do not share a launch coordinator.  Give
         // worker READY kernels a bounded head start; a production resident
         // INC server is already polling before workers notify it.
-        if (o.pe == inc_pe)
+        if (o.pe == inc_pe && !test::ExternalStartGateEnabled())
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         const auto begin = std::chrono::steady_clock::now();
         std::cerr << "[STAGE] pe=" << o.pe << " launch iteration="

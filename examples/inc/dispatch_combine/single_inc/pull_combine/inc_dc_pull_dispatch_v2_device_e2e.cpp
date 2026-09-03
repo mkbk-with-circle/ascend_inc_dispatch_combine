@@ -16,6 +16,7 @@
 #include "utils.h"
 
 #include "inc_dc_pull_dispatch_v2.h"
+#include "inc_dc_pull_v2_test_start_gate.h"
 
 using namespace inc::dc::pull_v2;
 
@@ -1320,6 +1321,11 @@ int main(int argc, char **argv)
         }
         if (status == 0) status = aclrtSynchronizeStream(stream);
         if (status == 0) aclshmem_barrier_all();
+        if (status == 0 && !test::WaitForExternalStartGate(
+                               "dispatch", o.pe, iteration)) {
+            std::cerr << "[FAIL] dispatch external start gate\n";
+            status = 2;
+        }
         if (status != 0) {
             correct = false;
             break;
