@@ -34,6 +34,10 @@ Pull-Combine V2；不覆盖 yuanmingyu、Push V1 或历史实验。正式性能�
 W4 Dispatch 的主机完整调用计时最慢样本仍为 104.446 GB/s，高于 gate。纯 GET/relay
 只用于解释物理上限，未用于降低 gate。
 
+额外的 256 MiB/worker 单 wave 扩展测试也全量通过：W2 为 57.268 GB/s，W4 为
+106.690 GB/s（协议口径）。它们只证明更大 resident message 的正确性和扩展性，
+不替代上面的 128 MiB H11 gate。
+
 ## D+C 交叠：理论收益与真实收益
 
 schema v2 先独占运行同规格 D-only/C-only，再运行并发 case：
