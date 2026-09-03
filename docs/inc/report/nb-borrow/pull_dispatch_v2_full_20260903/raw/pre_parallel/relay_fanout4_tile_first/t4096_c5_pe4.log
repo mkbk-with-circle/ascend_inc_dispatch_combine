@@ -1,0 +1,2 @@
+PULL_DISPATCH_V2_RELAY workers=4 bytes_per_source=134217728 fanout=4 tile_bytes=4096 aiv=24 channels_per_source=5 warmup=2 measure=3 inner=1 min_gb_s=103.675 mean_gb_s=103.732 cv=0.000389706
+[PASS] pe=4 workers=4 pull_dispatch_v2_relay
