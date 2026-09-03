@@ -132,7 +132,8 @@ gate，不是公共 API。lane 传 0 时，从实际 `VECTOR_CORE_NUM` 取一半
 ` [delay_rank] [device_delay_cycles] [reorder_combine_rows]`。
 `aiv=0` 自动取实时 `VECTOR_CORE_NUM` 的一半；`fault=1..4` 分别注入 digest、重复
 ordinal、非有限 weight 和 count mismatch，`fault=5..6` 分别破坏 Combine
-descriptor 和 token ID。`delay_rank` 在设备内延迟一个 B 的通知；最后一个参数为
+descriptor 和 token ID，`fault=7..8` 分别令 token/payload ring offset 越界。
+`delay_rank` 在设备内延迟一个 B 的通知；最后一个参数为
 1 时会重排每个 B 的 Combine 行，强制走 hash fallback。当前 Dispatch 使用 BF16
 hidden，逐字节检查 A→INC packet、count reply、按 destination 去重后的 hidden、
 token/assignment wire view、ACK 和 completion；Combine 使用 FP32 partial 并对回传

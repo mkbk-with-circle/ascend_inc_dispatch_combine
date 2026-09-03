@@ -66,8 +66,11 @@ __aicore__ inline bool WaitSourceReady(__gm__ uint32_t *ready,
 __aicore__ inline bool DescriptorValid(
     __gm__ SparseCombineReadyDescriptor *descriptor, uint32_t source,
     uint32_t expected_rows, uint32_t hidden, uint64_t generation,
-    uint64_t sequence, uint32_t wave, uint32_t ring_slot)
+    uint64_t sequence, uint32_t wave, uint32_t ring_slot,
+    uint64_t token_ids_region_bytes, uint64_t partials_region_bytes)
 {
+    const uint64_t token_ids_bytes =
+        static_cast<uint64_t>(expected_rows) * sizeof(uint64_t);
     const uint64_t payload_elements =
         static_cast<uint64_t>(expected_rows) * hidden;
     if (payload_elements > ~0ull / sizeof(float))
@@ -83,7 +86,13 @@ __aicore__ inline bool DescriptorValid(
         descriptor->partial_dtype !=
             static_cast<uint32_t>(SparseCombineDType::FP32) ||
         descriptor->slot != ring_slot || descriptor->source_region_id == 0u ||
-        descriptor->token_ids_offset != 0u || descriptor->payload_offset != 0u ||
+        descriptor->token_ids_offset % sizeof(uint64_t) != 0u ||
+        descriptor->payload_offset % kSparseCombineAlignment != 0u ||
+        descriptor->token_ids_offset > token_ids_region_bytes ||
+        token_ids_bytes >
+            token_ids_region_bytes - descriptor->token_ids_offset ||
+        descriptor->payload_offset > partials_region_bytes ||
+        payload_bytes > partials_region_bytes - descriptor->payload_offset ||
         descriptor->payload_bytes != payload_bytes ||
         descriptor->metadata_digest == 0u ||
         (descriptor->flags & ~kSparseCombineFlagCanonicalRows) != 0u ||
@@ -172,7 +181,8 @@ void inc_dc_sparse_combine_device_e2e_kernel(
     GM_ADDR destination_rows,
     GM_ADDR inc_token_ids, GM_ADDR status_line, uint64_t ffts_addr,
     uint64_t journal_capacity, uint64_t journal_hash_capacity,
-    uint64_t row_capacity, uint32_t hidden, uint32_t worker_count,
+    uint64_t row_capacity, uint64_t token_ids_region_bytes,
+    uint64_t partials_region_bytes, uint32_t hidden, uint32_t worker_count,
     int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
     uint32_t ring_slot, int32_t delay_rank, uint64_t delay_cycles,
     uint32_t combine_flags)
@@ -280,7 +290,9 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                 if (expected_rows[source] > row_capacity ||
                     !DescriptorValid(descriptor, source,
                                      expected_rows[source], hidden,
-                                     generation, sequence, wave, ring_slot) ||
+                                     generation, sequence, wave, ring_slot,
+                                     token_ids_region_bytes,
+                                     partials_region_bytes) ||
                     descriptor->flags != combine_flags) {
                     *status = kStatusInvalidDescriptor;
                     break;
@@ -290,7 +302,7 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                         static_cast<uint64_t>(source) * row_capacity *
                             sizeof(uint64_t),
                     reinterpret_cast<__gm__ uint8_t *>(
-                        symmetric_token_ids),
+                        symmetric_token_ids) + descriptor->token_ids_offset,
                     expected_rows[source] * sizeof(uint64_t), source);
                 const bool canonical_rows = (combine_flags &
                     kSparseCombineFlagCanonicalRows) != 0u;
@@ -384,6 +396,7 @@ void inc_dc_sparse_combine_device_e2e_kernel(
             ? index_begin + entries_per_reducer
             : header->token_count;
         bool source_acquired[128]{};
+        uint64_t source_payload_offsets[128]{};
         const bool canonical = (combine_flags &
             kSparseCombineFlagCanonicalRows) != 0u;
         for (uint64_t index = index_begin; index < index_end; ++index) {
@@ -401,6 +414,14 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                         break;
                     }
                     source_acquired[source] = true;
+                    __gm__ SparseCombineReadyDescriptor *descriptor =
+                        reinterpret_cast<__gm__
+                            SparseCombineReadyDescriptor *>(
+                                descriptor_mailbox) + source;
+                    dcci_cacheline(
+                        reinterpret_cast<__gm__ uint8_t *>(descriptor) + 64u);
+                    source_payload_offsets[source] =
+                        descriptor->payload_offset;
                 }
                 __gm__ uint32_t *selected_map = canonical
                     ? canonical_row_map : row_map;
@@ -454,8 +475,10 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                     const uint32_t row = token_rows[source];
                     GetFp32RemoteToUb(
                         input_ub[input_ping],
-                        partials + static_cast<uint64_t>(row) * hidden +
-                            begin,
+                        reinterpret_cast<__gm__ float *>(
+                            reinterpret_cast<__gm__ uint8_t *>(partials) +
+                            source_payload_offsets[source]) +
+                            static_cast<uint64_t>(row) * hidden + begin,
                         count, static_cast<int32_t>(source), 0u);
                 }
                 while (source < worker_count) {
@@ -469,8 +492,11 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                         const uint32_t next_row = token_rows[next];
                         GetFp32RemoteToUb(
                             input_ub[next_ping],
-                            partials + static_cast<uint64_t>(next_row) *
-                                hidden + begin,
+                            reinterpret_cast<__gm__ float *>(
+                                reinterpret_cast<__gm__ uint8_t *>(partials) +
+                                source_payload_offsets[next]) +
+                                static_cast<uint64_t>(next_row) * hidden +
+                                begin,
                             count, static_cast<int32_t>(next), next_ping);
                     }
                     if (input_ping == 0u)
@@ -569,7 +595,8 @@ extern "C" void launch_inc_dc_sparse_combine_device_e2e(
     uint8_t *inc_token_ids,
     uint8_t *status_line, uint64_t ffts_addr,
     uint64_t journal_capacity, uint64_t journal_hash_capacity,
-    uint64_t row_capacity, uint32_t hidden, uint32_t worker_count,
+    uint64_t row_capacity, uint64_t token_ids_region_bytes,
+    uint64_t partials_region_bytes, uint32_t hidden, uint32_t worker_count,
     int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
     uint32_t ring_slot, int32_t delay_rank, uint64_t delay_cycles,
     uint32_t combine_flags)
@@ -579,7 +606,8 @@ extern "C" void launch_inc_dc_sparse_combine_device_e2e(
         descriptor_mailbox, ack_mailbox, completion_mailbox, journal_header,
         journal_entries, journal_hash, journal_row_map, combine_row_map,
         destination_rows, inc_token_ids, status_line, ffts_addr,
-        journal_capacity, journal_hash_capacity, row_capacity, hidden,
-        worker_count, inc_pe, generation, sequence, wave, ring_slot,
+        journal_capacity, journal_hash_capacity, row_capacity,
+        token_ids_region_bytes, partials_region_bytes, hidden, worker_count,
+        inc_pe, generation, sequence, wave, ring_slot,
         delay_rank, delay_cycles, combine_flags);
 }

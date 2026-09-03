@@ -9,6 +9,7 @@ constexpr uint32_t kSparseCombineMagic = 0x53434d42u; // 'SCMB'
 constexpr uint16_t kSparseCombineAbiVersion = 1u;
 constexpr uint32_t kSparseCombineFlagCanonicalRows = 1u << 0;
 constexpr uint32_t kSparseCombineMaxWorkers = 128u;
+constexpr uint32_t kSparseCombineAlignment = 64u;
 
 enum class SparseCombineDType : uint32_t {
     FP32 = 0u,

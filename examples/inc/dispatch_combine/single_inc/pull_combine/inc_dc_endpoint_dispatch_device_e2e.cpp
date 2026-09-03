@@ -52,7 +52,8 @@ extern "C" void launch_inc_dc_sparse_combine_device_e2e(
     uint8_t *inc_token_ids,
     uint8_t *status_line, uint64_t ffts_addr,
     uint64_t journal_capacity, uint64_t journal_hash_capacity,
-    uint64_t row_capacity, uint32_t hidden, uint32_t worker_count,
+    uint64_t row_capacity, uint64_t token_ids_region_bytes,
+    uint64_t partials_region_bytes, uint32_t hidden, uint32_t worker_count,
     int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
     uint32_t ring_slot, int32_t delay_rank, uint64_t delay_cycles,
     uint32_t combine_flags);
@@ -68,6 +69,7 @@ namespace {
 constexpr uint64_t kGeneration = 17u;
 constexpr uint32_t kWave = 5u;
 constexpr uint32_t kExpertCount = 64u;
+constexpr uint64_t kQualificationRegionPrefix = 64u;
 
 void HashBytes(uint64_t *hash, const void *data, uint64_t bytes)
 {
@@ -201,7 +203,8 @@ int main(int argc, char **argv)
                      " <hidden> <topk> [aiv; 0=half of live AIV]"
                      " [fault; 0=none, 1=digest, 2=duplicate ordinal,"
                      " 3=nonfinite weight, 4=count mismatch,"
-                     " 5=combine descriptor, 6=combine token ID]"
+                     " 5=combine descriptor, 6=combine token ID,"
+                     " 7=token offset, 8=payload offset]"
                      " [delay_rank; -1=none] [device_delay_cycles]"
                      " [reorder_combine_rows; 0|1]\n";
         return 2;
@@ -231,7 +234,7 @@ int main(int argc, char **argv)
     g_npus = static_cast<int>(pes);
     if (workers < 2u || workers > 8u || pe < 0 ||
         pe >= static_cast<int>(pes) || hidden == 0u ||
-        (tokens != 0u && topk == 0u) || topk > 32u || fault > 6u ||
+        (tokens != 0u && topk == 0u) || topk > 32u || fault > 8u ||
         (tokens == 0u && fault != 0u) || delay_rank < -1 ||
         delay_rank >= static_cast<int32_t>(workers) ||
         (delay_rank == -1 && delay_cycles != 0u) ||
@@ -254,8 +257,8 @@ int main(int argc, char **argv)
     }
     const bool expect_reject = fault >= 1u && fault <= 4u;
     const bool expect_combine_reject = fault >= 5u;
-    const uint32_t expected_combine_status = fault == 5u ? 2u :
-        (fault == 6u ? 5u : 0u);
+    const uint32_t expected_combine_status = fault == 6u ? 5u :
+        (fault >= 5u ? 2u : 0u);
     if (expect_reject && pe == 0) {
         EndpointDispatchPacketHeader *header =
             reinterpret_cast<EndpointDispatchPacketHeader *>(
@@ -322,6 +325,12 @@ int main(int argc, char **argv)
     const uint64_t combine_control_bytes =
         (static_cast<uint64_t>(workers + 2u) * sizeof(uint32_t) + 63u) /
         64u * 64u;
+    const uint64_t combine_token_region_bytes =
+        kQualificationRegionPrefix +
+        combine_row_capacity * sizeof(uint64_t);
+    const uint64_t combine_partial_region_bytes =
+        kQualificationRegionPrefix +
+        combine_row_capacity * hidden * sizeof(float);
     constexpr uint64_t kMaxStagingBytesPerDestination = 4ull << 20;
     const uint64_t staging_bytes_per_destination =
         kMaxStagingBytesPerDestination;
@@ -420,9 +429,9 @@ int main(int argc, char **argv)
         destination_rows = static_cast<uint8_t *>(aclshmem_malloc(
             static_cast<uint64_t>(workers) * sizeof(uint32_t)));
         combine_token_ids = static_cast<uint8_t *>(aclshmem_malloc(
-            combine_row_capacity * sizeof(uint64_t)));
+            combine_token_region_bytes));
         combine_partials = static_cast<uint8_t *>(aclshmem_malloc(
-            combine_row_capacity * hidden * sizeof(float)));
+            combine_partial_region_bytes));
         combine_output = static_cast<uint8_t *>(aclshmem_malloc(
             std::max<uint64_t>(1u, static_cast<uint64_t>(tokens) * hidden) *
             sizeof(float)));
@@ -522,9 +531,9 @@ int main(int argc, char **argv)
         ZeroDevice(destination_rows,
                    static_cast<uint64_t>(workers) * sizeof(uint32_t));
         ZeroDevice(combine_token_ids,
-                   combine_row_capacity * sizeof(uint64_t));
+                   combine_token_region_bytes);
         ZeroDevice(combine_partials,
-                   combine_row_capacity * hidden * sizeof(float));
+                   combine_partial_region_bytes);
         ZeroDevice(combine_output,
                    std::max<uint64_t>(
                        1u, static_cast<uint64_t>(tokens) * hidden) *
@@ -558,13 +567,15 @@ int main(int argc, char **argv)
                 partials[static_cast<uint64_t>(row) * hidden + element] =
                     PartialValue(pe, ids[row], element);
         if (!ids.empty())
-            status = aclrtMemcpy(combine_token_ids,
+            status = aclrtMemcpy(combine_token_ids +
+                                     kQualificationRegionPrefix,
                                  ids.size() * sizeof(uint64_t), ids.data(),
                                  ids.size() * sizeof(uint64_t),
                                  ACL_MEMCPY_HOST_TO_DEVICE);
         if (status == 0 && !partials.empty())
             status = aclrtMemcpy(
-                combine_partials, partials.size() * sizeof(float),
+                combine_partials + kQualificationRegionPrefix,
+                partials.size() * sizeof(float),
                 partials.data(), partials.size() * sizeof(float),
                 ACL_MEMCPY_HOST_TO_DEVICE);
         SparseCombineReadyDescriptor descriptor{};
@@ -575,12 +586,18 @@ int main(int argc, char **argv)
         descriptor.row_count = ids.size();
         descriptor.hidden = hidden;
         descriptor.source_region_id = 1u;
+        descriptor.token_ids_offset = kQualificationRegionPrefix;
+        descriptor.payload_offset = kQualificationRegionPrefix;
         descriptor.payload_bytes =
             static_cast<uint64_t>(ids.size()) * hidden * sizeof(float);
         descriptor.metadata_digest = 1u + static_cast<uint32_t>(pe);
         descriptor.flags = reorder_combine_rows == 0u
             ? kSparseCombineFlagCanonicalRows : 0u;
         if (fault == 5u && pe == 0) ++descriptor.row_count;
+        if (fault == 7u && pe == 0)
+            descriptor.token_ids_offset = combine_token_region_bytes;
+        if (fault == 8u && pe == 0)
+            descriptor.payload_offset = combine_partial_region_bytes;
         if (status == 0)
             status = aclrtMemcpy(
                 combine_descriptors + static_cast<uint64_t>(pe) *
@@ -643,7 +660,9 @@ int main(int argc, char **argv)
             journal_hash, journal_row_map, combine_row_map,
             destination_rows, inc_combine_token_ids, combine_status_line,
             shmemx_get_ffts_config(), journal_capacity,
-            journal_hash_capacity, combine_row_capacity, hidden, workers,
+            journal_hash_capacity, combine_row_capacity,
+            combine_token_region_bytes, combine_partial_region_bytes,
+            hidden, workers,
             inc_pe, kGeneration, 1u, kWave, 0u, delay_rank, delay_cycles,
             reorder_combine_rows == 0u
                 ? kSparseCombineFlagCanonicalRows : 0u);
