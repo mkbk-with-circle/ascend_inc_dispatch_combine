@@ -51,6 +51,37 @@ struct alignas(64) Ready {
 };
 static_assert(sizeof(Ready) == 64u, "pull Dispatch READY ABI drift");
 
+struct alignas(64) SourceConsumed {
+    uint32_t magic = kPullDispatchMagic;
+    uint16_t abi_version = kPullDispatchAbiVersion;
+    uint16_t struct_bytes = sizeof(SourceConsumed);
+    uint64_t session_id = 0u;
+    uint64_t generation = 0u;
+    uint64_t sequence = 0u;
+    uint32_t wave = 0u;
+    uint32_t source_rank = 0u;
+    uint32_t status = 0u;
+    uint16_t ring_slot = 0u;
+    uint16_t reserved0 = 0u;
+    uint64_t bytes_consumed = 0u;
+    uint64_t publication = 0u;
+};
+static_assert(sizeof(SourceConsumed) == 64u,
+              "pull Dispatch source ACK ABI drift");
+
+struct alignas(64) PullTimeline {
+    uint32_t status = 0u;
+    uint32_t ready_sources = 0u;
+    uint64_t kernel_start = 0u;
+    uint64_t all_ready = 0u;
+    uint64_t headers_pulled = 0u;
+    uint64_t payloads_pulled = 0u;
+    uint64_t source_acks_done = 0u;
+    uint64_t reserved[2]{};
+};
+static_assert(sizeof(PullTimeline) == 64u,
+              "pull Dispatch timeline ABI drift");
+
 // Canonical source slot.  The INC first GETs this fixed header, then pulls
 // metadata and hidden tiles from offsets derived and checked from the counts.
 struct alignas(64) SlotHeader {
