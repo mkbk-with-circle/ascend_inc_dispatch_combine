@@ -30,7 +30,8 @@ extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
     uint64_t row_capacity, uint64_t assignment_capacity,
     uint32_t hidden,
     uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
-    int32_t inc_pe, uint64_t generation, uint32_t wave);
+    int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
+    uint32_t ring_slot);
 
 extern "C" void launch_inc_dc_device_journal_index(
     uint32_t block_dim, void *stream, uint8_t *inc_packets,
@@ -52,8 +53,9 @@ extern "C" void launch_inc_dc_sparse_combine_device_e2e(
     uint8_t *status_line, uint64_t ffts_addr,
     uint64_t journal_capacity, uint64_t journal_hash_capacity,
     uint64_t row_capacity, uint32_t hidden, uint32_t worker_count,
-    int32_t inc_pe, uint64_t generation, uint32_t wave, int32_t delay_rank,
-    uint64_t delay_cycles, uint32_t combine_flags);
+    int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
+    uint32_t ring_slot, int32_t delay_rank, uint64_t delay_cycles,
+    uint32_t combine_flags);
 
 int g_npus = 5;
 const char *ipport = "tcp://127.0.0.1:28780";
@@ -610,7 +612,7 @@ int main(int argc, char **argv)
             row_capacity,
             assignment_capacity, hidden,
             static_cast<uint32_t>(EndpointDataType::BF16), kExpertCount,
-            workers, inc_pe, kGeneration, kWave);
+            workers, inc_pe, kGeneration, 1u, kWave, 0u);
         status = aclrtSynchronizeStream(stream);
         const auto end = std::chrono::steady_clock::now();
         e2e_us = std::chrono::duration<double, std::micro>(end - begin).count();
@@ -642,7 +644,7 @@ int main(int argc, char **argv)
             destination_rows, inc_combine_token_ids, combine_status_line,
             shmemx_get_ffts_config(), journal_capacity,
             journal_hash_capacity, combine_row_capacity, hidden, workers,
-            inc_pe, kGeneration, kWave, delay_rank, delay_cycles,
+            inc_pe, kGeneration, 1u, kWave, 0u, delay_rank, delay_cycles,
             reorder_combine_rows == 0u
                 ? kSparseCombineFlagCanonicalRows : 0u);
         status = aclrtSynchronizeStream(stream);

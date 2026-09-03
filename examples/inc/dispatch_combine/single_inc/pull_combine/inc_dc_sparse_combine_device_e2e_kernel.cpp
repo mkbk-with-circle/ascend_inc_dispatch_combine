@@ -66,7 +66,7 @@ __aicore__ inline bool WaitSourceReady(__gm__ uint32_t *ready,
 __aicore__ inline bool DescriptorValid(
     __gm__ SparseCombineReadyDescriptor *descriptor, uint32_t source,
     uint32_t expected_rows, uint32_t hidden, uint64_t generation,
-    uint32_t wave)
+    uint64_t sequence, uint32_t wave, uint32_t ring_slot)
 {
     const uint64_t payload_elements =
         static_cast<uint64_t>(expected_rows) * hidden;
@@ -76,12 +76,13 @@ __aicore__ inline bool DescriptorValid(
     if (descriptor->magic != kSparseCombineMagic ||
         descriptor->abi_version != kSparseCombineAbiVersion ||
         descriptor->struct_bytes != sizeof(SparseCombineReadyDescriptor) ||
-        descriptor->generation != generation || descriptor->sequence != 1u ||
+        descriptor->generation != generation ||
+        descriptor->sequence != sequence ||
         descriptor->wave != wave || descriptor->source_rank != source ||
         descriptor->row_count != expected_rows || descriptor->hidden != hidden ||
         descriptor->partial_dtype !=
             static_cast<uint32_t>(SparseCombineDType::FP32) ||
-        descriptor->slot != 0u || descriptor->source_region_id == 0u ||
+        descriptor->slot != ring_slot || descriptor->source_region_id == 0u ||
         descriptor->token_ids_offset != 0u || descriptor->payload_offset != 0u ||
         descriptor->payload_bytes != payload_bytes ||
         descriptor->metadata_digest == 0u ||
@@ -142,13 +143,13 @@ __aicore__ inline void GetFp32RemoteToUb(__ubuf__ uint8_t *destination,
 
 __aicore__ inline void PublishAck(
     __gm__ SparseCombineDeviceAck *ack, uint32_t source, uint32_t status,
-    uint64_t rows, uint64_t generation)
+    uint64_t rows, uint64_t generation, uint64_t sequence)
 {
     const int32_t pe = static_cast<int32_t>(source);
     aclshmem_uint32_p(&ack->magic, kSparseCombineMagic, pe);
     aclshmem_uint16_p(&ack->abi_version, kSparseCombineAbiVersion, pe);
     aclshmem_uint16_p(&ack->struct_bytes, sizeof(SparseCombineDeviceAck), pe);
-    aclshmem_uint64_p(&ack->sequence, 1u, pe);
+    aclshmem_uint64_p(&ack->sequence, sequence, pe);
     aclshmem_uint32_p(&ack->source_rank, source, pe);
     aclshmem_uint32_p(&ack->status, status, pe);
     aclshmem_uint64_p(&ack->rows_consumed, status == 0u ? rows : 0u, pe);
@@ -172,8 +173,9 @@ void inc_dc_sparse_combine_device_e2e_kernel(
     GM_ADDR inc_token_ids, GM_ADDR status_line, uint64_t ffts_addr,
     uint64_t journal_capacity, uint64_t journal_hash_capacity,
     uint64_t row_capacity, uint32_t hidden, uint32_t worker_count,
-    int32_t inc_pe, uint64_t generation, uint32_t wave, int32_t delay_rank,
-    uint64_t delay_cycles, uint32_t combine_flags)
+    int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
+    uint32_t ring_slot, int32_t delay_rank, uint64_t delay_cycles,
+    uint32_t combine_flags)
 {
     shmemx_set_ffts_config(ffts_addr);
     const uint32_t block = AscendC::GetBlockIdx();
@@ -278,7 +280,7 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                 if (expected_rows[source] > row_capacity ||
                     !DescriptorValid(descriptor, source,
                                      expected_rows[source], hidden,
-                                     generation, wave) ||
+                                     generation, sequence, wave, ring_slot) ||
                     descriptor->flags != combine_flags) {
                     *status = kStatusInvalidDescriptor;
                     break;
@@ -523,7 +525,8 @@ void inc_dc_sparse_combine_device_e2e_kernel(
             __gm__ SparseCombineDeviceAck *ack =
                 reinterpret_cast<__gm__ SparseCombineDeviceAck *>(
                     ack_mailbox) + source;
-            PublishAck(ack, source, *status, expected_rows[source], generation);
+            PublishAck(ack, source, *status, expected_rows[source], generation,
+                       sequence);
         }
         for (uint32_t owner = 0u; owner < worker_count; ++owner) {
             uint32_t rows = 0u;
@@ -567,8 +570,9 @@ extern "C" void launch_inc_dc_sparse_combine_device_e2e(
     uint8_t *status_line, uint64_t ffts_addr,
     uint64_t journal_capacity, uint64_t journal_hash_capacity,
     uint64_t row_capacity, uint32_t hidden, uint32_t worker_count,
-    int32_t inc_pe, uint64_t generation, uint32_t wave, int32_t delay_rank,
-    uint64_t delay_cycles, uint32_t combine_flags)
+    int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
+    uint32_t ring_slot, int32_t delay_rank, uint64_t delay_cycles,
+    uint32_t combine_flags)
 {
     inc_dc_sparse_combine_device_e2e_kernel<<<block_dim, nullptr, stream>>>(
         symmetric_token_ids, symmetric_partials, reduced_output,
@@ -576,6 +580,6 @@ extern "C" void launch_inc_dc_sparse_combine_device_e2e(
         journal_entries, journal_hash, journal_row_map, combine_row_map,
         destination_rows, inc_token_ids, status_line, ffts_addr,
         journal_capacity, journal_hash_capacity, row_capacity, hidden,
-        worker_count, inc_pe, generation, wave, delay_rank, delay_cycles,
-        combine_flags);
+        worker_count, inc_pe, generation, sequence, wave, ring_slot,
+        delay_rank, delay_cycles, combine_flags);
 }

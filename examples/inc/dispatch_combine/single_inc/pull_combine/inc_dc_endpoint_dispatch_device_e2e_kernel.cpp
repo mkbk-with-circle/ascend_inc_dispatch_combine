@@ -63,7 +63,8 @@ __aicore__ inline void CopyLocalGm(__gm__ uint8_t *destination,
 __aicore__ inline bool HeaderValid(
     __gm__ const EndpointDispatchPacketHeader *header, uint32_t source,
     uint32_t worker_count, uint32_t hidden, uint32_t dtype,
-    uint64_t generation, uint32_t wave, uint64_t slot_bytes)
+    uint64_t generation, uint64_t sequence, uint32_t wave,
+    uint64_t slot_bytes)
 {
     const uint64_t token_bytes = static_cast<uint64_t>(header->token_count) *
         sizeof(EndpointDispatchTokenRecord);
@@ -85,7 +86,7 @@ __aicore__ inline bool HeaderValid(
     return header->magic == kEndpointDispatchMagic &&
         header->abi_version == kEndpointDispatchAbiVersion &&
         header->header_bytes == sizeof(EndpointDispatchPacketHeader) &&
-        header->generation == generation && header->sequence == 1u &&
+        header->generation == generation && header->sequence == sequence &&
         header->wave == wave && header->source_rank == source &&
         header->worker_count == worker_count && header->hidden == hidden &&
         header->dtype == dtype && header->flags == 0u &&
@@ -236,7 +237,7 @@ __aicore__ inline uint32_t ReadCount(
 
 __aicore__ inline void PublishAck(
     __gm__ EndpointDispatchAck *ack, uint32_t source, uint32_t status,
-    uint64_t tokens_consumed, uint64_t generation)
+    uint64_t tokens_consumed, uint64_t generation, uint64_t sequence)
 {
     const int32_t source_pe = static_cast<int32_t>(source);
     aclshmem_uint32_p(&ack->magic, kEndpointDispatchMagic, source_pe);
@@ -244,7 +245,7 @@ __aicore__ inline void PublishAck(
                       source_pe);
     aclshmem_uint16_p(&ack->struct_bytes, sizeof(EndpointDispatchAck),
                       source_pe);
-    aclshmem_uint64_p(&ack->sequence, 1u, source_pe);
+    aclshmem_uint64_p(&ack->sequence, sequence, source_pe);
     aclshmem_uint32_p(&ack->source_rank, source, source_pe);
     aclshmem_uint32_p(&ack->status, status, source_pe);
     aclshmem_uint64_p(&ack->tokens_consumed, tokens_consumed, source_pe);
@@ -272,7 +273,8 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     uint64_t row_capacity, uint64_t assignment_capacity,
     uint32_t hidden,
     uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
-    int32_t inc_pe, uint64_t generation, uint32_t wave)
+    int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
+    uint32_t ring_slot)
 {
     shmemx_set_ffts_config(ffts_addr);
     const uint32_t block = AscendC::GetBlockIdx();
@@ -354,7 +356,8 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                     commit->abi_version != kEndpointDispatchAbiVersion ||
                     commit->struct_bytes != sizeof(EndpointDispatchCommit) ||
                     commit->source_rank != source ||
-                    commit->sequence != 1u || commit->slot != 0u ||
+                    commit->sequence != sequence ||
+                    commit->slot != ring_slot ||
                     commit->flags != 0u || commit->packet_bytes == 0u ||
                     commit->packet_bytes > slot_bytes ||
                     commit->reserved != 0u) {
@@ -368,7 +371,7 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                     reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
                         packet);
                 if (!HeaderValid(header, source, worker_count, hidden, dtype,
-                                 generation, wave, slot_bytes) ||
+                                 generation, sequence, wave, slot_bytes) ||
                     header->packet_bytes != commit->packet_bytes ||
                     header->metadata_digest != commit->metadata_digest) {
                     *global_status = kStatusInvalidPacket;
@@ -662,7 +665,7 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                 tokens_consumed = header->token_count;
             }
             PublishAck(ack, source, *global_status, tokens_consumed,
-                       generation);
+                       generation, sequence);
         }
     }
 
@@ -733,7 +736,8 @@ extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
     uint64_t row_capacity, uint64_t assignment_capacity,
     uint32_t hidden,
     uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
-    int32_t inc_pe, uint64_t generation, uint32_t wave)
+    int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
+    uint32_t ring_slot)
 {
     inc_dc_endpoint_dispatch_device_e2e_kernel<<<
         block_dim, nullptr, stream>>>(
@@ -744,5 +748,6 @@ extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
         slot_bytes,
         staging_bytes_per_destination, row_capacity,
         assignment_capacity, hidden, dtype,
-        expert_count, worker_count, inc_pe, generation, wave);
+        expert_count, worker_count, inc_pe, generation, sequence, wave,
+        ring_slot);
 }

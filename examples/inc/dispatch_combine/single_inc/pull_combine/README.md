@@ -22,6 +22,8 @@ egress:   ready token runs ──coalesced PUT──> original A ──completio
 - INC 只保留当前 generation/wave 的临时状态，跨 wave 不保存路由状态。
 - ACK 只在相关 GET 或下游 PUT 完成后发布；失败也发布负 ACK 释放发送槽。
 - generation、sequence、semantic digest、范围、字节数、保留字段均 fail-closed。
+- `generation / sequence / wave / ring_slot` 均由调用者显式传入设备路径；内核不再
+  假定首个 sequence 或第 0 槽，因此同一实现可直接被后续多槽 ring 驱动。
 - 严格路径使用 FP32 partial；性能路径允许 FP16/BF16 partial。
 
 ## 当前完成度
