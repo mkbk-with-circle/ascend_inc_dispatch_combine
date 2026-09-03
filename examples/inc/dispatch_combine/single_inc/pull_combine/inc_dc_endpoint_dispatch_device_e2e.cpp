@@ -30,6 +30,10 @@ namespace {
 constexpr uint64_t kGeneration = 17u;
 constexpr uint32_t kWave = 5u;
 constexpr uint32_t kRingSlot = 1u;
+constexpr uint64_t kNextGeneration = kGeneration + 1u;
+constexpr uint64_t kNextSequence = 2u;
+constexpr uint32_t kNextWave = kWave + 1u;
+constexpr uint32_t kNextRingSlot = 0u;
 constexpr uint32_t kExpertCount = 64u;
 constexpr uint64_t kQualificationRegionPrefix = 64u;
 
@@ -98,18 +102,22 @@ float PartialValue(uint32_t expert_worker, uint64_t token_id,
 
 EndpointDispatchInput MakeInput(uint32_t source, uint32_t workers,
                                 uint32_t tokens, uint32_t hidden,
-                                uint32_t topk)
+                                uint32_t topk,
+                                uint64_t generation = kGeneration,
+                                uint64_t sequence = 1u,
+                                uint32_t wave = kWave,
+                                uint32_t ring_slot = kRingSlot)
 {
     EndpointDispatchInput input{};
     input.config.worker_count = workers;
     input.config.expert_count = kExpertCount;
     input.config.hidden = hidden;
     input.config.dtype = EndpointDataType::BF16;
-    input.config.wave = kWave;
+    input.config.wave = wave;
     input.config.source_rank = source;
-    input.config.generation = kGeneration;
-    input.config.sequence = 1u;
-    input.config.ring_slot = kRingSlot;
+    input.config.generation = generation;
+    input.config.sequence = sequence;
+    input.config.ring_slot = ring_slot;
     input.assignment_offsets.push_back(0u);
     for (uint32_t token = 0u; token < tokens; ++token) {
         input.token_ids.push_back(
@@ -221,6 +229,20 @@ int main(int argc, char **argv)
         EndpointDispatchStatus::OK) {
         std::cerr << packet_error << '\n';
         return Fail("build packet", 2);
+    }
+    std::vector<uint8_t> next_local_packet;
+    EndpointDispatchCommit next_local_commit{};
+    if (overlap_replay != 0u) {
+        const EndpointDispatchInput next_local_input = MakeInput(
+            packet_source, workers, tokens, hidden, topk, kNextGeneration,
+            kNextSequence, kNextWave, kNextRingSlot);
+        if (BuildEndpointDispatchPacket(next_local_input, &next_local_packet,
+                                        &next_local_commit, &packet_error) !=
+                EndpointDispatchStatus::OK ||
+            next_local_packet.size() != local_packet.size()) {
+            std::cerr << packet_error << '\n';
+            return Fail("build next-wave packet", 2);
+        }
     }
     const bool expect_reject = fault >= 1u && fault <= 4u;
     const bool expect_combine_reject = fault >= 5u;
@@ -336,8 +358,16 @@ int main(int argc, char **argv)
     double index_us = 0.0;
     double combine_us = 0.0;
     double overlap_us = 0.0;
+    EndpointDispatchTimeline dispatch_timeline{};
+    EndpointDispatchTimeline final_dispatch_timeline{};
     SparseCombineTimeline combine_timeline{};
-    uint32_t dispatch_aiv = 0u;
+    uint32_t inc_dispatch_aiv = 0u;
+    uint32_t inc_combine_aiv = 0u;
+    uint32_t worker_dispatch_aiv = 0u;
+    uint32_t worker_combine_aiv = 0u;
+    uint32_t local_dispatch_aiv = 0u;
+    uint32_t local_combine_aiv = 0u;
+    uint32_t worker_reserved_aiv = 0u;
     EndpointDispatchDeviceArgs dispatch_args{};
     SparseCombineDeviceArgs combine_args{};
 
@@ -350,9 +380,23 @@ int main(int argc, char **argv)
     }
     if (status == 0) {
         const uint32_t half_aiv = static_cast<uint32_t>(live_aiv / 2);
-        dispatch_aiv = requested_aiv == 0u ? half_aiv : requested_aiv;
-        if (dispatch_aiv == 0u || dispatch_aiv > live_aiv)
+        inc_dispatch_aiv = requested_aiv == 0u ? half_aiv : requested_aiv;
+        inc_combine_aiv = inc_dispatch_aiv;
+        worker_dispatch_aiv = inc_dispatch_aiv;
+        worker_combine_aiv = 1u;
+        if (inc_dispatch_aiv == 0u ||
+            inc_dispatch_aiv > half_aiv ||
+            worker_dispatch_aiv + worker_combine_aiv >=
+                static_cast<uint32_t>(live_aiv)) {
             status = 2;
+        } else {
+            worker_reserved_aiv = static_cast<uint32_t>(live_aiv) -
+                worker_dispatch_aiv - worker_combine_aiv;
+            local_dispatch_aiv = pe == inc_pe
+                ? inc_dispatch_aiv : worker_dispatch_aiv;
+            local_combine_aiv = pe == inc_pe
+                ? inc_combine_aiv : worker_combine_aiv;
+        }
     }
     if (status == 0) status = aclrtCreateStream(&stream);
     if (status == 0 && overlap_replay != 0u)
@@ -387,7 +431,7 @@ int main(int argc, char **argv)
         hidden_staging = staging_bytes_per_destination == 0u
             ? nullptr
             : static_cast<uint8_t *>(aclshmem_malloc(
-                  staging_bytes_per_destination * dispatch_aiv));
+                  staging_bytes_per_destination * inc_dispatch_aiv));
         journal_header = static_cast<uint8_t *>(aclshmem_malloc(
             sizeof(DeviceJournalHeader)));
         if (overlap_replay != 0u)
@@ -473,7 +517,7 @@ int main(int argc, char **argv)
                    static_cast<uint64_t>(workers) * workers * 64u);
         if (hidden_staging != nullptr)
             ZeroDevice(hidden_staging,
-                       staging_bytes_per_destination * dispatch_aiv);
+                       staging_bytes_per_destination * inc_dispatch_aiv);
         ZeroDevice(journal_header, sizeof(DeviceJournalHeader));
         if (overlap_journal_header != nullptr)
             ZeroDevice(overlap_journal_header, sizeof(DeviceJournalHeader));
@@ -628,11 +672,15 @@ int main(int argc, char **argv)
         args.sequence = 1u;
         args.wave = kWave;
         args.ring_slot = kRingSlot;
-        if (LaunchEndpointDispatch(dispatch_aiv, stream, args) !=
+        if (LaunchEndpointDispatch(local_dispatch_aiv, stream, args) !=
             EndpointLaunchStatus::OK)
             status = 2;
         if (status == 0) status = aclrtSynchronizeStream(stream);
         const auto end = std::chrono::steady_clock::now();
+        if (status == 0 && pe == inc_pe)
+            status = aclrtMemcpy(
+                &dispatch_timeline, sizeof(dispatch_timeline), status_line,
+                sizeof(dispatch_timeline), ACL_MEMCPY_DEVICE_TO_HOST);
         e2e_us = std::chrono::duration<double, std::micro>(end - begin).count();
     }
     if (status == 0) aclshmem_barrier_all();
@@ -698,7 +746,7 @@ int main(int argc, char **argv)
         args.delay_cycles = delay_cycles;
         args.flags = reorder_combine_rows == 0u
             ? kSparseCombineFlagCanonicalRows : 0u;
-        if (LaunchSparseCombine(dispatch_aiv, stream, args) !=
+        if (LaunchSparseCombine(local_combine_aiv, stream, args) !=
             EndpointLaunchStatus::OK)
             status = 2;
         if (status == 0) status = aclrtSynchronizeStream(stream);
@@ -709,12 +757,32 @@ int main(int argc, char **argv)
     if (status == 0) aclshmem_barrier_all();
 
     if (status == 0 && overlap_replay != 0u) {
+        if (pe < inc_pe) {
+            status = aclrtMemcpy(source_packet, slot_bytes,
+                                 next_local_packet.data(), slot_bytes,
+                                 ACL_MEMCPY_HOST_TO_DEVICE);
+            if (status == 0) {
+                status = aclrtMemcpy(
+                    commits + static_cast<uint64_t>(pe) *
+                        sizeof(next_local_commit),
+                    sizeof(next_local_commit), &next_local_commit,
+                    sizeof(next_local_commit), ACL_MEMCPY_HOST_TO_DEVICE);
+            }
+        }
+    }
+    if (status == 0 && overlap_replay != 0u) aclshmem_barrier_all();
+
+    if (status == 0 && overlap_replay != 0u) {
         dispatch_args.journal_header = overlap_journal_header;
+        dispatch_args.generation = kNextGeneration;
+        dispatch_args.sequence = kNextSequence;
+        dispatch_args.wave = kNextWave;
+        dispatch_args.ring_slot = kNextRingSlot;
         const auto begin = std::chrono::steady_clock::now();
-        if (LaunchEndpointDispatch(dispatch_aiv, overlap_stream,
+        if (LaunchEndpointDispatch(local_dispatch_aiv, overlap_stream,
                                    dispatch_args) !=
             EndpointLaunchStatus::OK ||
-            LaunchSparseCombine(dispatch_aiv, stream, combine_args) !=
+            LaunchSparseCombine(local_combine_aiv, stream, combine_args) !=
                 EndpointLaunchStatus::OK) {
             status = 2;
         }
@@ -728,10 +796,13 @@ int main(int argc, char **argv)
 
     bool correct = status == 0;
     if (correct && pe == inc_pe) {
-        uint32_t device_status = std::numeric_limits<uint32_t>::max();
-        status = aclrtMemcpy(&device_status, sizeof(device_status), status_line,
-                             sizeof(device_status),
+        final_dispatch_timeline.status =
+            std::numeric_limits<uint32_t>::max();
+        status = aclrtMemcpy(&final_dispatch_timeline,
+                             sizeof(final_dispatch_timeline), status_line,
+                             sizeof(final_dispatch_timeline),
                              ACL_MEMCPY_DEVICE_TO_HOST);
+        const uint32_t device_status = final_dispatch_timeline.status;
         correct = status == 0 && device_status ==
             (expect_reject ? 3u : 0u);
         if (!correct)
@@ -746,8 +817,11 @@ int main(int argc, char **argv)
             std::vector<uint8_t> expected_packet;
             EndpointDispatchCommit expected_commit{};
             std::string error;
-            const EndpointDispatchInput expected_input = MakeInput(
-                source, workers, tokens, hidden, topk);
+            const EndpointDispatchInput expected_input = overlap_replay != 0u
+                ? MakeInput(source, workers, tokens, hidden, topk,
+                            kNextGeneration, kNextSequence, kNextWave,
+                            kNextRingSlot)
+                : MakeInput(source, workers, tokens, hidden, topk);
             correct = BuildEndpointDispatchPacket(
                           expected_input, &expected_packet, &expected_commit,
                           &error) == EndpointDispatchStatus::OK;
@@ -886,8 +960,8 @@ int main(int argc, char **argv)
                 replay_header.magic == kDeviceJournalMagic &&
                 replay_header.abi_version == kDeviceJournalAbiVersion &&
                 replay_header.struct_bytes == sizeof(DeviceJournalHeader) &&
-                replay_header.generation == kGeneration &&
-                replay_header.wave == kWave &&
+                replay_header.generation == kNextGeneration &&
+                replay_header.wave == kNextWave &&
                 replay_header.worker_count == workers &&
                 replay_header.token_count ==
                     static_cast<uint64_t>(workers) * tokens &&
@@ -919,6 +993,12 @@ int main(int argc, char **argv)
             completion.assignment_count == 0u;
     }
     if (correct && pe < inc_pe && !expect_reject) {
+        const uint64_t expected_dispatch_generation = overlap_replay != 0u
+            ? kNextGeneration : kGeneration;
+        const uint64_t expected_dispatch_sequence = overlap_replay != 0u
+            ? kNextSequence : 1u;
+        const uint32_t expected_dispatch_wave = overlap_replay != 0u
+            ? kNextWave : kWave;
         EndpointDispatchAck ack{};
         EndpointDispatchReceiveCompletion completion{};
         status = aclrtMemcpy(
@@ -931,11 +1011,13 @@ int main(int argc, char **argv)
                 completions + static_cast<uint64_t>(pe) * sizeof(completion),
                 sizeof(completion), ACL_MEMCPY_DEVICE_TO_HOST);
         correct = status == 0 && ack.magic == kEndpointDispatchMagic &&
-            ack.generation == kGeneration && ack.sequence == 1u &&
+            ack.generation == expected_dispatch_generation &&
+            ack.sequence == expected_dispatch_sequence &&
             ack.source_rank == static_cast<uint32_t>(pe) &&
             ack.status == 0u && ack.tokens_consumed == tokens &&
             completion.magic == kEndpointDispatchMagic &&
-            completion.generation == kGeneration &&
+            completion.generation == expected_dispatch_generation &&
+            completion.wave == expected_dispatch_wave &&
             completion.destination_rank == static_cast<uint32_t>(pe) &&
             completion.status == 0u;
         if (!correct) {
@@ -1302,7 +1384,11 @@ int main(int argc, char **argv)
     if (!correct) return Fail("device endpoint Dispatch", status);
     std::cout << "[PASS] pe=" << pe << " workers=" << workers
               << " tokens=" << tokens << " hidden=" << hidden
-              << " topk=" << topk << " aiv=" << dispatch_aiv;
+              << " topk=" << topk
+              << " dispatch_aiv=" << local_dispatch_aiv
+              << " combine_aiv=" << local_combine_aiv;
+    if (pe < inc_pe)
+        std::cout << " reserved_compute_aiv=" << worker_reserved_aiv;
     if (expect_reject || expect_combine_reject)
         std::cout << " expected_reject=" << fault;
     if (!expect_reject && !expect_combine_reject && pe == inc_pe &&
@@ -1332,6 +1418,21 @@ int main(int argc, char **argv)
                   << dispatch_ingress_bytes / e2e_us / 1.0e3
                   << " dispatch_egress_gb_s="
                   << dispatch_egress_bytes / e2e_us / 1.0e3
+                  << " dispatch_commit_cycles="
+                  << dispatch_timeline.all_commits_ready -
+                         dispatch_timeline.kernel_start
+                  << " dispatch_metadata_cycles="
+                  << dispatch_timeline.metadata_validated -
+                         dispatch_timeline.all_commits_ready
+                  << " dispatch_counts_cycles="
+                  << dispatch_timeline.counts_published -
+                         dispatch_timeline.metadata_validated
+                  << " dispatch_fanout_cycles="
+                  << dispatch_timeline.fanout_done -
+                         dispatch_timeline.counts_published
+                  << " dispatch_publish_cycles="
+                  << dispatch_timeline.completion_done -
+                         dispatch_timeline.fanout_done
                   << " journal_index_us=" << index_us;
         uint64_t combine_ingress_rows = 0u;
         for (uint32_t rows : combine_rows_per_worker)

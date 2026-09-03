@@ -282,6 +282,8 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     const int32_t pe = aclshmem_my_pe();
     __gm__ uint32_t *global_status =
         reinterpret_cast<__gm__ uint32_t *>(status_line);
+    __gm__ EndpointDispatchTimeline *timeline =
+        reinterpret_cast<__gm__ EndpointDispatchTimeline *>(status_line);
 
     if (worker_count < 2u || worker_count > kEndpointDispatchMaxWorkers ||
         slot_bytes < sizeof(EndpointDispatchPacketHeader) ||
@@ -332,6 +334,14 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
 
     if (block == 0u) {
         *global_status = kStatusOk;
+        timeline->reserved0 = 0u;
+        timeline->kernel_start = AscendC::GetSystemCycle();
+        timeline->all_commits_ready = 0u;
+        timeline->metadata_validated = 0u;
+        timeline->counts_published = 0u;
+        timeline->fanout_done = 0u;
+        timeline->completion_done = 0u;
+        timeline->reserved1 = 0u;
         dcci_cacheline(status_line);
         bool acquired[kEndpointDispatchMaxWorkers]{};
         uint32_t remaining = worker_count;
@@ -386,6 +396,7 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
         }
         if (remaining != 0u && *global_status == kStatusOk)
             *global_status = kStatusCommitTimeout;
+        timeline->all_commits_ready = AscendC::GetSystemCycle();
         AscendC::PipeBarrier<PIPE_ALL>();
         dcci_cacheline(status_line);
     }
@@ -415,13 +426,15 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
         }
     }
     AscendC::SyncAll<true>();
+    if (block == 0u)
+        timeline->metadata_validated = AscendC::GetSystemCycle();
     dcci_cacheline(status_line);
 
-    if (block == 0u && *global_status == kStatusOk) {
+    if (*global_status == kStatusOk) {
         // Count transpose and source-major receive offsets.  The complete
         // reply is published before any fan-out payload for that destination.
-        for (uint32_t destination = 0u; destination < worker_count;
-             ++destination) {
+        for (uint32_t destination = block; destination < worker_count;
+             destination += blocks) {
             uint32_t row_offset = 0u;
             uint32_t assignment_offset = 0u;
             for (uint32_t source = 0u; source < worker_count; ++source) {
@@ -460,24 +473,33 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
         }
     }
     AscendC::SyncAll<true>();
+    if (block == 0u)
+        timeline->counts_published = AscendC::GetSystemCycle();
     dcci_cacheline(status_line);
 
     const uint32_t data_blocks = blocks;
     if (*global_status == kStatusOk) {
         const uint32_t pair_count = worker_count * worker_count;
-        const bool multiple_lanes = data_blocks >= pair_count;
-        const uint32_t first_pair = multiple_lanes ? block % pair_count
-                                                   : block;
-        const uint32_t pair_stride = multiple_lanes ? pair_count : data_blocks;
-        const uint32_t pair_limit = multiple_lanes ? first_pair + 1u
-                                                   : pair_count;
-        for (uint32_t pair = first_pair; pair < pair_limit;
-             pair += pair_stride) {
+        uint32_t gcd_a = data_blocks;
+        uint32_t gcd_b = pair_count;
+        while (gcd_b != 0u) {
+            const uint32_t remainder = gcd_a % gcd_b;
+            gcd_a = gcd_b;
+            gcd_b = remainder;
+        }
+        // Give every (source,destination) pair the same lane count while
+        // making total work exactly divisible by the live AIV count.  This
+        // removes the old 1-lane/2-lane tail without dynamic atomics or
+        // shape-specific tuning: lanes = blocks / gcd(blocks, pairs).
+        const uint32_t lanes = data_blocks / gcd_a;
+        const uint64_t work_count =
+            static_cast<uint64_t>(pair_count) * lanes;
+        for (uint64_t work = block; work < work_count;
+             work += data_blocks) {
+            const uint32_t pair = static_cast<uint32_t>(work / lanes);
             const uint32_t source = pair / worker_count;
             const uint32_t destination = pair % worker_count;
-            const uint32_t lane = multiple_lanes ? block / pair_count : 0u;
-            const uint32_t lanes = multiple_lanes
-                ? (data_blocks + pair_count - 1u - pair) / pair_count : 1u;
+            const uint32_t lane = static_cast<uint32_t>(work % lanes);
             __gm__ uint8_t *packet = inc_packets +
                 static_cast<uint64_t>(source) * slot_bytes;
             __gm__ EndpointDispatchPacketHeader *header =
@@ -614,6 +636,8 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     }
 
     AscendC::SyncAll<true>();
+    if (block == 0u)
+        timeline->fanout_done = AscendC::GetSystemCycle();
     dcci_cacheline(status_line);
 
     if (block == 0u) {
@@ -647,31 +671,29 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
         header->reserved[1] = 0u;
         header->reserved[2] = 0u;
         dcci_cacheline(journal_header);
-
-        // ACK publication is centralized after all destination owners finish,
-        // so a source slot cannot be recycled while another AIV still reads
-        // that source packet.
-        for (uint32_t source = 0u; source < worker_count; ++source) {
-            __gm__ EndpointDispatchAck *ack =
-                reinterpret_cast<__gm__ EndpointDispatchAck *>(ack_mailbox) +
-                source;
-            uint64_t tokens_consumed = 0u;
-            if (*global_status == kStatusOk) {
-                __gm__ uint8_t *packet = inc_packets +
-                    static_cast<uint64_t>(source) * slot_bytes;
-                __gm__ EndpointDispatchPacketHeader *header =
-                    reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
-                        packet);
-                tokens_consumed = header->token_count;
-            }
-            PublishAck(ack, source, *global_status, tokens_consumed,
-                       generation, sequence);
-        }
     }
+    AscendC::SyncAll<true>();
 
-    if (block == 0u) {
-        for (uint32_t destination = 0u; destination < worker_count;
-             ++destination) {
+    // Fan-out and journal publication are complete.  A rank's source ACK and
+    // destination completion are independent of every other rank, so publish
+    // each pair from a separate AIV.  ACK still cannot become visible before
+    // the data-path join above; generation remains the completion commit word.
+    for (uint32_t rank = block; rank < worker_count; rank += blocks) {
+        __gm__ EndpointDispatchAck *ack =
+            reinterpret_cast<__gm__ EndpointDispatchAck *>(ack_mailbox) +
+            rank;
+        uint64_t tokens_consumed = 0u;
+        if (*global_status == kStatusOk) {
+            __gm__ uint8_t *packet = inc_packets +
+                static_cast<uint64_t>(rank) * slot_bytes;
+            __gm__ EndpointDispatchPacketHeader *header =
+                reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
+                    packet);
+            tokens_consumed = header->token_count;
+        }
+        PublishAck(ack, rank, *global_status, tokens_consumed,
+                   generation, sequence);
+
         uint32_t rows = 0u;
         uint32_t assignments = 0u;
         if (*global_status == kStatusOk) {
@@ -681,15 +703,15 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                 __gm__ EndpointDispatchPacketHeader *header =
                     reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
                         packet);
-                rows += ReadCount(packet, header->counts_offset, destination);
+                rows += ReadCount(packet, header->counts_offset, rank);
                 assignments += ReadCount(packet, header->counts_offset,
-                                         worker_count + destination);
+                                         worker_count + rank);
             }
         }
         __gm__ EndpointDispatchReceiveCompletion *completion =
             reinterpret_cast<__gm__ EndpointDispatchReceiveCompletion *>(
-                completion_mailbox) + destination;
-        const int32_t destination_pe = static_cast<int32_t>(destination);
+                completion_mailbox) + rank;
+        const int32_t destination_pe = static_cast<int32_t>(rank);
         aclshmem_uint32_p(&completion->magic, kEndpointDispatchMagic,
                           destination_pe);
         aclshmem_uint16_p(&completion->abi_version,
@@ -698,7 +720,7 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                           sizeof(EndpointDispatchReceiveCompletion),
                           destination_pe);
         aclshmem_uint32_p(&completion->wave, wave, destination_pe);
-        aclshmem_uint32_p(&completion->destination_rank, destination,
+        aclshmem_uint32_p(&completion->destination_rank, rank,
                           destination_pe);
         aclshmem_uint32_p(&completion->status, *global_status,
                           destination_pe);
@@ -719,10 +741,12 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
         aclshmem_uint64_p(&completion->generation, generation,
                           destination_pe);
         aclshmem_quiet();
-        }
     }
-    AscendC::PipeBarrier<PIPE_ALL>();
-    dcci_cacheline(status_line);
+    AscendC::SyncAll<true>();
+    if (block == 0u) {
+        timeline->completion_done = AscendC::GetSystemCycle();
+        dcci_cacheline(status_line);
+    }
 }
 
 extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(

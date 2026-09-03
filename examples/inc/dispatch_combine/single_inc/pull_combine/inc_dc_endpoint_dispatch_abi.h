@@ -128,6 +128,23 @@ struct alignas(64) EndpointDispatchReceiveCompletion {
 static_assert(sizeof(EndpointDispatchReceiveCompletion) == 64u,
               "endpoint receive completion must own one cache line");
 
+// Stored in the existing 64-byte status line.  The first word preserves the
+// status ABI; the remaining fields expose coarse device stages without any
+// extra allocation or host synchronization on the launch path.
+struct alignas(64) EndpointDispatchTimeline {
+    uint32_t status = 0u;
+    uint32_t reserved0 = 0u;
+    uint64_t kernel_start = 0u;
+    uint64_t all_commits_ready = 0u;
+    uint64_t metadata_validated = 0u;
+    uint64_t counts_published = 0u;
+    uint64_t fanout_done = 0u;
+    uint64_t completion_done = 0u;
+    uint64_t reserved1 = 0u;
+};
+static_assert(sizeof(EndpointDispatchTimeline) == 64u,
+              "endpoint Dispatch timeline must own one cache line");
+
 } // namespace inc::dc::pull_combine
 
 #endif

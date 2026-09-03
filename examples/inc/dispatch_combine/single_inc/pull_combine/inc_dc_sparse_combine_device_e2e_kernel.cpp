@@ -571,42 +571,47 @@ void inc_dc_sparse_combine_device_e2e_kernel(
     AscendC::SyncAll<true>();
     dcci_cacheline(status_line);
 
-    if (block == 0u) {
+    if (block == 0u)
         timeline->reduction_done = AscendC::GetSystemCycle();
-        for (uint32_t source = 0u; source < worker_count; ++source) {
-            __gm__ SparseCombineDeviceAck *ack =
-                reinterpret_cast<__gm__ SparseCombineDeviceAck *>(
-                    ack_mailbox) + source;
-            PublishAck(ack, source, *status, expected_rows[source], generation,
-                       sequence);
+
+    // The data path has joined, so each rank's ACK and completion are now
+    // independent.  Publish them from separate AIVs instead of serializing
+    // every worker behind block 0.  Each completion's generation remains its
+    // final commit word, and the join below keeps timeline completion honest.
+    for (uint32_t owner = block; owner < worker_count; owner += blocks) {
+        __gm__ SparseCombineDeviceAck *ack =
+            reinterpret_cast<__gm__ SparseCombineDeviceAck *>(ack_mailbox) +
+            owner;
+        PublishAck(ack, owner, *status, expected_rows[owner], generation,
+                   sequence);
+
+        uint32_t rows = 0u;
+        if (*status == kStatusOk) {
+            for (uint64_t index = 0u; index < header->token_count; ++index)
+                rows += entries[index].owner_rank == owner;
         }
-        for (uint32_t owner = 0u; owner < worker_count; ++owner) {
-            uint32_t rows = 0u;
-            if (*status == kStatusOk) {
-                for (uint64_t index = 0u; index < header->token_count; ++index)
-                    rows += entries[index].owner_rank == owner;
-            }
-            __gm__ SparseCombineEgressCompletion *completion =
-                reinterpret_cast<__gm__ SparseCombineEgressCompletion *>(
-                    completion_mailbox) + owner;
-            const int32_t owner_pe = static_cast<int32_t>(owner);
-            aclshmem_uint32_p(&completion->magic, kSparseCombineMagic,
-                              owner_pe);
-            aclshmem_uint16_p(&completion->abi_version,
-                              kSparseCombineAbiVersion, owner_pe);
-            aclshmem_uint16_p(&completion->struct_bytes,
-                              sizeof(SparseCombineEgressCompletion), owner_pe);
-            aclshmem_uint32_p(&completion->wave, wave, owner_pe);
-            aclshmem_uint32_p(&completion->owner_rank, owner, owner_pe);
-            aclshmem_uint32_p(&completion->status, *status, owner_pe);
-            aclshmem_uint32_p(&completion->row_count,
-                              *status == 0u ? rows : 0u, owner_pe);
-            for (uint32_t i = 0u; i < 4u; ++i)
-                aclshmem_uint64_p(&completion->reserved[i], 0u, owner_pe);
-            aclshmem_quiet();
-            aclshmem_uint64_p(&completion->generation, generation, owner_pe);
-            aclshmem_quiet();
-        }
+        __gm__ SparseCombineEgressCompletion *completion =
+            reinterpret_cast<__gm__ SparseCombineEgressCompletion *>(
+                completion_mailbox) + owner;
+        const int32_t owner_pe = static_cast<int32_t>(owner);
+        aclshmem_uint32_p(&completion->magic, kSparseCombineMagic, owner_pe);
+        aclshmem_uint16_p(&completion->abi_version,
+                          kSparseCombineAbiVersion, owner_pe);
+        aclshmem_uint16_p(&completion->struct_bytes,
+                          sizeof(SparseCombineEgressCompletion), owner_pe);
+        aclshmem_uint32_p(&completion->wave, wave, owner_pe);
+        aclshmem_uint32_p(&completion->owner_rank, owner, owner_pe);
+        aclshmem_uint32_p(&completion->status, *status, owner_pe);
+        aclshmem_uint32_p(&completion->row_count,
+                          *status == 0u ? rows : 0u, owner_pe);
+        for (uint32_t i = 0u; i < 4u; ++i)
+            aclshmem_uint64_p(&completion->reserved[i], 0u, owner_pe);
+        aclshmem_quiet();
+        aclshmem_uint64_p(&completion->generation, generation, owner_pe);
+        aclshmem_quiet();
+    }
+    AscendC::SyncAll<true>();
+    if (block == 0u) {
         timeline->completion_done = AscendC::GetSystemCycle();
         dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(timeline));
     }
