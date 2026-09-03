@@ -65,6 +65,7 @@ class PullV2OverlapQualificationTest(unittest.TestCase):
             random_cases = 2
             rank_jitter_us = 100
             seed = 7
+            schedule_selection = MODULE.VALID_SCHEDULES
 
         rows = MODULE.schedules(Args())
         self.assertEqual(rows[0].name, "simultaneous")
@@ -73,6 +74,27 @@ class PullV2OverlapQualificationTest(unittest.TestCase):
         self.assertGreater(rows[2].dispatch_offset_us,
                            rows[2].combine_offset_us)
         self.assertTrue(all(row.rank_jitter_us == 100 for row in rows[3:]))
+
+    def test_schedule_csv_subset_and_invalid_values(self):
+        self.assertEqual(
+            MODULE.parse_schedule_selection("simultaneous,random"),
+            ("simultaneous", "random"))
+        with self.assertRaises(ValueError):
+            MODULE.parse_schedule_selection("")
+        with self.assertRaises(ValueError):
+            MODULE.parse_schedule_selection("simultaneous,simultaneous")
+        with self.assertRaises(ValueError):
+            MODULE.parse_schedule_selection("simultaneous,unknown")
+
+        class Args:
+            lead_us = 500
+            random_cases = 0
+            rank_jitter_us = 100
+            seed = 7
+            schedule_selection = ("simultaneous",)
+
+        rows = MODULE.schedules(Args())
+        self.assertEqual([row.name for row in rows], ["simultaneous"])
 
     def test_placement_guard_is_profile_driven(self):
         self.assertTrue(MODULE.placement_is_one_plane(8, 4, 16, 8))
@@ -88,6 +110,21 @@ class PullV2OverlapQualificationTest(unittest.TestCase):
             MODULE.wait_all_npus_idle(16, 1.0)
         self.assertEqual(idle.call_count, 3)
         self.assertEqual(sleep.call_count, 2)
+
+    def test_concurrent_combine_aiv_argument_and_environment(self):
+        self.assertIsNone(MODULE.normalize_concurrent_combine_aiv(0))
+        self.assertEqual(MODULE.normalize_concurrent_combine_aiv(12), 12)
+        with self.assertRaises(ValueError):
+            MODULE.normalize_concurrent_combine_aiv(-1)
+
+        inherited = {"INC_DC_PULL_V2_COMBINE_ACTIVE_AIV": "invalid"}
+        MODULE.apply_combine_aiv_environment(inherited, "combine", None)
+        self.assertNotIn("INC_DC_PULL_V2_COMBINE_ACTIVE_AIV", inherited)
+        MODULE.apply_combine_aiv_environment(inherited, "combine", 8)
+        self.assertEqual(
+            inherited["INC_DC_PULL_V2_COMBINE_ACTIVE_AIV"], "8")
+        MODULE.apply_combine_aiv_environment(inherited, "dispatch", 12)
+        self.assertNotIn("INC_DC_PULL_V2_COMBINE_ACTIVE_AIV", inherited)
 
 
 if __name__ == "__main__":

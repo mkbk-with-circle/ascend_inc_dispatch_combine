@@ -193,7 +193,9 @@ def cleanup_case(args: argparse.Namespace,
 
 def start_group(binary: Path, commands: list[list[str]], gate: Path,
                 role: str, output: Path, build_dir: Path,
-                timeout_s: float) -> tuple[list[subprocess.Popen[str]], list[Any]]:
+                timeout_s: float,
+                combine_active_aiv: int | None = None
+                ) -> tuple[list[subprocess.Popen[str]], list[Any]]:
     output.mkdir(parents=True)
     gate.mkdir(parents=True)
     env = os.environ.copy()
@@ -205,6 +207,7 @@ def start_group(binary: Path, commands: list[list[str]], gate: Path,
     env["SHMEM_UID_SESSION_ID"] = (
         f"pull-v2-overlap-{role}-{os.getpid()}-{time.monotonic_ns()}"
     )
+    apply_combine_aiv_environment(env, role, combine_active_aiv)
     procs: list[subprocess.Popen[str]] = []
     logs: list[Any] = []
     for pe, tail in enumerate(commands):
@@ -215,6 +218,20 @@ def start_group(binary: Path, commands: list[list[str]], gate: Path,
             stdout=log, stderr=subprocess.STDOUT,
         ))
     return procs, logs
+
+
+def normalize_concurrent_combine_aiv(value: int) -> int | None:
+    if value < 0:
+        raise ValueError("concurrent Combine AIV must be non-negative")
+    return None if value == 0 else value
+
+
+def apply_combine_aiv_environment(env: dict[str, str], role: str,
+                                  active_aiv: int | None) -> None:
+    # Never let a caller's shell accidentally throttle a solo baseline.
+    env.pop("INC_DC_PULL_V2_COMBINE_ACTIVE_AIV", None)
+    if role == "combine" and active_aiv is not None:
+        env["INC_DC_PULL_V2_COMBINE_ACTIVE_AIV"] = str(active_aiv)
 
 
 def operator_commands(args: argparse.Namespace, role: str, endpoint: str,
@@ -337,7 +354,7 @@ def run_case(args: argparse.Namespace, schedule: Schedule,
         wait_ready(dgate, "dispatch", args.workers, dp, args.timeout)
         cp, cl = start_group(args.combine_bin, combine_commands, cgate,
                              "combine", case / "combine", args.build_dir,
-                             args.timeout)
+                             args.timeout, args.concurrent_combine_aiv)
         procs += cp
         logs += cl
         wait_ready(cgate, "combine", args.workers, cp, args.timeout)
@@ -372,6 +389,13 @@ def run_case(args: argparse.Namespace, schedule: Schedule,
         combine = read_iteration(
             case / "combine" / f"pe{args.workers}.log",
             "pull_combine_v2_npu_e2e")
+        expected_combine_aiv = (args.concurrent_combine_aiv
+            if args.concurrent_combine_aiv is not None
+            else args.solo_combine_active_aiv)
+        if combine.get("active_aiv") != expected_combine_aiv:
+            raise RuntimeError(
+                "Combine active AIV does not match qualification policy: "
+                f"expected={expected_combine_aiv} sample={combine}")
         metrics = timeline_metrics(
             dispatch, combine, solo_dispatch_cycles, solo_combine_cycles)
         row = {
@@ -387,6 +411,7 @@ def run_case(args: argparse.Namespace, schedule: Schedule,
                 "hccs_plane_size": args.plane_size,
             },
             "inter_case_cooldown_ms": args.inter_case_cooldown_ms,
+            "concurrent_combine_active_aiv": expected_combine_aiv,
             "dispatch": dispatch,
             "combine": combine,
             "timeline": metrics,
@@ -402,19 +427,42 @@ def run_case(args: argparse.Namespace, schedule: Schedule,
         cleanup_case(args, procs, logs)
 
 
+VALID_SCHEDULES = (
+    "simultaneous", "dispatch_lead", "combine_lead", "random")
+
+
+def parse_schedule_selection(text: str) -> tuple[str, ...]:
+    selected = tuple(part.strip() for part in text.split(",")
+                     if part.strip())
+    if not selected:
+        raise ValueError("schedule selection is empty")
+    if len(set(selected)) != len(selected):
+        raise ValueError("schedule selection contains duplicates")
+    unknown = [name for name in selected if name not in VALID_SCHEDULES]
+    if unknown:
+        raise ValueError(f"unknown schedules: {','.join(unknown)}")
+    return selected
+
+
 def schedules(args: argparse.Namespace) -> list[Schedule]:
-    rows = [
-        Schedule("simultaneous", 0, 0),
-        Schedule(f"dispatch_lead_{args.lead_us}us", 0, args.lead_us),
-        Schedule(f"combine_lead_{args.lead_us}us", args.lead_us, 0),
-    ]
-    for index in range(args.random_cases):
-        rng = random.Random(args.seed + 1000 + index)
-        delta = rng.randint(-args.lead_us, args.lead_us)
+    rows: list[Schedule] = []
+    selected = args.schedule_selection
+    if "simultaneous" in selected:
+        rows.append(Schedule("simultaneous", 0, 0))
+    if "dispatch_lead" in selected:
         rows.append(Schedule(
-            f"random_skew_{index}_{delta:+d}us",
-            max(delta, 0), max(-delta, 0), args.rank_jitter_us,
-        ))
+            f"dispatch_lead_{args.lead_us}us", 0, args.lead_us))
+    if "combine_lead" in selected:
+        rows.append(Schedule(
+            f"combine_lead_{args.lead_us}us", args.lead_us, 0))
+    if "random" in selected:
+        for index in range(args.random_cases):
+            rng = random.Random(args.seed + 1000 + index)
+            delta = rng.randint(-args.lead_us, args.lead_us)
+            rows.append(Schedule(
+                f"random_skew_{index}_{delta:+d}us",
+                max(delta, 0), max(-delta, 0), args.rank_jitter_us,
+            ))
     return rows
 
 
@@ -435,15 +483,28 @@ def main() -> int:
     parser.add_argument("--hidden", type=int, default=8192)
     parser.add_argument("--expert-count", type=int, default=64)
     parser.add_argument("--channels", type=int, default=4)
+    parser.add_argument(
+        "--concurrent-combine-aiv", type=int, default=0,
+        help="qualification-only; 0 keeps dynamic floor(live/2)")
     parser.add_argument("--lead-us", type=int, default=500)
     parser.add_argument("--rank-jitter-us", type=int, default=100)
     parser.add_argument("--random-cases", type=int, default=3)
+    parser.add_argument(
+        "--schedules",
+        default="simultaneous,dispatch_lead,combine_lead,random",
+        help="CSV subset of simultaneous,dispatch_lead,combine_lead,random")
     parser.add_argument("--seed", type=int, default=20260904)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument(
         "--inter-case-cooldown-ms", type=int, default=2000,
         help="cooldown after every fully reaped, all-idle case")
     args = parser.parse_args()
+    try:
+        args.concurrent_combine_aiv = normalize_concurrent_combine_aiv(
+            args.concurrent_combine_aiv)
+        args.schedule_selection = parse_schedule_selection(args.schedules)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     args.dispatch_bin = args.build_dir / "bin/inc_dc_pull_dispatch_v2_device_e2e"
     args.combine_bin = args.build_dir / "bin/inc_dc_pull_combine_v2_npu_e2e"
     if args.output_dir.exists():
@@ -467,15 +528,26 @@ def main() -> int:
         raise SystemExit("Dispatch channels must be positive")
     if args.inter_case_cooldown_ms < 0:
         raise SystemExit("inter-case cooldown must be non-negative")
+    if args.lead_us < 0 or args.rank_jitter_us < 0 or args.random_cases < 0:
+        raise SystemExit("schedule offsets and random case count must be non-negative")
+    selected_schedules = schedules(args)
+    if not selected_schedules:
+        raise SystemExit(
+            "schedule selection produced no cases; random requires "
+            "--random-cases > 0")
     if not all_npus_idle(live_device_count):
         raise SystemExit("NPU_NOT_IDLE: refusing to interfere with a process")
     args.output_dir.mkdir(parents=True)
     solo_dispatch = run_solo_baseline(args, "dispatch", 1000000)
     solo_combine = run_solo_baseline(args, "combine", 2000000)
+    args.solo_combine_active_aiv = solo_combine["sample"].get("active_aiv")
+    if not isinstance(args.solo_combine_active_aiv, int) or \
+            args.solo_combine_active_aiv <= 0:
+        raise RuntimeError("solo Combine did not report dynamic active_aiv")
     results = [run_case(
         args, schedule, index, solo_dispatch["duration_cycles"],
         solo_combine["duration_cycles"])
-               for index, schedule in enumerate(schedules(args))]
+               for index, schedule in enumerate(selected_schedules)]
     summary = {
         "schema": "single-inc-pull-v2-overlap-summary.v2",
         "workers": args.workers,
@@ -486,6 +558,12 @@ def main() -> int:
             "hccs_plane_size": args.plane_size,
         },
         "inter_case_cooldown_ms": args.inter_case_cooldown_ms,
+        "schedule_selection": list(args.schedule_selection),
+        "solo_combine_active_aiv": args.solo_combine_active_aiv,
+        "concurrent_combine_active_aiv": (
+            args.concurrent_combine_aiv
+            if args.concurrent_combine_aiv is not None
+            else args.solo_combine_active_aiv),
         "solo_baselines": {
             "dispatch": solo_dispatch,
             "combine": solo_combine,

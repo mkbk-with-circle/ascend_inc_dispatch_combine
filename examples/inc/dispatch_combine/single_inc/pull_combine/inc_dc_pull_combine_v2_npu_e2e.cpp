@@ -238,6 +238,21 @@ bool ParseWorkload(const char *text, Workload *workload)
     return true;
 }
 
+bool ParseDiagnosticActiveAiv(uint32_t *requested)
+{
+    if (requested == nullptr) return false;
+    *requested = 0u;
+    const char *text = std::getenv("INC_DC_PULL_V2_COMBINE_ACTIVE_AIV");
+    if (text == nullptr || text[0] == '\0') return true;
+    char *end = nullptr;
+    const unsigned long long value = std::strtoull(text, &end, 10);
+    if (end == text || *end != '\0' || value == 0u ||
+        value > std::numeric_limits<uint32_t>::max())
+        return false;
+    *requested = static_cast<uint32_t>(value);
+    return true;
+}
+
 int Fail(const char *step, int status)
 {
     std::cerr << "[FAIL] " << step << " status=" << status << '\n';
@@ -713,10 +728,12 @@ int main(int argc, char **argv)
     const uint32_t pes = o.workers + 1u;
     const int inc_pe = static_cast<int>(o.workers);
     g_npus = static_cast<int>(pes);
+    uint32_t requested_active_aiv = 0u;
     if ((o.workers != 2u && o.workers != 4u) || o.pe < 0 ||
         o.pe >= static_cast<int>(pes) || o.first_npu < 0 ||
         o.hidden == 0u || o.measure == 0u ||
-        !ParseWorkload(o.workload_name, &o.workload))
+        !ParseWorkload(o.workload_name, &o.workload) ||
+        !ParseDiagnosticActiveAiv(&requested_active_aiv))
         return Fail("arguments", 2);
     uint64_t row_bytes = 0u;
     if (!Mul(o.hidden, sizeof(float), &row_bytes) ||
@@ -742,7 +759,12 @@ int main(int argc, char **argv)
     if (status == 0) {
         combine_aiv = live_aiv <= 0 ? 0u :
             static_cast<uint32_t>(live_aiv) / 2u;
-        if (combine_aiv == 0u) status = 2;
+        if (combine_aiv == 0u ||
+            (requested_active_aiv != 0u &&
+             requested_active_aiv > combine_aiv))
+            status = 2;
+        else if (requested_active_aiv != 0u)
+            combine_aiv = requested_active_aiv;
     }
     if (status == 0) status = aclrtCreateStream(&stream);
     if (status == 0) {
@@ -970,6 +992,7 @@ int main(int argc, char **argv)
                       << ",\"workload\":\"" << o.workload_name << "\""
                       << ",\"hidden\":" << o.hidden
                       << ",\"rows\":" << o.rows
+                      << ",\"active_aiv\":" << combine_aiv
                       << ",\"ingress_bytes\":" << wave_data.ingress_bytes
                       << ",\"egress_bytes\":" << wave_data.egress_bytes
                       << ",\"e2e_us\":" << us
@@ -1006,6 +1029,7 @@ int main(int argc, char **argv)
                   << ",\"workload\":\"" << o.workload_name << "\""
                   << ",\"hidden\":" << o.hidden
                   << ",\"rows\":" << o.rows
+                  << ",\"active_aiv\":" << combine_aiv
                   << ",\"measure\":" << measured_gbps.size()
                   << ",\"mean_us\":" << mean_us
                   << ",\"min_logical_gb_s\":" << minimum
