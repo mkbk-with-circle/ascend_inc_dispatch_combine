@@ -6,6 +6,21 @@ set(INC_DC_PULL_COMBINE_DIR ${CMAKE_CURRENT_LIST_DIR})
 set(INC_DC_PULL_COMBINE_TEST_DIR
     ${CMAKE_CURRENT_LIST_DIR}/../../tests/single_inc)
 
+# Pull-Dispatch V2 is isolated from the stable Push-Dispatch checkpoint until
+# its host, device and performance gates all pass.
+add_library(inc_dc_pull_dispatch_v2_protocol STATIC
+    inc_dc_pull_dispatch_v2.cpp)
+inc_host_target(inc_dc_pull_dispatch_v2_protocol)
+target_include_directories(inc_dc_pull_dispatch_v2_protocol PUBLIC
+    ${INC_DC_PULL_COMBINE_DIR})
+
+add_executable(inc_dc_pull_dispatch_v2_tests
+    ${INC_DC_PULL_COMBINE_TEST_DIR}/test_inc_dc_pull_dispatch_v2.cpp)
+inc_host_target(inc_dc_pull_dispatch_v2_tests)
+target_compile_options(inc_dc_pull_dispatch_v2_tests PRIVATE -UNDEBUG)
+target_link_libraries(inc_dc_pull_dispatch_v2_tests PRIVATE
+    inc_dc_pull_dispatch_v2_protocol)
+
 add_library(inc_dc_pull_combine_protocol STATIC
     inc_dc_dynamic_journal.cpp
     inc_dc_endpoint_dispatch_packet.cpp
