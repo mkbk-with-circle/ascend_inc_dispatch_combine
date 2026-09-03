@@ -160,7 +160,7 @@ bool CopyFromDevice(std::vector<T> *host, uint8_t *device, uint64_t count)
 
 int main(int argc, char **argv)
 {
-    if (argc < 8 || argc > 13) {
+    if (argc < 8 || argc > 14) {
         std::cerr << "usage: " << argv[0]
                   << " <workers> <pe> <ipport> <first_npu> <tokens>"
                      " <hidden> <topk> [aiv; 0=half of live AIV]"
@@ -169,7 +169,8 @@ int main(int argc, char **argv)
                      " 5=combine descriptor, 6=combine token ID,"
                      " 7=token offset, 8=payload offset]"
                      " [delay_rank; -1=none] [device_delay_cycles]"
-                     " [reorder_combine_rows; 0|1]\n";
+                     " [reorder_combine_rows; 0|1]"
+                     " [overlap_replay; 0|1]\n";
         return 2;
     }
     const uint32_t workers = static_cast<uint32_t>(std::strtoul(
@@ -192,6 +193,8 @@ int main(int argc, char **argv)
         ? std::strtoull(argv[11], nullptr, 10) : 0u;
     const uint32_t reorder_combine_rows = argc >= 13
         ? static_cast<uint32_t>(std::strtoul(argv[12], nullptr, 10)) : 0u;
+    const uint32_t overlap_replay = argc >= 14
+        ? static_cast<uint32_t>(std::strtoul(argv[13], nullptr, 10)) : 0u;
     const uint32_t pes = workers + 1u;
     const int inc_pe = static_cast<int>(workers);
     g_npus = static_cast<int>(pes);
@@ -201,7 +204,8 @@ int main(int argc, char **argv)
         (tokens == 0u && fault != 0u) || delay_rank < -1 ||
         delay_rank >= static_cast<int32_t>(workers) ||
         (delay_rank == -1 && delay_cycles != 0u) ||
-        reorder_combine_rows > 1u) {
+        reorder_combine_rows > 1u || overlap_replay > 1u ||
+        (overlap_replay != 0u && (fault != 0u || delay_rank != -1))) {
         return Fail("arguments", 2);
     }
 
@@ -299,6 +303,7 @@ int main(int argc, char **argv)
 
     const int32_t device = pe + f_npu;
     aclrtStream stream = nullptr;
+    aclrtStream overlap_stream = nullptr;
     bool shmem_initialized = false;
     uint8_t *source_packet = nullptr;
     uint8_t *inc_packets = nullptr;
@@ -312,6 +317,7 @@ int main(int argc, char **argv)
     uint8_t *cursors = nullptr;
     uint8_t *hidden_staging = nullptr;
     uint8_t *journal_header = nullptr;
+    uint8_t *overlap_journal_header = nullptr;
     uint8_t *journal_entries = nullptr;
     uint8_t *journal_hash = nullptr;
     uint8_t *journal_row_map = nullptr;
@@ -329,8 +335,11 @@ int main(int argc, char **argv)
     double e2e_us = 0.0;
     double index_us = 0.0;
     double combine_us = 0.0;
+    double overlap_us = 0.0;
     SparseCombineTimeline combine_timeline{};
     uint32_t dispatch_aiv = 0u;
+    EndpointDispatchDeviceArgs dispatch_args{};
+    SparseCombineDeviceArgs combine_args{};
 
     int status = aclInit(nullptr);
     if (status == 0) status = aclrtSetDevice(device);
@@ -346,6 +355,8 @@ int main(int argc, char **argv)
             status = 2;
     }
     if (status == 0) status = aclrtCreateStream(&stream);
+    if (status == 0 && overlap_replay != 0u)
+        status = aclrtCreateStream(&overlap_stream);
     if (status == 0) {
         aclshmemx_init_attr_t attr;
         test_set_attr(pe, pes, 2ull * 1024ull * 1024ull * 1024ull, ipport,
@@ -379,6 +390,9 @@ int main(int argc, char **argv)
                   staging_bytes_per_destination * dispatch_aiv));
         journal_header = static_cast<uint8_t *>(aclshmem_malloc(
             sizeof(DeviceJournalHeader)));
+        if (overlap_replay != 0u)
+            overlap_journal_header = static_cast<uint8_t *>(aclshmem_malloc(
+                sizeof(DeviceJournalHeader)));
         journal_entries = static_cast<uint8_t *>(aclshmem_malloc(
             journal_capacity * sizeof(DeviceJournalEntry)));
         journal_hash = static_cast<uint8_t *>(aclshmem_malloc(
@@ -421,6 +435,7 @@ int main(int argc, char **argv)
             (staging_bytes_per_destination != 0u &&
              hidden_staging == nullptr) ||
             journal_header == nullptr || journal_entries == nullptr ||
+            (overlap_replay != 0u && overlap_journal_header == nullptr) ||
             journal_hash == nullptr || journal_row_map == nullptr ||
             combine_row_map == nullptr ||
             destination_rows == nullptr ||
@@ -460,6 +475,8 @@ int main(int argc, char **argv)
             ZeroDevice(hidden_staging,
                        staging_bytes_per_destination * dispatch_aiv);
         ZeroDevice(journal_header, sizeof(DeviceJournalHeader));
+        if (overlap_journal_header != nullptr)
+            ZeroDevice(overlap_journal_header, sizeof(DeviceJournalHeader));
         ZeroDevice(journal_entries,
                    journal_capacity * sizeof(DeviceJournalEntry));
         std::vector<uint32_t> empty_hash(
@@ -583,7 +600,7 @@ int main(int argc, char **argv)
 
     if (status == 0) {
         const auto begin = std::chrono::steady_clock::now();
-        EndpointDispatchDeviceArgs args{};
+        EndpointDispatchDeviceArgs &args = dispatch_args;
         args.source_packet = source_packet;
         args.inc_packets = inc_packets;
         args.commit_mailbox = commits;
@@ -649,7 +666,7 @@ int main(int argc, char **argv)
 
     if (status == 0 && !expect_reject) {
         const auto begin = std::chrono::steady_clock::now();
-        SparseCombineDeviceArgs args{};
+        SparseCombineDeviceArgs &args = combine_args;
         args.symmetric_token_ids = combine_token_ids;
         args.symmetric_partials = combine_partials;
         args.reduced_output = combine_output;
@@ -690,6 +707,24 @@ int main(int argc, char **argv)
             .count();
     }
     if (status == 0) aclshmem_barrier_all();
+
+    if (status == 0 && overlap_replay != 0u) {
+        dispatch_args.journal_header = overlap_journal_header;
+        const auto begin = std::chrono::steady_clock::now();
+        if (LaunchEndpointDispatch(dispatch_aiv, overlap_stream,
+                                   dispatch_args) !=
+            EndpointLaunchStatus::OK ||
+            LaunchSparseCombine(dispatch_aiv, stream, combine_args) !=
+                EndpointLaunchStatus::OK) {
+            status = 2;
+        }
+        if (status == 0) status = aclrtSynchronizeStream(stream);
+        if (status == 0) status = aclrtSynchronizeStream(overlap_stream);
+        const auto end = std::chrono::steady_clock::now();
+        overlap_us =
+            std::chrono::duration<double, std::micro>(end - begin).count();
+    }
+    if (status == 0 && overlap_replay != 0u) aclshmem_barrier_all();
 
     bool correct = status == 0;
     if (correct && pe == inc_pe) {
@@ -840,6 +875,25 @@ int main(int argc, char **argv)
                 actual_destination_rows == expected_destination_rows;
             if (!correct)
                 std::cerr << "[FAIL] INC dynamic journal mismatch\n";
+        }
+        if (correct && overlap_replay != 0u) {
+            DeviceJournalHeader replay_header{};
+            status = aclrtMemcpy(&replay_header, sizeof(replay_header),
+                                 overlap_journal_header,
+                                 sizeof(replay_header),
+                                 ACL_MEMCPY_DEVICE_TO_HOST);
+            correct = status == 0 &&
+                replay_header.magic == kDeviceJournalMagic &&
+                replay_header.abi_version == kDeviceJournalAbiVersion &&
+                replay_header.struct_bytes == sizeof(DeviceJournalHeader) &&
+                replay_header.generation == kGeneration &&
+                replay_header.wave == kWave &&
+                replay_header.worker_count == workers &&
+                replay_header.token_count ==
+                    static_cast<uint64_t>(workers) * tokens &&
+                replay_header.status == 0u && replay_header.flags == 0u;
+            if (!correct)
+                std::cerr << "[FAIL] overlapped Dispatch journal header\n";
         }
     }
     if (correct && pe < inc_pe && expect_reject) {
@@ -1225,6 +1279,8 @@ int main(int argc, char **argv)
     if (journal_row_map != nullptr) aclshmem_free(journal_row_map);
     if (journal_hash != nullptr) aclshmem_free(journal_hash);
     if (journal_entries != nullptr) aclshmem_free(journal_entries);
+    if (overlap_journal_header != nullptr)
+        aclshmem_free(overlap_journal_header);
     if (journal_header != nullptr) aclshmem_free(journal_header);
     if (hidden_staging != nullptr) aclshmem_free(hidden_staging);
     if (cursors != nullptr) aclshmem_free(cursors);
@@ -1238,6 +1294,7 @@ int main(int argc, char **argv)
     if (inc_packets != nullptr) aclshmem_free(inc_packets);
     if (source_packet != nullptr) aclshmem_free(source_packet);
     if (shmem_initialized) aclshmem_finalize();
+    if (overlap_stream != nullptr) aclrtDestroyStream(overlap_stream);
     if (stream != nullptr) aclrtDestroyStream(stream);
     aclrtResetDevice(device);
     aclFinalize();
@@ -1315,6 +1372,24 @@ int main(int argc, char **argv)
                   << " publish_cycles="
                   << combine_timeline.completion_done -
                          combine_timeline.reduction_done;
+        if (overlap_us > 0.0) {
+            const double serial_overlap_us = e2e_us + combine_us;
+            const double ideal_overlap_us = std::max(e2e_us, combine_us);
+            const double overlap_logical_bytes =
+                logical_hidden_bytes + logical_combine_bytes;
+            std::cout << " overlap_us=" << overlap_us
+                      << " overlap_serial_us=" << serial_overlap_us
+                      << " overlap_ideal_us=" << ideal_overlap_us
+                      << " overlap_logical_gb_s="
+                      << overlap_logical_bytes / overlap_us / 1.0e3
+                      << " overlap_speedup="
+                      << serial_overlap_us / overlap_us
+                      << " overlap_saved_percent="
+                      << (serial_overlap_us - overlap_us) /
+                             serial_overlap_us * 100.0
+                      << " overlap_ideal_speedup="
+                      << serial_overlap_us / ideal_overlap_us;
+        }
         const double serial_dc_us = e2e_us + index_us + combine_us;
         std::cout << " serial_dc_us=" << serial_dc_us
                   << " serial_dc_logical_gb_s="

@@ -154,7 +154,7 @@ gate，不是公共 API。lane 传 0 时，从实际 `VECTOR_CORE_NUM` 取一半
 
 设备 Dispatch+Combine qualification 参数为
 `<workers> <pe> <ipport> <first_npu> <tokens> <hidden> <topk> [aiv] [fault]`
-` [delay_rank] [device_delay_cycles] [reorder_combine_rows]`。
+` [delay_rank] [device_delay_cycles] [reorder_combine_rows] [overlap_replay]`。
 `aiv=0` 自动取实时 `VECTOR_CORE_NUM` 的一半；`fault=1..4` 分别注入 digest、重复
 ordinal、非有限 weight 和 count mismatch，`fault=5..6` 分别破坏 Combine
 descriptor 和 token ID，`fault=7..8` 分别令 token/payload ring offset 越界。
@@ -171,6 +171,23 @@ Combine 同时输出两种口径：`combine_us/logical_combine_gb_s` 从 INC ker
 descriptor 就绪起计，用于稳定的链路/归约 peak gate。设备 timeline 另输出
 `ready_wait_cycles/reduce_cycles/publish_cycles`。前一种是实际端到端观测，后一种
 只剥离调用方到达时序，不剥离任何 GET、FP32 reduce、PUT 或 completion 成本。
+`overlap_replay=1` 会在同一个 INC 上用两个 stream 同时 replay Dispatch 和
+Combine，各使用实时 AIV 总数的一半；所有 fan-out/reduce/ACK/completion 仍做完整
+检查。它报告 `overlap_serial_us`、实际 makespan `overlap_us`、真实加速比/节省比例
+及理论理想加速比 `(D+C)/max(D,C)`。
+
+### 当前 D+C 交叠（2026-09-03）
+
+nb 单平面大消息，W2 与 W4 分置两个 HCCS 平面并行跑，每个 case 连续 3 轮：
+
+| 规模 | 参数 | 串行 D+C | 实际交叠 | 实际收益 | 理论理想加速比 | 交叠逻辑带宽 | 结果 |
+|---|---|---:|---:|---:|---:|---:|---|
+| W2 | 4096×8192, top-k 2 | 18.40 ms | 13.10 ms | 1.404× / 28.8% | 1.992× | 61.5 GB/s | 3/3 PASS |
+| W4 | 2048×16384, top-k 4 | 30.63 ms | 22.86 ms | 1.340× / 25.4% | 1.818× | 105.7 GB/s | 3/3 PASS |
+
+“理论理想”只由同一 case 的 D/C 串行实测决定，不使用 rank 数臆测，因此 W2 并不
+天然低于或高于 W4。实际值低于理想值，表示两条流水并发时仍竞争 INC/HCCS 与
+调度资源；这正是交叠 gate 要量出的真实代价。
 
 ### 当前设备 Dispatch 性能（2026-09-03）
 
