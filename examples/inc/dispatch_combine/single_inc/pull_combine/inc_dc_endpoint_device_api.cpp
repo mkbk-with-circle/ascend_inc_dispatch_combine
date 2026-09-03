@@ -59,7 +59,7 @@ uint64_t SparseCombineControlBytes(uint32_t worker_count)
 {
     const uint64_t bytes =
         static_cast<uint64_t>(worker_count + 2u) * sizeof(uint32_t);
-    return (bytes + 63u) / 64u * 64u;
+    return (bytes + 63u) / 64u * 64u + sizeof(SparseCombineTimeline);
 }
 
 EndpointLaunchStatus LaunchEndpointDispatch(

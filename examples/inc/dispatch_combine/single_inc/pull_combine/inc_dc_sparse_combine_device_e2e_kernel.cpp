@@ -202,6 +202,25 @@ void inc_dc_sparse_combine_device_e2e_kernel(
         }
         return;
     }
+    const uint64_t control_word_bytes =
+        static_cast<uint64_t>(worker_count + 2u) * sizeof(uint32_t);
+    const uint64_t timeline_offset =
+        (control_word_bytes + kSparseCombineAlignment - 1u) /
+        kSparseCombineAlignment * kSparseCombineAlignment;
+    __gm__ SparseCombineTimeline *timeline =
+        reinterpret_cast<__gm__ SparseCombineTimeline *>(
+            status_line + timeline_offset);
+    if (pe == inc_pe && block == 0u) {
+        timeline->kernel_start = AscendC::GetSystemCycle();
+        timeline->journal_checked = 0u;
+        timeline->first_source_ready = 0u;
+        timeline->all_sources_ready = 0u;
+        timeline->reduction_done = 0u;
+        timeline->completion_done = 0u;
+        timeline->reserved[0] = 0u;
+        timeline->reserved[1] = 0u;
+        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(timeline));
+    }
 
     if (pe != inc_pe) {
         if (block == 0u) {
@@ -269,6 +288,7 @@ void inc_dc_sparse_combine_device_e2e_kernel(
             (journal_hash_capacity & (journal_hash_capacity - 1u)) != 0u) {
             *status = kStatusInvalidJournal;
         }
+        timeline->journal_checked = AscendC::GetSystemCycle();
         *initialized = wave + 1u;
         AscendC::PipeBarrier<PIPE_ALL>();
         dcci_cacheline(status_line);
@@ -355,10 +375,13 @@ void inc_dc_sparse_combine_device_e2e_kernel(
                 dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
                     source_ready + source));
                 --remaining;
+                if (timeline->first_source_ready == 0u)
+                    timeline->first_source_ready = AscendC::GetSystemCycle();
             }
         }
         if (remaining != 0u && *status == kStatusOk)
             *status = kStatusDescriptorTimeout;
+        timeline->all_sources_ready = AscendC::GetSystemCycle();
         AscendC::PipeBarrier<PIPE_ALL>();
         dcci_cacheline(status_line);
     } else if (!WaitControlValue(initialized, wave + 1u)) {
@@ -549,6 +572,7 @@ void inc_dc_sparse_combine_device_e2e_kernel(
     dcci_cacheline(status_line);
 
     if (block == 0u) {
+        timeline->reduction_done = AscendC::GetSystemCycle();
         for (uint32_t source = 0u; source < worker_count; ++source) {
             __gm__ SparseCombineDeviceAck *ack =
                 reinterpret_cast<__gm__ SparseCombineDeviceAck *>(
@@ -583,6 +607,8 @@ void inc_dc_sparse_combine_device_e2e_kernel(
             aclshmem_uint64_p(&completion->generation, generation, owner_pe);
             aclshmem_quiet();
         }
+        timeline->completion_done = AscendC::GetSystemCycle();
+        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(timeline));
     }
 }
 

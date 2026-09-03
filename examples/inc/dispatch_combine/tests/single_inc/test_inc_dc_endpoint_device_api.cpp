@@ -6,9 +6,9 @@ using namespace inc::dc::pull_combine;
 
 int main()
 {
-    assert(SparseCombineControlBytes(2u) == 64u);
-    assert(SparseCombineControlBytes(4u) == 64u);
-    assert(SparseCombineControlBytes(128u) == 576u);
+    assert(SparseCombineControlBytes(2u) == 128u);
+    assert(SparseCombineControlBytes(4u) == 128u);
+    assert(SparseCombineControlBytes(128u) == 640u);
 
     EndpointDispatchDeviceArgs dispatch{};
     assert(LaunchEndpointDispatch(0u, nullptr, dispatch) ==

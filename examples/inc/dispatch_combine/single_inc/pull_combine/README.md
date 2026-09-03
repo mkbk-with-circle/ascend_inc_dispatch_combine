@@ -166,6 +166,12 @@ token/assignment wire view、ACK 和 completion；Combine 使用 FP32 partial �
 4097、top-k=1–8 及 top-k>worker，六种损坏输入均正确拒绝。该 target 证明完整
 单 wave Dispatch→journal→Combine 语义闭环；带宽口径包含控制与数据面，不是纯链路。
 
+Combine 同时输出两种口径：`combine_us/logical_combine_gb_s` 从 INC kernel 启动
+起计，包含 B 到达抖动；`active_combine_us/active_combine_gb_s` 从最后一个 B 的
+descriptor 就绪起计，用于稳定的链路/归约 peak gate。设备 timeline 另输出
+`ready_wait_cycles/reduce_cycles/publish_cycles`。前一种是实际端到端观测，后一种
+只剥离调用方到达时序，不剥离任何 GET、FP32 reduce、PUT 或 completion 成本。
+
 ### 当前设备 Dispatch 性能（2026-09-03）
 
 同一 HCCS 平面，自动使用 24/48 AIV。`logical_hidden_gb_s` 只累计一次 worker

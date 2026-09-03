@@ -329,6 +329,7 @@ int main(int argc, char **argv)
     double e2e_us = 0.0;
     double index_us = 0.0;
     double combine_us = 0.0;
+    SparseCombineTimeline combine_timeline{};
     uint32_t dispatch_aiv = 0u;
 
     int status = aclInit(nullptr);
@@ -1139,6 +1140,12 @@ int main(int argc, char **argv)
             &combine_device_status, sizeof(combine_device_status),
             combine_status_line, sizeof(combine_device_status),
             ACL_MEMCPY_DEVICE_TO_HOST);
+        if (status == 0)
+            status = aclrtMemcpy(
+                &combine_timeline, sizeof(combine_timeline),
+                combine_status_line + combine_control_bytes -
+                    sizeof(combine_timeline),
+                sizeof(combine_timeline), ACL_MEMCPY_DEVICE_TO_HOST);
         correct = status == 0 &&
             combine_device_status == expected_combine_status;
         if (!correct)
@@ -1279,13 +1286,35 @@ int main(int argc, char **argv)
             static_cast<double>(workers) * tokens * hidden * sizeof(float);
         const double logical_combine_bytes = combine_ingress_bytes +
             combine_egress_bytes;
+        const uint64_t device_cycles =
+            combine_timeline.completion_done -
+            combine_timeline.kernel_start;
+        const uint64_t active_cycles =
+            combine_timeline.completion_done -
+            combine_timeline.all_sources_ready;
+        const double active_combine_us = device_cycles != 0u
+            ? combine_us * static_cast<double>(active_cycles) /
+                  static_cast<double>(device_cycles)
+            : combine_us;
         std::cout << " combine_us=" << combine_us
                   << " logical_combine_gb_s="
                   << logical_combine_bytes / combine_us / 1.0e3
                   << " combine_ingress_gb_s="
                   << combine_ingress_bytes / combine_us / 1.0e3
                   << " combine_egress_gb_s="
-                  << combine_egress_bytes / combine_us / 1.0e3;
+                  << combine_egress_bytes / combine_us / 1.0e3
+                  << " active_combine_us=" << active_combine_us
+                  << " active_combine_gb_s="
+                  << logical_combine_bytes / active_combine_us / 1.0e3
+                  << " ready_wait_cycles="
+                  << combine_timeline.all_sources_ready -
+                         combine_timeline.kernel_start
+                  << " reduce_cycles="
+                  << combine_timeline.reduction_done -
+                         combine_timeline.all_sources_ready
+                  << " publish_cycles="
+                  << combine_timeline.completion_done -
+                         combine_timeline.reduction_done;
         const double serial_dc_us = e2e_us + index_us + combine_us;
         std::cout << " serial_dc_us=" << serial_dc_us
                   << " serial_dc_logical_gb_s="

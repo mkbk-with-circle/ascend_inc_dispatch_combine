@@ -75,6 +75,21 @@ struct alignas(64) SparseCombineEgressCompletion {
 static_assert(sizeof(SparseCombineEgressCompletion) == 64u,
               "sparse Combine completion must own one cache line");
 
+// One INC-local cache line appended after the variable-size control words.
+// Only controller block 0 writes it, so qualification can distinguish ready
+// wait, reduction and publication jitter without perturbing reducer loops.
+struct alignas(64) SparseCombineTimeline {
+    uint64_t kernel_start = 0u;
+    uint64_t journal_checked = 0u;
+    uint64_t first_source_ready = 0u;
+    uint64_t all_sources_ready = 0u;
+    uint64_t reduction_done = 0u;
+    uint64_t completion_done = 0u;
+    uint64_t reserved[2]{};
+};
+static_assert(sizeof(SparseCombineTimeline) == 64u,
+              "sparse Combine timeline must own one cache line");
+
 } // namespace inc::dc::pull_combine
 
 #endif
