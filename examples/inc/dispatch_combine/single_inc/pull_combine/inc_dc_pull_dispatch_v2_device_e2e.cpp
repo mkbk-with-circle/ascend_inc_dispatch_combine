@@ -42,6 +42,8 @@ extern "C" void launch_inc_dc_pull_dispatch_v2_device(
     uint64_t journal_assignment_capacity,
     uint64_t destination_row_capacity,
     uint64_t destination_assignment_capacity,
+    uint64_t inc_destination_rows_stride_bytes,
+    uint64_t inc_destination_assignments_stride_bytes,
     uint64_t row_map_capacity_entries,
     uint64_t source_destination_prefix_capacity_entries,
     uint64_t expert_counts_capacity_entries,
@@ -185,7 +187,8 @@ bool ParserScratchEntries(uint32_t blocks, uint32_t workers,
         Add(entries, block_extent, &entries) &&
         Add(entries, row_extent, &entries) &&
         Add(entries, row_extent, &entries) &&
-        Add(entries, expert_extent, out);
+        Add(entries, expert_extent, &entries) &&
+        Add(entries, source_extent, out);
 }
 
 uint64_t Mix(uint64_t value)
@@ -778,7 +781,8 @@ bool ValidateInc(const Options &o, const WaveOracle &oracle,
                  const GuardedBuffer &expert_counts,
                  const GuardedBuffer &status_line,
                  PullTimeline *timeline_out,
-                 uint64_t row_capacity, uint64_t assignment_capacity)
+                 uint64_t inc_rows_stride_bytes,
+                 uint64_t inc_assignments_stride_bytes)
 {
     PullTimeline timeline{};
     if (aclrtMemcpy(&timeline, sizeof(timeline), status_line.data,
@@ -913,13 +917,13 @@ bool ValidateInc(const Options &o, const WaveOracle &oracle,
             oracle.layout.expert_assignments[destination].size();
         if (!ValidateDeviceVector("inc_destination_rows",
                 inc_destination_rows.data +
-                    static_cast<uint64_t>(destination) * row_capacity *
-                        sizeof(DestinationRow),
+                    static_cast<uint64_t>(destination) *
+                        inc_rows_stride_bytes,
                 oracle.layout.destination_rows[destination]) ||
             !ValidateDeviceVector("inc_destination_assignments",
                 inc_destination_assignments.data +
-                    static_cast<uint64_t>(destination) * assignment_capacity *
-                        sizeof(ExpertAssignment),
+                    static_cast<uint64_t>(destination) *
+                        inc_assignments_stride_bytes,
                 oracle.layout.expert_assignments[destination]))
             return false;
     }
@@ -1195,11 +1199,11 @@ int main(int argc, char **argv)
         Alloc(&inc_slots, static_cast<uint64_t>(o.workers) * source_stride,
               false, "inc_slots");
         Alloc(&inc_destination_rows,
-              static_cast<uint64_t>(o.workers) * row_capacity *
-                  sizeof(DestinationRow), false, "inc_destination_rows");
+              static_cast<uint64_t>(o.workers) * rows_slot_stride,
+              false, "inc_destination_rows");
         Alloc(&inc_destination_assignments,
-              static_cast<uint64_t>(o.workers) * assignment_capacity *
-                  sizeof(ExpertAssignment), false,
+              static_cast<uint64_t>(o.workers) * assignments_slot_stride,
+              false,
               "inc_destination_assignments");
         Alloc(&journal_header, kRingSlots * sizeof(JournalSlotHeader), false,
               "journal_header");
@@ -1236,8 +1240,8 @@ int main(int argc, char **argv)
     const uint32_t iterations = o.warmup + o.measure;
     std::vector<double> measured;
     std::vector<double> measured_protocol_gbps;
-    for (uint32_t iteration = 0u; iteration < iterations && correct;
-         ++iteration) {
+    for (uint32_t iteration = 0u; iteration < iterations; ++iteration) {
+        bool iteration_correct = true;
         const uint64_t generation = kFirstGeneration + iteration;
         const uint64_t sequence = kFirstSequence + iteration;
         const uint32_t wave = kFirstWave + iteration;
@@ -1247,10 +1251,14 @@ int main(int argc, char **argv)
         Ready local_ready{};
         uint64_t wave_stride = 0u;
         const int local_source = o.pe < inc_pe ? o.pe : -1;
-        correct = BuildOracle(o, generation, sequence, wave, ring_slot,
-                              local_source, &oracle, &local_slot, &local_ready,
-                              &wave_stride) && wave_stride == source_stride;
-        if (!correct) break;
+        iteration_correct = BuildOracle(
+            o, generation, sequence, wave, ring_slot, local_source, &oracle,
+            &local_slot, &local_ready, &wave_stride) &&
+            wave_stride == source_stride;
+        if (!iteration_correct) {
+            correct = false;
+            break;
+        }
         if (o.pe < inc_pe)
             ApplyFault(o.fault, static_cast<uint32_t>(o.pe), o.workers,
                        &local_slot, &local_ready);
@@ -1331,7 +1339,8 @@ int main(int argc, char **argv)
             hidden_slot_stride, rows_slot_stride, assignments_slot_stride,
             expert_slot_stride, journal_token_capacity,
             journal_contributor_capacity, journal_assignment_capacity,
-            row_capacity, assignment_capacity, row_map_entries,
+            row_capacity, assignment_capacity, rows_slot_stride,
+            assignments_slot_stride, row_map_entries,
             prefix_entries, expert_entries, parser_scratch_entries,
             o.workers, o.expert_count, o.hidden,
             static_cast<uint32_t>(DataType::BF16), inc_pe,
@@ -1348,29 +1357,34 @@ int main(int argc, char **argv)
         const uint32_t expected_status = ExpectedStatus(o.fault);
         PullTimeline timeline{};
         if (o.pe < inc_pe)
-            correct = ValidateWorker(o, oracle, expected_status,
+            iteration_correct = ValidateWorker(o, oracle, expected_status,
                 hidden_slot_stride, rows_slot_stride,
                 assignments_slot_stride, expert_slot_stride,
                 destination_hidden, destination_rows,
                 destination_assignments, destination_expert_counts,
                 destination_completions, source_acks);
         else
-            correct = ValidateInc(o, oracle, expected_status,
+            iteration_correct = ValidateInc(o, oracle, expected_status,
                 inc_destination_rows, inc_destination_assignments,
                 journal_header, journal_tokens, journal_contributors,
                 journal_assignments, row_map, source_token_prefix,
                 source_destination_prefix, destination_row_counts,
                 destination_assignment_counts, expert_counts, status_line,
-                &timeline, row_capacity, assignment_capacity);
+                &timeline, rows_slot_stride, assignments_slot_stride);
         for (GuardedBuffer *buffer : buffers)
-            correct = GuardsValid(*buffer) && correct;
+            iteration_correct = GuardsValid(*buffer) && iteration_correct;
         if (status == 0) aclshmem_barrier_all();
+        // Every rank executes the same fixed wave count even after a local
+        // validation failure.  This converges the control flow at the barrier
+        // and prevents one rank from exiting while peers enter the next wave.
+        correct = iteration_correct && correct;
 
         if (o.pe == inc_pe) {
             const double us = std::chrono::duration<double, std::micro>(
                 end - begin).count();
             const bool warmup = iteration < o.warmup;
-            PrintJson(o, oracle, iteration, warmup, us, timeline, correct);
+            PrintJson(o, oracle, iteration, warmup, us, timeline,
+                      iteration_correct);
             if (!warmup) {
                 measured.push_back(us);
                 const double protocol_us =

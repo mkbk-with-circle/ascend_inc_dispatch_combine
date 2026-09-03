@@ -17,8 +17,9 @@ using namespace inc::dc::pull_v2;
 //     corresponding local elements after the workers publish them remotely.
 //   inc_slots
 //     INC-only metadata staging, worker_count * source_slot_stride.  Only the
-//     header and [tokens_offset, hidden_offset) metadata are populated; hidden
-//     rows are never staged in INC HBM.
+//     header and [tokens_offset, hidden_offset) metadata are normally
+//     populated; only sub-cacheline functional tails use their own hidden
+//     position as a correctness fallback staging cell.
 //   source_acks
 //     Symmetric SourceConsumed[worker_count].
 //   destination_hidden / destination_rows / destination_assignments /
@@ -30,9 +31,10 @@ using namespace inc::dc::pull_v2;
 //     [slot][destination] is used as INC staging and as the destination's
 //     completion mailbox.
 //   inc_destination_rows
-//     INC-only [worker_count][destination_row_capacity].
+//     INC-only worker_count slices using an explicit 64B-aligned byte stride;
+//     each slice holds destination_row_capacity rows.
 //   inc_destination_assignments
-//     INC-only [worker_count][destination_assignment_capacity].
+//     Same, with destination_assignment_capacity assignments per slice.
 //   journal_header / journal_tokens / journal_contributors /
 //   journal_assignments
 //     Caller-selected INC journal slot.  Contributor ranges are compact and
@@ -227,6 +229,26 @@ __aicore__ inline void PutGmRange(__gm__ uint8_t *remote,
         offset += chunk;
         bytes -= chunk;
     }
+}
+
+__aicore__ inline void PutGmRangeAligned(__gm__ uint8_t *remote,
+                                         __gm__ uint8_t *local,
+                                         uint64_t bytes,
+                                         __gm__ uint8_t *tail,
+                                         int32_t destination)
+{
+    const uint64_t full = bytes & ~(static_cast<uint64_t>(
+        kPullDispatchAlignment) - 1u);
+    if (full != 0u) PutGmRange(remote, local, full, destination);
+    const uint32_t remainder = static_cast<uint32_t>(bytes - full);
+    if (remainder == 0u) return;
+    for (uint32_t byte = 0u; byte < kPullDispatchAlignment; ++byte)
+        tail[byte] = byte < remainder ? local[full + byte] : 0u;
+    FlushRange(tail, kPullDispatchAlignment);
+    PutGmRange(remote + full, tail, kPullDispatchAlignment, destination);
+    // The caller may immediately reuse its one cacheline for another metadata
+    // stream; close local and remote completion before that reuse.
+    aclshmem_quiet();
 }
 
 __aicore__ inline bool ReadyValid(
@@ -515,6 +537,7 @@ struct ParserScratchLayout {
     uint64_t block_rows;
     uint64_t block_assignments;
     uint64_t block_experts;
+    uint64_t metadata_tails;
     uint64_t source_stride;
     uint64_t block_stride;
     uint64_t row_stride;
@@ -558,6 +581,9 @@ __aicore__ inline bool BuildParserScratchLayout(
     if (!AddU64(cursor, extent, &cursor)) return false;
     layout->block_experts = cursor;
     if (!CheckedMulU64ByU32(layout->expert_stride, active_blocks, &extent) ||
+        !AddU64(cursor, extent, &cursor)) return false;
+    layout->metadata_tails = cursor;
+    if (!CheckedMulU64ByU32(16u, workers, &extent) ||
         !AddU64(cursor, extent, &cursor)) return false;
     layout->entries = cursor;
     return cursor <= capacity;
@@ -803,6 +829,40 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinations(
         reinterpret_cast<__gm__ uint8_t *>(header) + header->tokens_offset);
     const uint32_t fanout = tokens[0].assignment_count;
     if (fanout == 0u) return;
+    const uint64_t source_bytes = MulU64ByU32(row_bytes,
+                                               header->token_count);
+    // MTE relay is tuned for cacheline-scale transfers.  Preserve arbitrary
+    // HBM-valid shapes (for example one BF16 element) with one GM staging
+    // operation on channel zero; this path is functional-only and never
+    // affects the qualified medium/large-message fast path.
+    if (source_bytes < kPullDispatchAlignment) {
+        if (channel == 0u) {
+            __gm__ uint8_t *slot =
+                reinterpret_cast<__gm__ uint8_t *>(header);
+            __gm__ uint8_t *staging = slot + header->hidden_offset;
+            aclshmem_getmem(staging,
+                            source_base + header->hidden_offset,
+                            static_cast<uint32_t>(source_bytes),
+                            static_cast<int32_t>(source));
+            FlushRange(staging, source_bytes);
+            __gm__ AssignmentRecord *assignments =
+                reinterpret_cast<__gm__ AssignmentRecord *>(
+                    slot + header->assignments_offset);
+            for (uint32_t local = 0u; local < fanout; ++local) {
+                const uint32_t destination = assignments[
+                    tokens[0].assignment_begin + local].destination_rank;
+                const uint32_t destination_row = source_destination_prefix[
+                    static_cast<uint64_t>(source) * worker_count +
+                    destination];
+                PutGmRange(destination_hidden_base +
+                               MulU64ByU32(row_bytes, destination_row),
+                           staging, source_bytes,
+                           static_cast<int32_t>(destination));
+            }
+            aclshmem_quiet();
+        }
+        return;
+    }
     if (fanout == 1u) {
         RelayUniformDestinationsFixed<1u>(
             source_base, destination_hidden_base, source_destination_prefix,
@@ -830,6 +890,78 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinations(
         channels_per_source);
 }
 
+__attribute__((noinline)) __aicore__ void RelayNonAlignedRowsSafe(
+    __gm__ uint8_t *source_base, __gm__ uint8_t *destination_hidden_base,
+    __gm__ uint8_t *inc_slots, __gm__ uint8_t *inc_destination_rows,
+    uint64_t source_slot_stride,
+    uint64_t inc_destination_rows_stride_bytes, uint64_t row_bytes,
+    uint32_t worker_count, __gm__ uint32_t *destination_row_counts)
+{
+    // Pull each source once into its private INC slot.  This is used only for
+    // non-cacheline row widths, where independent MTE writers could otherwise
+    // update adjacent bytes in the same remote cacheline.
+    for (uint32_t source = 0u; source < worker_count; ++source) {
+        __gm__ uint8_t *slot = inc_slots +
+            MulU64ByU32(source_slot_stride, source);
+        __gm__ SlotHeader *header =
+            reinterpret_cast<__gm__ SlotHeader *>(slot);
+        const uint64_t bytes = MulU64ByU32(row_bytes, header->token_count);
+        const uint64_t transfer_bytes =
+            (bytes + kPullDispatchAlignment - 1u) &
+            ~(static_cast<uint64_t>(kPullDispatchAlignment) - 1u);
+        uint64_t offset = 0u;
+        while (offset < transfer_bytes) {
+            const uint32_t chunk = static_cast<uint32_t>(
+                transfer_bytes - offset > 0x7fffffc0ull
+                    ? 0x7fffffc0ull : transfer_bytes - offset);
+            aclshmem_getmem(slot + header->hidden_offset + offset,
+                            source_base + header->hidden_offset + offset,
+                            chunk, static_cast<int32_t>(source));
+            offset += chunk;
+        }
+        FlushRange(slot + header->hidden_offset, transfer_bytes);
+    }
+
+    for (uint32_t destination = 0u; destination < worker_count;
+         ++destination) {
+        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
+            destination_row_counts + destination));
+        const uint32_t rows = destination_row_counts[destination];
+        __gm__ DestinationRow *layout =
+            reinterpret_cast<__gm__ DestinationRow *>(
+                inc_destination_rows +
+                MulU64ByU32(inc_destination_rows_stride_bytes, destination));
+        const uint64_t logical_bytes = MulU64ByU32(row_bytes, rows);
+        const uint64_t transfer_bytes =
+            (logical_bytes + kPullDispatchAlignment - 1u) &
+            ~(static_cast<uint64_t>(kPullDispatchAlignment) - 1u);
+        // Reuse only the INC PE's own current symmetric destination slot as a
+        // local pack buffer.  Destinations are processed sequentially, so one
+        // slot is sufficient and no worker-visible row is touched early.
+        __gm__ uint8_t *destination_staging = destination_hidden_base;
+        for (uint32_t row = 0u; row < rows; ++row) {
+            __gm__ DestinationRow *entry = layout + row;
+            const uint32_t source = entry->source_rank;
+            __gm__ uint8_t *slot = inc_slots +
+                MulU64ByU32(source_slot_stride, source);
+            __gm__ SlotHeader *header =
+                reinterpret_cast<__gm__ SlotHeader *>(slot);
+            __gm__ uint8_t *local = slot + header->hidden_offset +
+                MulU64ByU32(row_bytes, entry->source_token);
+            __gm__ uint8_t *packed = destination_staging +
+                MulU64ByU32(row_bytes, row);
+            for (uint64_t byte = 0u; byte < row_bytes; ++byte)
+                packed[byte] = local[byte];
+        }
+        for (uint64_t byte = logical_bytes; byte < transfer_bytes; ++byte)
+            destination_staging[byte] = 0u;
+        FlushRange(destination_staging, transfer_bytes);
+        PutGmRange(destination_hidden_base, destination_staging,
+                   transfer_bytes, static_cast<int32_t>(destination));
+        aclshmem_quiet();
+    }
+}
+
 } // namespace
 
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__
@@ -855,6 +987,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     uint64_t journal_assignment_capacity,
     uint64_t destination_row_capacity,
     uint64_t destination_assignment_capacity,
+    uint64_t inc_destination_rows_stride_bytes,
+    uint64_t inc_destination_assignments_stride_bytes,
     uint64_t row_map_capacity_entries,
     uint64_t source_destination_prefix_capacity_entries,
     uint64_t expert_counts_capacity_entries,
@@ -903,6 +1037,9 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         destination_row_capacity <= 0xffffffffull &&
         destination_assignment_capacity != 0u &&
         destination_assignment_capacity <= 0xffffffffull &&
+        inc_destination_rows_stride_bytes % kPullDispatchAlignment == 0u &&
+        inc_destination_assignments_stride_bytes %
+                kPullDispatchAlignment == 0u &&
         CheckedMulU64ByU32(worker_count, channels_per_source,
                            &required_channels) &&
         required_channels <= active_parser_blocks - worker_count &&
@@ -922,11 +1059,14 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                            static_cast<uint32_t>(destination_row_capacity),
                            &required_rows_slot) &&
         required_rows_slot <= destination_rows_slot_stride &&
+        required_rows_slot <= inc_destination_rows_stride_bytes &&
         CheckedMulU64ByU32(
             sizeof(ExpertAssignment),
             static_cast<uint32_t>(destination_assignment_capacity),
             &required_assignments_slot) &&
         required_assignments_slot <= destination_assignments_slot_stride &&
+        required_assignments_slot <=
+            inc_destination_assignments_stride_bytes &&
         CheckedMulU64ByU32(sizeof(uint32_t), expert_count,
                            &required_expert_slot) &&
         required_expert_slot <= destination_expert_counts_slot_stride &&
@@ -990,6 +1130,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         scratch + scratch_layout.block_assignments;
     __gm__ uint32_t *block_experts =
         scratch + scratch_layout.block_experts;
+    __gm__ uint8_t *metadata_tails = reinterpret_cast<__gm__ uint8_t *>(
+        scratch + scratch_layout.metadata_tails);
 
     // Phase 0: reserve the journal and initialize only bounded coordination
     // state.  Each source cohort polls its own READY below, so a late rank
@@ -1683,13 +1825,29 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         uniform_producer_begin + uniform_producer_count;
     const bool uniform_fast = uniform_layout &&
         uniform_producers_per_source != 0u;
-    const bool phase2_worker = uniform_fast
+    bool parallel_uniform_phase2 = uniform_fast;
+    if (parallel_uniform_phase2)
+        for (uint32_t source = 0u; source < worker_count; ++source) {
+            __gm__ SlotHeader *source_header =
+                reinterpret_cast<__gm__ SlotHeader *>(inc_slots +
+                    MulU64ByU32(source_slot_stride, source));
+            if ((source_header->token_count & 7u) != 0u) {
+                parallel_uniform_phase2 = false;
+                break;
+            }
+        }
+    // Parallel writers are cacheline-safe only for verified uniform sources
+    // whose eight-token parser boundaries align every final ABI stream:
+    // Contributor 16B, DestinationRow 40B, ExpertAssignment 32B and row_map.
+    // Tiny and arbitrary ragged layouts retain parallel pass1 but serialize
+    // final writes on block zero, eliminating scalar-cache lost updates.
+    const bool phase2_worker = parallel_uniform_phase2
         ? block >= uniform_producer_begin && block < uniform_producer_end
-        : block < active_parser_blocks;
+        : block == 0u;
     if (*status == kStatusOk && phase2_worker) {
       for (uint32_t parser_index = 0u;
            parser_index < active_parser_blocks; ++parser_index) {
-        if (uniform_fast) {
+        if (parallel_uniform_phase2) {
             const uint32_t producer = block - uniform_producer_begin;
             const uint32_t producer_source =
                 producer / uniform_producers_per_source;
@@ -1700,7 +1858,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                         uniform_producers_per_source != producer_lane)
                 continue;
         }
-        if (!uniform_fast && parser_index != block) continue;
+        // Serialized block zero deliberately walks every parser chunk and
+        // publishes every Pass2Ready cell; all other AIVs remain consumers.
         const uint32_t source = parser_index / parser_cohort;
         const uint32_t lane = parser_index % parser_cohort;
         __gm__ uint8_t *slot = inc_slots +
@@ -1821,9 +1980,10 @@ void inc_dc_pull_dispatch_v2_device_kernel(
 
                     __gm__ DestinationRow *out_row =
                         reinterpret_cast<__gm__ DestinationRow *>(
-                            inc_destination_rows) +
-                        static_cast<uint64_t>(destination) *
-                            destination_row_capacity + destination_row;
+                            inc_destination_rows +
+                            MulU64ByU32(
+                                inc_destination_rows_stride_bytes,
+                                destination)) + destination_row;
                     out_row->route_key = DeviceRouteKey(source, token);
                     out_row->token_id = record->token_id;
                     out_row->source_rank = source;
@@ -1861,10 +2021,10 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     assignment->expert_id;
                 __gm__ ExpertAssignment *out =
                     reinterpret_cast<__gm__ ExpertAssignment *>(
-                        inc_destination_assignments) +
-                    static_cast<uint64_t>(destination) *
-                        destination_assignment_capacity +
-                    my_assignments[destination]++;
+                        inc_destination_assignments +
+                        MulU64ByU32(
+                            inc_destination_assignments_stride_bytes,
+                            destination)) + my_assignments[destination]++;
                 out->destination_row = token_destination_rows[destination];
                 out->expert_id = assignment->expert_id;
                 out->expert_row = my_experts[expert_index]++;
@@ -1912,15 +2072,18 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         for (uint32_t destination = 0u; destination < worker_count;
              ++destination) {
             FlushRange(inc_destination_rows +
-                    (MulU64ByU32(destination_row_capacity, destination) +
-                     row_begin[destination]) * sizeof(DestinationRow),
+                    MulU64ByU32(inc_destination_rows_stride_bytes,
+                                destination) +
+                    static_cast<uint64_t>(row_begin[destination]) *
+                        sizeof(DestinationRow),
                 static_cast<uint64_t>(my_rows[destination] -
                                       row_begin[destination]) *
                     sizeof(DestinationRow));
             FlushRange(inc_destination_assignments +
-                    (MulU64ByU32(destination_assignment_capacity,
-                                 destination) +
-                     assignment_begin_by_destination[destination]) *
+                    MulU64ByU32(inc_destination_assignments_stride_bytes,
+                                destination) +
+                    static_cast<uint64_t>(
+                        assignment_begin_by_destination[destination]) *
                         sizeof(ExpertAssignment),
                 static_cast<uint64_t>(my_assignments[destination] -
                     assignment_begin_by_destination[destination]) *
@@ -1998,15 +2161,15 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                 reinterpret_cast<__gm__ uint32_t *>(
                     destination_assignment_counts)[side];
             __gm__ uint8_t *row_source = inc_destination_rows +
-                MulU64ByU32(destination_row_capacity, side) *
-                    sizeof(DestinationRow);
+                MulU64ByU32(inc_destination_rows_stride_bytes, side);
             __gm__ uint8_t *assignment_source =
                 inc_destination_assignments +
-                MulU64ByU32(destination_assignment_capacity, side) *
-                    sizeof(ExpertAssignment);
+                MulU64ByU32(inc_destination_assignments_stride_bytes, side);
             __gm__ uint8_t *expert_source = expert_counts +
                 static_cast<uint64_t>(side) * expert_count *
                     sizeof(uint32_t);
+            __gm__ uint8_t *tail = metadata_tails +
+                static_cast<uint64_t>(side) * kPullDispatchAlignment;
             FlushRange(row_source,
                        static_cast<uint64_t>(rows) *
                            sizeof(DestinationRow));
@@ -2017,19 +2180,18 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                        static_cast<uint64_t>(expert_count) *
                            sizeof(uint32_t));
             if (rows != 0u)
-                PutGmRange(destination_rows_base, row_source,
-                           static_cast<uint64_t>(rows) *
-                               sizeof(DestinationRow),
-                           static_cast<int32_t>(side));
+                PutGmRangeAligned(destination_rows_base, row_source,
+                    static_cast<uint64_t>(rows) * sizeof(DestinationRow),
+                    tail, static_cast<int32_t>(side));
             if (assignment_count != 0u)
-                PutGmRange(destination_assignments_base, assignment_source,
-                           static_cast<uint64_t>(assignment_count) *
-                               sizeof(ExpertAssignment),
-                           static_cast<int32_t>(side));
-            PutGmRange(destination_expert_counts_base, expert_source,
-                       static_cast<uint64_t>(expert_count) *
-                           sizeof(uint32_t),
-                       static_cast<int32_t>(side));
+                PutGmRangeAligned(destination_assignments_base,
+                    assignment_source,
+                    static_cast<uint64_t>(assignment_count) *
+                        sizeof(ExpertAssignment),
+                    tail, static_cast<int32_t>(side));
+            PutGmRangeAligned(destination_expert_counts_base, expert_source,
+                static_cast<uint64_t>(expert_count) * sizeof(uint32_t), tail,
+                static_cast<int32_t>(side));
             aclshmem_quiet();
             __gm__ uint32_t *published = source_state +
                 static_cast<uint64_t>(side) *
@@ -2053,7 +2215,22 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     // are capped at the qualified 8-KiB point and aligned to 64 bytes.
     // Relay reads the compact contributor range directly; it never rescans
     // top-k assignments or row_map.
-    if (*status == kStatusOk && block < required_channels) {
+    if (*status == kStatusOk &&
+        row_bytes % kPullDispatchAlignment != 0u && block == 0u) {
+        RelayNonAlignedRowsSafe(
+            source_base, destination_hidden_base, inc_slots,
+            inc_destination_rows,
+            source_slot_stride, inc_destination_rows_stride_bytes, row_bytes,
+            worker_count,
+            reinterpret_cast<__gm__ uint32_t *>(destination_row_counts));
+        __gm__ uint32_t *relay_state = block_status;
+        *reinterpret_cast<__gm__ uint64_t *>(relay_state + 2u) =
+            AscendC::GetSystemCycle();
+        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(relay_state));
+    }
+    if (*status == kStatusOk &&
+        row_bytes % kPullDispatchAlignment == 0u &&
+        block < required_channels) {
         // Interleave peers across physical AIV ids.  This is the qualified
         // relay mapping; grouping adjacent AIVs by source underutilizes W4
         // multi-peer MTE/HCCS issue bandwidth.
@@ -2288,14 +2465,15 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             reinterpret_cast<__gm__ uint32_t *>(
                 destination_assignment_counts)[destination];
         __gm__ uint8_t *row_source = inc_destination_rows +
-            MulU64ByU32(destination_row_capacity, destination) *
-                sizeof(DestinationRow);
+            MulU64ByU32(inc_destination_rows_stride_bytes, destination);
         __gm__ uint8_t *assignment_source = inc_destination_assignments +
-            MulU64ByU32(destination_assignment_capacity, destination) *
-                sizeof(ExpertAssignment);
+            MulU64ByU32(inc_destination_assignments_stride_bytes,
+                        destination);
         __gm__ uint8_t *expert_source = expert_counts +
             static_cast<uint64_t>(destination) * expert_count *
-                sizeof(uint32_t);
+            sizeof(uint32_t);
+        __gm__ uint8_t *tail = metadata_tails +
+            static_cast<uint64_t>(destination) * kPullDispatchAlignment;
         FlushRange(row_source,
                    static_cast<uint64_t>(rows) * sizeof(DestinationRow));
         FlushRange(assignment_source,
@@ -2304,17 +2482,17 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         FlushRange(expert_source,
                    static_cast<uint64_t>(expert_count) * sizeof(uint32_t));
         if (rows != 0u)
-            PutGmRange(destination_rows_base, row_source,
-                       static_cast<uint64_t>(rows) * sizeof(DestinationRow),
-                       static_cast<int32_t>(destination));
+            PutGmRangeAligned(destination_rows_base, row_source,
+                static_cast<uint64_t>(rows) * sizeof(DestinationRow), tail,
+                static_cast<int32_t>(destination));
         if (assignments != 0u)
-            PutGmRange(destination_assignments_base, assignment_source,
-                       static_cast<uint64_t>(assignments) *
-                           sizeof(ExpertAssignment),
-                       static_cast<int32_t>(destination));
-        PutGmRange(destination_expert_counts_base, expert_source,
-                   static_cast<uint64_t>(expert_count) * sizeof(uint32_t),
-                   static_cast<int32_t>(destination));
+            PutGmRangeAligned(destination_assignments_base, assignment_source,
+                static_cast<uint64_t>(assignments) *
+                    sizeof(ExpertAssignment), tail,
+                static_cast<int32_t>(destination));
+        PutGmRangeAligned(destination_expert_counts_base, expert_source,
+            static_cast<uint64_t>(expert_count) * sizeof(uint32_t), tail,
+            static_cast<int32_t>(destination));
         aclshmem_quiet();
         __gm__ uint32_t *published = source_state +
             static_cast<uint64_t>(destination) *
@@ -2440,6 +2618,8 @@ extern "C" void launch_inc_dc_pull_dispatch_v2_device(
     uint64_t journal_assignment_capacity,
     uint64_t destination_row_capacity,
     uint64_t destination_assignment_capacity,
+    uint64_t inc_destination_rows_stride_bytes,
+    uint64_t inc_destination_assignments_stride_bytes,
     uint64_t row_map_capacity_entries,
     uint64_t source_destination_prefix_capacity_entries,
     uint64_t expert_counts_capacity_entries,
@@ -2473,6 +2653,8 @@ extern "C" void launch_inc_dc_pull_dispatch_v2_device(
         destination_expert_counts_slot_stride, journal_token_capacity,
         journal_contributor_capacity, journal_assignment_capacity,
         destination_row_capacity, destination_assignment_capacity,
+        inc_destination_rows_stride_bytes,
+        inc_destination_assignments_stride_bytes,
         row_map_capacity_entries,
         source_destination_prefix_capacity_entries,
         expert_counts_capacity_entries, parser_scratch_capacity_entries,
