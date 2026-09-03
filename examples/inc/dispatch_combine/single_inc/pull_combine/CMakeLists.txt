@@ -21,11 +21,52 @@ target_compile_options(inc_dc_pull_dispatch_v2_tests PRIVATE -UNDEBUG)
 target_link_libraries(inc_dc_pull_dispatch_v2_tests PRIVATE
     inc_dc_pull_dispatch_v2_protocol)
 
+# Pull-Combine V2 consumes the sealed Pull-Dispatch V2 route-key journal.
+# The host model validates the canonical partial[B][destination_row] control
+# contract before the resident device data path is wired to the public API.
+add_library(inc_dc_pull_combine_v2_protocol STATIC
+    inc_dc_pull_combine_v2.cpp)
+inc_host_target(inc_dc_pull_combine_v2_protocol)
+target_include_directories(inc_dc_pull_combine_v2_protocol PUBLIC
+    ${INC_DC_PULL_COMBINE_DIR})
+target_link_libraries(inc_dc_pull_combine_v2_protocol PUBLIC
+    inc_dc_pull_dispatch_v2_protocol)
+
+add_executable(inc_dc_pull_combine_v2_tests
+    ${INC_DC_PULL_COMBINE_TEST_DIR}/test_inc_dc_pull_combine_v2.cpp)
+inc_host_target(inc_dc_pull_combine_v2_tests)
+target_compile_options(inc_dc_pull_combine_v2_tests PRIVATE
+    -UNDEBUG -Wall -Wextra -Werror)
+target_link_libraries(inc_dc_pull_combine_v2_tests PRIVATE
+    inc_dc_pull_combine_v2_protocol)
+
 add_library(inc_dc_pull_dispatch_v2_get_kernel SHARED
     inc_dc_pull_dispatch_v2_get_kernel.cpp)
 inc_device_target(inc_dc_pull_dispatch_v2_get_kernel)
 target_include_directories(inc_dc_pull_dispatch_v2_get_kernel PRIVATE
     ${INC_DC_PULL_COMBINE_DIR})
+
+# Complete Pull-Dispatch V2 qualification kernel: one worker READY, online
+# metadata pull/validation, route-key journal construction and direct
+# worker->INC UB->unique-destination hidden relay.
+add_library(inc_dc_pull_dispatch_v2_device_kernel SHARED
+    inc_dc_pull_dispatch_v2_device_kernel.cpp)
+inc_device_target(inc_dc_pull_dispatch_v2_device_kernel)
+target_include_directories(inc_dc_pull_dispatch_v2_device_kernel PRIVATE
+    ${INC_DC_PULL_COMBINE_DIR})
+
+add_executable(inc_dc_pull_dispatch_v2_device_e2e
+    inc_dc_pull_dispatch_v2_device_e2e.cpp)
+inc_host_target(inc_dc_pull_dispatch_v2_device_e2e)
+target_include_directories(inc_dc_pull_dispatch_v2_device_e2e PRIVATE
+    ${INC_DC_PULL_COMBINE_DIR})
+target_compile_options(inc_dc_pull_dispatch_v2_device_e2e PRIVATE
+    -Wall -Wextra -Werror -Wno-missing-field-initializers)
+target_link_libraries(inc_dc_pull_dispatch_v2_device_e2e PRIVATE
+    shmem inc_dc_pull_dispatch_v2_protocol
+    inc_dc_pull_dispatch_v2_device_kernel)
+add_dependencies(inc_dc_pull_dispatch_v2_device_e2e
+    aclshmem_bootstrap_config_store)
 
 add_executable(inc_dc_pull_dispatch_v2_get_e2e
     inc_dc_pull_dispatch_v2_get_e2e.cpp)
