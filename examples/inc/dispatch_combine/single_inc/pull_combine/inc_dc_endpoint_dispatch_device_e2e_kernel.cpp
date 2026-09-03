@@ -37,6 +37,22 @@ __aicore__ inline void FlushRange(__gm__ uint8_t *pointer, uint64_t bytes)
     AscendC::PipeBarrier<PIPE_ALL>();
 }
 
+__aicore__ inline bool WaitUploadReady(__gm__ uint8_t *line,
+                                        uint64_t generation)
+{
+    __gm__ volatile uint32_t *signal =
+        reinterpret_cast<__gm__ volatile uint32_t *>(line);
+    __gm__ volatile uint64_t *full_generation =
+        reinterpret_cast<__gm__ volatile uint64_t *>(line + 8u);
+    const uint32_t expected_signal = static_cast<uint32_t>(generation);
+    for (uint64_t spin = 0u; spin < kCommitSpinLimit; ++spin) {
+        dcci_cacheline(line);
+        if (*signal == expected_signal && *full_generation == generation)
+            return true;
+    }
+    return false;
+}
+
 // Exact local GM->GM copy used while packing destination tiles.  Calling the
 // public SHMEM GET path for the INC's own PE performs address translation and
 // transport selection for every token; this direct MTE path keeps those
@@ -265,11 +281,10 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     GM_ADDR source_packet, GM_ADDR inc_packets, GM_ADDR commit_mailbox,
     GM_ADDR recv_hidden, GM_ADDR recv_rows, GM_ADDR recv_assignments,
     GM_ADDR recv_counts, GM_ADDR ack_mailbox, GM_ADDR completion_mailbox,
-    GM_ADDR cursors, GM_ADDR hidden_staging, GM_ADDR journal_header,
-    GM_ADDR status_line,
-    uint64_t ffts_addr,
-    uint64_t slot_bytes,
-    uint64_t staging_bytes_per_destination,
+    GM_ADDR cursors, GM_ADDR hidden_staging, GM_ADDR upload_ready,
+    GM_ADDR journal_header, GM_ADDR status_line, uint64_t ffts_addr,
+    uint64_t slot_bytes, uint64_t staging_bytes_per_destination,
+    uint64_t upload_chunk_bytes, uint32_t upload_chunks_per_source,
     uint64_t row_capacity, uint64_t assignment_capacity,
     uint32_t hidden,
     uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
@@ -288,7 +303,11 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     if (worker_count < 2u || worker_count > kEndpointDispatchMaxWorkers ||
         slot_bytes < sizeof(EndpointDispatchPacketHeader) ||
         slot_bytes % kEndpointDispatchAlignment != 0u ||
-        hidden == 0u || !DTypeValid(dtype)) {
+        upload_chunk_bytes == 0u || upload_chunks_per_source == 0u ||
+        hidden == 0u || !DTypeValid(dtype) ||
+        upload_chunk_bytes %
+                (static_cast<uint64_t>(hidden) * DTypeBytes(dtype)) !=
+            0u) {
         if (pe == inc_pe && block == 0u) {
             *global_status = kStatusInvalidCommit;
             dcci_cacheline(status_line);
@@ -308,26 +327,75 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                 sizeof(EndpointDispatchPacketHeader) &&
             local_header->packet_bytes <= slot_bytes &&
             local_header->packet_bytes % kEndpointDispatchAlignment == 0u;
-        const uint64_t bytes_to_copy = local_size_valid
-            ? local_header->packet_bytes
-            : sizeof(EndpointDispatchPacketHeader);
-        const uint64_t cache_lines = bytes_to_copy / 64u;
-        const uint64_t first_line = cache_lines * block / blocks;
-        const uint64_t last_line = cache_lines * (block + 1u) / blocks;
-        if (first_line < last_line) {
-            aclshmem_putmem(
-                inc_packets + static_cast<uint64_t>(pe) * slot_bytes +
-                    first_line * 64u,
-                source_packet + first_line * 64u,
-                (last_line - first_line) * 64u, inc_pe);
-        }
-        AscendC::SyncAll<true>();
+        const bool local_prefix_valid = local_size_valid &&
+            local_header->hidden_offset >=
+                sizeof(EndpointDispatchPacketHeader) &&
+            local_header->hidden_offset <= local_header->packet_bytes &&
+            local_header->hidden_offset % kEndpointDispatchAlignment == 0u;
+        const uint64_t local_row_bytes = static_cast<uint64_t>(hidden) *
+            DTypeBytes(dtype);
+        const bool local_hidden_valid = local_prefix_valid &&
+            local_header->hidden == hidden && local_header->dtype == dtype &&
+            local_header->token_count <=
+                (local_header->packet_bytes - local_header->hidden_offset) /
+                    local_row_bytes;
+        // Metadata is the admission boundary.  Publish it first so the INC
+        // can validate/route while the other worker AIVs upload hidden chunks.
         if (block == 0u) {
+            const uint64_t prefix_bytes = local_prefix_valid
+                ? local_header->hidden_offset
+                : sizeof(EndpointDispatchPacketHeader);
+            aclshmem_putmem(
+                inc_packets + static_cast<uint64_t>(pe) * slot_bytes,
+                source_packet, prefix_bytes, inc_pe);
+            aclshmem_quiet();
             __gm__ EndpointDispatchCommit *local_commit =
                 reinterpret_cast<__gm__ EndpointDispatchCommit *>(
                     commit_mailbox) + pe;
             aclshmem_putmem(local_commit, local_commit,
                             sizeof(EndpointDispatchCommit), inc_pe);
+        }
+        if (local_hidden_valid) {
+            // The packet can have alignment padding after hidden.  It is not
+            // part of the tensor and must not consume a chunk/ready credit.
+            const uint64_t payload_bytes =
+                static_cast<uint64_t>(local_header->token_count) *
+                local_row_bytes;
+            const uint64_t chunks =
+                (payload_bytes + upload_chunk_bytes - 1u) /
+                upload_chunk_bytes;
+            if (chunks <= upload_chunks_per_source) {
+                for (uint64_t chunk = block; chunk < chunks;
+                     chunk += blocks) {
+                    const uint64_t offset = chunk * upload_chunk_bytes;
+                    const uint64_t remaining = payload_bytes - offset;
+                    const uint64_t bytes = remaining < upload_chunk_bytes
+                        ? remaining : upload_chunk_bytes;
+                    aclshmem_putmem(
+                        inc_packets + static_cast<uint64_t>(pe) * slot_bytes +
+                            local_header->hidden_offset + offset,
+                        source_packet + local_header->hidden_offset + offset,
+                        bytes, inc_pe);
+                    aclshmem_quiet();
+                    // Reuse the data-before-signal primitive qualified by the
+                    // streaming Dispatch path.  The 32-bit signal wakes the
+                    // INC, while the adjacent full generation preserves the
+                    // 64-bit anti-ABA check across ring-slot reuse.
+                    __gm__ uint8_t *ready = upload_ready +
+                        (static_cast<uint64_t>(pe) *
+                             upload_chunks_per_source +
+                         chunk) * 64u;
+                    *reinterpret_cast<__gm__ uint64_t *>(ready + 8u) =
+                        generation;
+                    dcci_cacheline(ready);
+                    aclshmem_putmem_signal(
+                        ready + 8u, ready + 8u, sizeof(uint64_t),
+                        reinterpret_cast<__gm__ int32_t *>(ready),
+                        static_cast<int32_t>(generation),
+                        ACLSHMEM_SIGNAL_SET, inc_pe);
+                    aclshmem_quiet();
+                }
+            }
         }
         return;
     }
@@ -406,6 +474,17 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
     __gm__ uint32_t *cursor = reinterpret_cast<__gm__ uint32_t *>(cursors);
     const uint64_t row_bytes = static_cast<uint64_t>(hidden) *
         DTypeBytes(dtype);
+    const uint64_t token_capacity_per_source = row_capacity / worker_count;
+    const uint32_t data_blocks = blocks;
+    const uint32_t pair_count = worker_count * worker_count;
+    uint32_t gcd_a = data_blocks;
+    uint32_t gcd_b = pair_count;
+    while (gcd_b != 0u) {
+        const uint32_t remainder = gcd_a % gcd_b;
+        gcd_a = gcd_b;
+        gcd_b = remainder;
+    }
+    const uint32_t lanes = data_blocks / gcd_a;
 
     if (*global_status == kStatusOk) {
         for (uint32_t source = block; source < worker_count;
@@ -415,7 +494,8 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
             __gm__ EndpointDispatchPacketHeader *header =
                 reinterpret_cast<__gm__ EndpointDispatchPacketHeader *>(
                     packet);
-            if (MetadataDigest(packet, header) != header->metadata_digest ||
+            if (header->token_count > token_capacity_per_source ||
+                MetadataDigest(packet, header) != header->metadata_digest ||
                 !ValidatePacketMetadata(packet, header, expert_count, cursor,
                                         source)) {
                 *global_status = kStatusInvalidPacket;
@@ -477,21 +557,11 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
         timeline->counts_published = AscendC::GetSystemCycle();
     dcci_cacheline(status_line);
 
-    const uint32_t data_blocks = blocks;
     if (*global_status == kStatusOk) {
-        const uint32_t pair_count = worker_count * worker_count;
-        uint32_t gcd_a = data_blocks;
-        uint32_t gcd_b = pair_count;
-        while (gcd_b != 0u) {
-            const uint32_t remainder = gcd_a % gcd_b;
-            gcd_a = gcd_b;
-            gcd_b = remainder;
-        }
         // Give every (source,destination) pair the same lane count while
         // making total work exactly divisible by the live AIV count.  This
         // removes the old 1-lane/2-lane tail without dynamic atomics or
         // shape-specific tuning: lanes = blocks / gcd(blocks, pairs).
-        const uint32_t lanes = data_blocks / gcd_a;
         const uint64_t work_count =
             static_cast<uint64_t>(pair_count) * lanes;
         for (uint64_t work = block; work < work_count;
@@ -544,8 +614,6 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                 assignment_index += hits;
             }
             if (lane == 0u) {
-                const uint64_t token_capacity_per_source =
-                    row_capacity / worker_count;
                 const uint64_t assignment_capacity_per_source =
                     assignment_capacity / worker_count;
                 if (header->token_count > token_capacity_per_source ||
@@ -575,9 +643,11 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                 staging_bytes_per_destination / row_bytes;
             uint32_t tile_begin = row_index;
             uint32_t staged_rows = 0u;
+            uint64_t observed_chunk = ~0ull;
             __gm__ uint8_t *staging = hidden_staging +
                 static_cast<uint64_t>(block) *
                     staging_bytes_per_destination;
+            __gm__ uint8_t *hidden_base = packet + header->hidden_offset;
             for (uint32_t token = token_begin; token < token_end; ++token) {
                 __gm__ EndpointDispatchTokenRecord *record =
                     reinterpret_cast<__gm__ EndpointDispatchTokenRecord *>(
@@ -598,19 +668,36 @@ void inc_dc_endpoint_dispatch_device_e2e_kernel(
                     *global_status = kStatusInvalidPacket;
                     break;
                 }
-                __gm__ uint8_t *hidden_source = packet +
-                    header->hidden_offset +
-                    static_cast<uint64_t>(token) * row_bytes;
+                const uint64_t chunk =
+                    static_cast<uint64_t>(token) * row_bytes /
+                    upload_chunk_bytes;
+                if (chunk >= upload_chunks_per_source ||
+                    (chunk != observed_chunk &&
+                     !WaitUploadReady(
+                         upload_ready +
+                             (static_cast<uint64_t>(source) *
+                                  upload_chunks_per_source +
+                              chunk) * 64u,
+                         generation))) {
+                    *global_status = kStatusCommitTimeout;
+                    break;
+                }
+                observed_chunk = chunk;
                 if (tile_rows == 0u) {
                     aclshmem_putmem(
                         recv_hidden + static_cast<uint64_t>(row_index) *
                             row_bytes,
-                        hidden_source, row_bytes,
+                        hidden_base + static_cast<uint64_t>(token) *
+                            row_bytes,
+                        row_bytes,
                         static_cast<int32_t>(destination));
                 } else {
-                    CopyLocalGm(staging +
-                        static_cast<uint64_t>(staged_rows) * row_bytes,
-                        hidden_source, row_bytes);
+                    CopyLocalGm(
+                        staging + static_cast<uint64_t>(staged_rows) *
+                            row_bytes,
+                        hidden_base + static_cast<uint64_t>(token) *
+                            row_bytes,
+                        row_bytes);
                     ++staged_rows;
                     if (staged_rows == tile_rows) {
                         aclshmem_putmem(
@@ -754,9 +841,10 @@ extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
     uint8_t *inc_packets, uint8_t *commit_mailbox, uint8_t *recv_hidden,
     uint8_t *recv_rows, uint8_t *recv_assignments, uint8_t *recv_counts,
     uint8_t *ack_mailbox, uint8_t *completion_mailbox, uint8_t *cursors,
-    uint8_t *hidden_staging, uint8_t *journal_header, uint8_t *status_line,
-    uint64_t ffts_addr,
+    uint8_t *hidden_staging, uint8_t *upload_ready,
+    uint8_t *journal_header, uint8_t *status_line, uint64_t ffts_addr,
     uint64_t slot_bytes, uint64_t staging_bytes_per_destination,
+    uint64_t upload_chunk_bytes, uint32_t upload_chunks_per_source,
     uint64_t row_capacity, uint64_t assignment_capacity,
     uint32_t hidden,
     uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
@@ -767,10 +855,9 @@ extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
         block_dim, nullptr, stream>>>(
         source_packet, inc_packets, commit_mailbox, recv_hidden, recv_rows,
         recv_assignments, recv_counts, ack_mailbox, completion_mailbox,
-        cursors, hidden_staging, journal_header, status_line,
-        ffts_addr,
-        slot_bytes,
-        staging_bytes_per_destination, row_capacity,
+        cursors, hidden_staging, upload_ready, journal_header, status_line,
+        ffts_addr, slot_bytes, staging_bytes_per_destination,
+        upload_chunk_bytes, upload_chunks_per_source, row_capacity,
         assignment_capacity, hidden, dtype,
         expert_count, worker_count, inc_pe, generation, sequence, wave,
         ring_slot);

@@ -8,12 +8,13 @@ extern "C" void launch_inc_dc_endpoint_dispatch_device_e2e(
     uint8_t *inc_packets, uint8_t *commit_mailbox, uint8_t *recv_hidden,
     uint8_t *recv_rows, uint8_t *recv_assignments, uint8_t *recv_counts,
     uint8_t *ack_mailbox, uint8_t *completion_mailbox, uint8_t *cursors,
-    uint8_t *hidden_staging, uint8_t *journal_header, uint8_t *status_line,
-    uint64_t ffts_addr, uint64_t slot_bytes,
-    uint64_t staging_bytes_per_destination, uint64_t row_capacity,
-    uint64_t assignment_capacity, uint32_t hidden, uint32_t dtype,
-    uint32_t expert_count, uint32_t worker_count, int32_t inc_pe,
-    uint64_t generation, uint64_t sequence, uint32_t wave,
+    uint8_t *hidden_staging, uint8_t *upload_ready,
+    uint8_t *journal_header, uint8_t *status_line, uint64_t ffts_addr,
+    uint64_t slot_bytes, uint64_t staging_bytes_per_destination,
+    uint64_t upload_chunk_bytes, uint32_t upload_chunks_per_source,
+    uint64_t row_capacity, uint64_t assignment_capacity, uint32_t hidden,
+    uint32_t dtype, uint32_t expert_count, uint32_t worker_count,
+    int32_t inc_pe, uint64_t generation, uint64_t sequence, uint32_t wave,
     uint32_t ring_slot);
 
 extern "C" void launch_inc_dc_device_journal_index(
@@ -65,6 +66,8 @@ uint64_t SparseCombineControlBytes(uint32_t worker_count)
 EndpointLaunchStatus LaunchEndpointDispatch(
     uint32_t aiv_count, void *stream, const EndpointDispatchDeviceArgs &a)
 {
+    const uint64_t row_bytes = static_cast<uint64_t>(a.hidden) *
+        (a.dtype == static_cast<uint32_t>(EndpointDataType::FP32) ? 4u : 2u);
     if (aiv_count == 0u || stream == nullptr || a.source_packet == nullptr ||
         a.inc_packets == nullptr || a.commit_mailbox == nullptr ||
         a.recv_hidden == nullptr || a.recv_rows == nullptr ||
@@ -72,6 +75,9 @@ EndpointLaunchStatus LaunchEndpointDispatch(
         a.ack_mailbox == nullptr || a.completion_mailbox == nullptr ||
         a.cursors == nullptr ||
         (a.staging_bytes_per_aiv != 0u && a.hidden_staging == nullptr) ||
+        a.upload_ready == nullptr || a.upload_chunk_bytes == 0u ||
+        a.upload_chunks_per_source == 0u || row_bytes == 0u ||
+        a.upload_chunk_bytes % row_bytes != 0u ||
         a.journal_header == nullptr || a.status_line == nullptr ||
         a.ffts_addr == 0u ||
         a.slot_bytes < sizeof(EndpointDispatchPacketHeader) ||
@@ -88,8 +94,9 @@ EndpointLaunchStatus LaunchEndpointDispatch(
         aiv_count, stream, a.source_packet, a.inc_packets, a.commit_mailbox,
         a.recv_hidden, a.recv_rows, a.recv_assignments, a.recv_counts,
         a.ack_mailbox, a.completion_mailbox, a.cursors, a.hidden_staging,
-        a.journal_header, a.status_line, a.ffts_addr, a.slot_bytes,
-        a.staging_bytes_per_aiv, a.row_capacity, a.assignment_capacity,
+        a.upload_ready, a.journal_header, a.status_line, a.ffts_addr,
+        a.slot_bytes, a.staging_bytes_per_aiv, a.upload_chunk_bytes,
+        a.upload_chunks_per_source, a.row_capacity, a.assignment_capacity,
         a.hidden, a.dtype, a.expert_count, a.worker_count, a.inc_pe,
         a.generation, a.sequence, a.wave, a.ring_slot);
     return EndpointLaunchStatus::OK;

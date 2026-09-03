@@ -26,11 +26,14 @@ struct EndpointDispatchDeviceArgs {
     uint8_t *completion_mailbox = nullptr;
     uint8_t *cursors = nullptr;
     uint8_t *hidden_staging = nullptr;
+    uint8_t *upload_ready = nullptr;
     uint8_t *journal_header = nullptr;
     uint8_t *status_line = nullptr;
     uint64_t ffts_addr = 0u;
     uint64_t slot_bytes = 0u;
     uint64_t staging_bytes_per_aiv = 0u;
+    uint64_t upload_chunk_bytes = 0u;
+    uint32_t upload_chunks_per_source = 0u;
     uint64_t row_capacity = 0u;
     uint64_t assignment_capacity = 0u;
     uint32_t hidden = 0u;

@@ -338,6 +338,7 @@ int main(int argc, char **argv)
     uint8_t *completions = nullptr;
     uint8_t *cursors = nullptr;
     uint8_t *hidden_staging = nullptr;
+    uint8_t *upload_ready = nullptr;
     uint8_t *journal_header = nullptr;
     uint8_t *overlap_journal_header = nullptr;
     uint8_t *journal_entries = nullptr;
@@ -368,6 +369,8 @@ int main(int argc, char **argv)
     uint32_t local_dispatch_aiv = 0u;
     uint32_t local_combine_aiv = 0u;
     uint32_t worker_reserved_aiv = 0u;
+    uint64_t upload_chunk_bytes = 0u;
+    uint32_t upload_chunks_per_source = 0u;
     EndpointDispatchDeviceArgs dispatch_args{};
     SparseCombineDeviceArgs combine_args{};
 
@@ -396,6 +399,13 @@ int main(int argc, char **argv)
                 ? inc_dispatch_aiv : worker_dispatch_aiv;
             local_combine_aiv = pe == inc_pe
                 ? inc_combine_aiv : worker_combine_aiv;
+            const uint32_t target_chunks = worker_dispatch_aiv * 2u;
+            const uint32_t chunk_rows = tokens == 0u
+                ? 1u : (tokens + target_chunks - 1u) / target_chunks;
+            upload_chunk_bytes = static_cast<uint64_t>(chunk_rows) *
+                row_bytes;
+            upload_chunks_per_source = tokens == 0u
+                ? 1u : (tokens + chunk_rows - 1u) / chunk_rows;
         }
     }
     if (status == 0) status = aclrtCreateStream(&stream);
@@ -432,6 +442,9 @@ int main(int argc, char **argv)
             ? nullptr
             : static_cast<uint8_t *>(aclshmem_malloc(
                   staging_bytes_per_destination * inc_dispatch_aiv));
+        upload_ready = static_cast<uint8_t *>(aclshmem_malloc(
+            static_cast<uint64_t>(workers) * upload_chunks_per_source *
+            64u));
         journal_header = static_cast<uint8_t *>(aclshmem_malloc(
             sizeof(DeviceJournalHeader)));
         if (overlap_replay != 0u)
@@ -478,6 +491,7 @@ int main(int argc, char **argv)
             completions == nullptr || cursors == nullptr ||
             (staging_bytes_per_destination != 0u &&
              hidden_staging == nullptr) ||
+            upload_ready == nullptr ||
             journal_header == nullptr || journal_entries == nullptr ||
             (overlap_replay != 0u && overlap_journal_header == nullptr) ||
             journal_hash == nullptr || journal_row_map == nullptr ||
@@ -518,6 +532,9 @@ int main(int argc, char **argv)
         if (hidden_staging != nullptr)
             ZeroDevice(hidden_staging,
                        staging_bytes_per_destination * inc_dispatch_aiv);
+        ZeroDevice(upload_ready,
+                   static_cast<uint64_t>(workers) *
+                       upload_chunks_per_source * 64u);
         ZeroDevice(journal_header, sizeof(DeviceJournalHeader));
         if (overlap_journal_header != nullptr)
             ZeroDevice(overlap_journal_header, sizeof(DeviceJournalHeader));
@@ -656,11 +673,14 @@ int main(int argc, char **argv)
         args.completion_mailbox = completions;
         args.cursors = cursors;
         args.hidden_staging = hidden_staging;
+        args.upload_ready = upload_ready;
         args.journal_header = journal_header;
         args.status_line = status_line;
         args.ffts_addr = shmemx_get_ffts_config();
         args.slot_bytes = slot_bytes;
         args.staging_bytes_per_aiv = staging_bytes_per_destination;
+        args.upload_chunk_bytes = upload_chunk_bytes;
+        args.upload_chunks_per_source = upload_chunks_per_source;
         args.row_capacity = row_capacity;
         args.assignment_capacity = assignment_capacity;
         args.hidden = hidden;
@@ -1364,6 +1384,7 @@ int main(int argc, char **argv)
     if (overlap_journal_header != nullptr)
         aclshmem_free(overlap_journal_header);
     if (journal_header != nullptr) aclshmem_free(journal_header);
+    if (upload_ready != nullptr) aclshmem_free(upload_ready);
     if (hidden_staging != nullptr) aclshmem_free(hidden_staging);
     if (cursors != nullptr) aclshmem_free(cursors);
     if (completions != nullptr) aclshmem_free(completions);
