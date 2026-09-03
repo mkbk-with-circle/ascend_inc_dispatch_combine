@@ -1,0 +1,5 @@
+[STAGE] pe=0 initialized
+[STAGE] pe=0 ready
+[STAGE] pe=0 kernel_status=0
+[STAGE] pe=0 verified=1
+[PASS] pe=0 bytes=134217728 transport-selected-by-shmem
