@@ -38,6 +38,18 @@ target_link_libraries(inc_dc_pull_dispatch_v2_get_e2e PRIVATE
 add_dependencies(inc_dc_pull_dispatch_v2_get_e2e
     aclshmem_bootstrap_config_store)
 
+add_library(inc_dc_pull_dispatch_v2_relay_probe_kernel SHARED
+    inc_dc_pull_dispatch_v2_relay_probe_kernel.cpp)
+inc_device_target(inc_dc_pull_dispatch_v2_relay_probe_kernel)
+
+add_executable(inc_dc_pull_dispatch_v2_relay_probe
+    inc_dc_pull_dispatch_v2_relay_probe.cpp)
+inc_host_target(inc_dc_pull_dispatch_v2_relay_probe)
+target_link_libraries(inc_dc_pull_dispatch_v2_relay_probe PRIVATE
+    shmem inc_dc_pull_dispatch_v2_relay_probe_kernel)
+add_dependencies(inc_dc_pull_dispatch_v2_relay_probe
+    aclshmem_bootstrap_config_store)
+
 add_library(inc_dc_pull_combine_protocol STATIC
     inc_dc_dynamic_journal.cpp
     inc_dc_endpoint_dispatch_packet.cpp
