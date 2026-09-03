@@ -40,6 +40,23 @@ target_compile_options(inc_dc_pull_combine_v2_tests PRIVATE
 target_link_libraries(inc_dc_pull_combine_v2_tests PRIVATE
     inc_dc_pull_combine_v2_protocol)
 
+add_library(inc_dc_pull_combine_v2_device_kernel SHARED
+    inc_dc_pull_combine_v2_device_kernel.cpp)
+inc_device_target(inc_dc_pull_combine_v2_device_kernel)
+target_include_directories(inc_dc_pull_combine_v2_device_kernel PRIVATE
+    ${INC_DC_PULL_COMBINE_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}/../../common/platform)
+
+# Host-only device-contract oracle.  A separate multi-PE executable will own
+# the actual NPU qualification; this target must not be reported as device E2E.
+add_executable(inc_dc_pull_combine_v2_contract_tests
+    inc_dc_pull_combine_v2_device_e2e.cpp)
+inc_host_target(inc_dc_pull_combine_v2_contract_tests)
+target_compile_options(inc_dc_pull_combine_v2_contract_tests PRIVATE
+    -UNDEBUG -Wall -Wextra -Werror)
+target_link_libraries(inc_dc_pull_combine_v2_contract_tests PRIVATE
+    inc_dc_pull_combine_v2_protocol)
+
 add_library(inc_dc_pull_dispatch_v2_get_kernel SHARED
     inc_dc_pull_dispatch_v2_get_kernel.cpp)
 inc_device_target(inc_dc_pull_dispatch_v2_get_kernel)
