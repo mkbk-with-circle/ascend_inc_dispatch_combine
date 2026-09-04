@@ -5,6 +5,24 @@
 多非对称程度下是否稳定。机器仍为 nb-borrow 910B2C；性能结果独占 NPU0--4，
 功能矩阵每 case 前后检查整机无其他 NPU 进程。
 
+## 0. 本报告使用的拓扑
+
+本机为两个 8-card HCCS full-mesh 平面：A=`NPU0--7`，B=`NPU8--15`；跨平面
+不是 HCCS。所有性能 case 都固定在平面 A：
+
+| 规模 | Worker | INC | World | 有效 Worker↔INC 链路 |
+|---|---|---|---:|---|
+| W2 | rank0/NPU0、rank1/NPU1 | rank2/NPU2 | 3 | 2×HCCS，约 2×28 GB/s raw |
+| W4 | rank0--3/NPU0--3 | rank4/NPU4 | 5 | 4×HCCS，约 4×28 GB/s raw |
+
+W8+1INC 需要9张卡，无法放入一个8-card平面，因此本报告没有W8数据。完整的
+双平面关系、rank 映射、56/112 GB/s nominal raw 和 92% gate 推导见
+[`pull_v2_qualified_20260904`](../pull_v2_qualified_20260904/README.md)。
+
+Dispatch 与 Combine 并发时不是使用两套独立网络：二者共享上述同一组
+Worker↔INC HCCS links、INC endpoint 和 SHMEM transport credits。这是后文并发
+数据段膨胀、真实收益低于理论 `max(D,C)` 上限的物理背景。
+
 ## 1. 交叠瓶颈
 
 W4 128 MiB、top-k2 的设备 timeline 表明，损失来自数据面而不是控制面：

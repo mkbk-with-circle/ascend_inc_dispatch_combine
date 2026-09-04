@@ -4,6 +4,82 @@
 Pull-Combine V2；不包含旧协议或其他集群的历史实验。正式性能固定使用
 同一 HCCS 平面的 NPU 0--4（0--3 worker，4 为 INC）。运行前确认 16 张卡空闲。
 
+## 硬件拓扑、Rank 映射与 Gate 依据
+
+### 双 HCCS 平面
+
+本机共有 16 张物理 NPU，分成两个彼此独立的 8-card HCCS 平面：
+
+```text
+HCCS 平面 A：NPU 0--7    平面内任意两卡均为 HCCS
+HCCS 平面 B：NPU 8--15   平面内任意两卡均为 HCCS
+
+跨平面 0--7 ↔ 8--15：不是 HCCS；根据位置走 PIX / PHB / SYS
+```
+
+每张卡在本平面内连接另外 7 张卡，每条 peer link 的 live speed 为
+224 Gbit/s，即约 28 GB/s raw 单向。平面内是 full mesh，不代表一个 rank 可以把
+7×28 GB/s 全部用于本测试：Single-INC 的有效物理边是每个 Worker 与唯一 INC
+之间的 `W` 条链路。
+
+跨平面关系仅用于说明为什么不测 W8：典型配对 `i ↔ i+8` 为 PIX，其他跨平面
+路径还可能经过 PHB 或 SYS。当前所有正式样本都未使用跨平面链路。
+
+### 逻辑 Rank 到物理 NPU
+
+协议 world size 恒为 `W+1`：逻辑 rank `[0,W)` 是 Worker，rank `W` 是唯一 INC。
+测试程序使用连续映射 `physical_npu = first_npu + rank`，本轮 `first_npu=0`：
+
+| 规模 | World | Worker Rank → 物理 NPU | INC Rank → 物理 NPU | Worker↔INC 关系 |
+|---|---:|---|---|---|
+| W2 | 3 ranks | `0→NPU0`, `1→NPU1` | `2→NPU2` | 2 条均为 HCCS |
+| W4 | 5 ranks | `0→NPU0` … `3→NPU3` | `4→NPU4` | 4 条均为 HCCS |
+
+W4 的直观布局如下；NPU5--7 在该平面内空闲，平面 B 全部不参与：
+
+```text
+Worker0/NPU0 ─HCCS─┐
+Worker1/NPU1 ─HCCS─┤
+Worker2/NPU2 ─HCCS─┼─ INC rank4 / NPU4
+Worker3/NPU3 ─HCCS─┘
+
+NPU5--7：unused                 NPU8--15：另一 HCCS 平面，unused
+```
+
+Worker 之间虽然也由 HCCS full mesh 相连，但协议禁止 Worker 直达 Worker；payload
+必须沿 `Worker → INC → Worker` 的唯一路径。8 Worker + 1 INC 需要 9 张卡，无法
+放入任一 8-card 平面，所以本机 W8 没有等效链路配置，明确不进入 gate。
+
+### Baseline 与 92% Gate
+
+每个 Worker 向 INC 提供一条独立的 28 GB/s raw peer link，因此同方向 nominal raw
+聚合为：
+
+```text
+W2 raw = 2 × 28 = 56 GB/s    → gate = 56 × 0.92 = 51.52 GB/s
+W4 raw = 4 × 28 = 112 GB/s   → gate = 112 × 0.92 = 103.04 GB/s
+```
+
+同时保留单向 put-only 实测，用于描述 SHMEM transport 的物理腿，而不用于下调
+正式完整算子 gate：
+
+| 规模 | all→INC min | INC→all min | nominal raw | 完整算子 gate |
+|---|---:|---:|---:|---:|
+| W2 | 42.714 GB/s | 42.804 GB/s | 56 GB/s | 51.52 GB/s |
+| W4 | 85.445 GB/s | 83.258 GB/s | 112 GB/s | 103.04 GB/s |
+
+这里有两个不同口径：
+
+1. put-only 是单一物理方向的 payload / 单腿时间；
+2. Pull V2 算子带宽是实际 logical GET+PUT bytes / 从 READY 到全部 completion/ACK
+   的完整 device makespan。
+
+由于 INC 会把 GET、解析、重整和 PUT 做流水交叠，完整算子分子同时累计两个方向的
+logical bytes；因此算子 GB/s 可以高于某一条单向 put-only 数字。这不表示单条
+224-Gbit/s 链路被突破，也不能把 `measured/112` 直接解释成电气链路利用率。92%
+gate 是本轮对称 128 MiB 完整算子的 nominal roof contract；小消息、hotspot、
+ragged 或非对称 workload 只要求正确、稳定并单独报告性能，不套用该 gate。
+
 ## 协议闭环
 
 - Dispatch：worker 准备完整 source slot 后只发一个 READY；INC 主动 GET
