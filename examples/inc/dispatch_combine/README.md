@@ -1,47 +1,30 @@
 # INC Dispatch / Combine
 
-## 中文
+当前维护的独立算子是 **Single-INC Pull V2**：多个 Worker 与唯一 INC 建链，
+Dispatch 和 Combine 的 payload 都由 INC 主动 GET，再由 INC PUT 到目标 Worker。
 
-### 这个目录是干什么的？
+新人只需要沿这一条路径阅读：
 
-这里是当前维护的 **INC Dispatch/Combine（简称 INC DC）** 实现树。  
-语义上对应 MoE 的 **Dispatch / Combine 两段通信**：
+1. [`single_inc/QUICKSTART.md`](single_inc/QUICKSTART.md)：最短调用流程；
+2. [`single_inc/pull_combine/README.md`](single_inc/pull_combine/README.md)：API、构建与门禁；
+3. [`single_inc/pull_combine/FLOW.md`](single_inc/pull_combine/FLOW.md)：Dispatch/Combine 两张流程图；
+4. [`single_inc/pull_combine/inc_dc_pull_v2_api_example.cpp`](single_inc/pull_combine/inc_dc_pull_v2_api_example.cpp)：完整可编译示例。
 
-1. **Dispatch**：按路由把 token 从 worker 发送到专家所在位置（经 INC 中转）。
-2. **Combine**：把各专家贡献收集并加权归约，再写回源 token 布局。
+历史 Push V1、endpoint 与诊断 probe 不在当前源码树中。回退入口：
 
-历史 AG/RS、阶段 gate、未进入产品闭包的实验实现已经移除。  
-目录根部故意不放源码，避免「靠文件名前缀猜所有权」；所有权以物理路径为准。
-
-**新人快速了解单 INC Dispatch/Combine 主逻辑（推荐首读）：**  
-[`single_inc/QUICKSTART.md`](single_inc/QUICKSTART.md)  
-**当前 sweep 进度 / 环境 / baseline：**  
-[`single_inc/SWEEP_STATUS.md`](single_inc/SWEEP_STATUS.md)
-
-### 目录边界
-
-- 把 **稳定公开 ABI**（`common/`）与 **单 INC 实现**（`single_inc/`）分开，框架只依赖前者。
-- 把 **资格化脚本/测试** 与运行库分开，二进制安装包可以裁剪，但源码仓保留门禁。
-
-### 子目录
-
-| 目录 | 用途 | 为什么要有 | 交付属性 |
-|---|---|---|---|
-| `common/` | 稳定 C API、共享协议、硬件策略、C 接入示例 | 框架与单 INC 的契约层；改 ABI 必须可控 | 生产必需 |
-| `single_inc/` | 单 INC Dispatch、Combine、常驻服务、计划编译 | 当前正式星型产品数据面 | 生产必需 |
-| `scripts/` | 真机 case launcher 与随机 token-plan sweep | 强制拓扑/空闲保护，避免手跑绕过门禁 | 资格化工具 |
-| `tests/` | Host 侧 API / planner / backend 回归 | 交付门禁；不依赖真机也能挡 ABI 漂移 | 交付门禁 |
-
-### 构建入口
-
-正式构建入口在 `examples/inc/CMakeLists.txt`（由上层 `shmem` 构建系统拉入）：
-
-```bash
-# 在 shmem 的父目录执行；若已在 shmem/ 内则用 cmake -S .
-cmake -S shmem -B build -DCMAKE_BUILD_TYPE=Release -DUSE_EXAMPLES=ON
-cmake --build build -j --target \
-  inc_dc_single_inc_stream inc_dc_sv2_dyn_csr_combine
+```text
+single-inc-v1-legacy
+single-inc-pull-v2-qualified-pre-api
 ```
 
-真机资格化请走 `scripts/single_inc/`（裸跑 bin 会绕过拓扑/空闲门禁，不作交付证据）。  
-注意：exe/target 名可能仍带 `sv2`，**源文件以 CMake 列表中的稳定名为准**（见 `single_inc/combine/README.md`）。
+`common/` 中的框架契约以及 `fusion_kernel/` 的融合算子是独立模块，不是调用 Pull
+V2 独立算子的必经层。
+
+## English
+
+The maintained standalone operator is **Single-INC Pull V2**. The INC pulls
+both Dispatch and Combine payloads, then publishes results to destination
+workers. Start with `single_inc/QUICKSTART.md`; the authoritative API, build
+commands, diagrams, and complete example live under `single_inc/pull_combine/`.
+Legacy Push V1 and diagnostics are recoverable from the tags above and are not
+part of the current source path.
