@@ -17,8 +17,8 @@
 每次真机运行必须从当前 hardware profile 和 live topology 解析逻辑 rank 到物理
 NPU 的映射，并确认所选 worker→INC 链路满足该环境的等效性要求。`nb-borrow`
 是两个 8 卡 HCCS 平面，因此当前只资格化同一平面内的 W2/W4；8W+1INC 无法
-放进单个 8 卡平面，不应用跨平面结果冒充等效 W8。`yuanmingyu` 的星型映射和
-历史 W8 数据仍保存在它自己的 hardware profile 中。
+放进单个 8 卡平面，不应用跨平面结果冒充等效 W8。当前代码没有其他集群或 W8
+资格数据，移植后必须重新测量。
 
 具体映射、roofline 和环境 gate 以
 `docs/inc/report/ACTIVE_HW_PROFILE.md` 指向的 `single_inc_ENV_STATUS.md` 为准。

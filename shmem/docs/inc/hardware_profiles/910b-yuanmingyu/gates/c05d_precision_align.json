@@ -1,8 +1,0 @@
-{
-  "stage": "c05d_precision_align",
-  "git_revision": "unknown",
-  "formal_pass": false,
-  "pass": false,
-  "fp16_tolerance": 0.001,
-  "device_vs_reference": false
-}

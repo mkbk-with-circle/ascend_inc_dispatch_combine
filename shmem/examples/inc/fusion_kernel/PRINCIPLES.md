@@ -11,7 +11,7 @@
 - 单 INC 通信主逻辑：[`../dispatch_combine/single_inc/QUICKSTART.md`](../dispatch_combine/single_inc/QUICKSTART.md)
 - 单 INC 当前进度与基线：[`../dispatch_combine/single_inc/SWEEP_STATUS.md`](../dispatch_combine/single_inc/SWEEP_STATUS.md)
 - 共享硬约束 H1–H22：`../../../docs/inc/report/single_inc_LIVE_STATUS.md`
-- 融合基线现状与已知坑：[`example/README.md`](example/README.md)
+- 融合基线现状与已知坑：[`examples/README.md`](examples/README.md)
 
 > **2026-08-09 实施决议（优先于下文旧 P0/P1 路径描述）**：用户确认采用方案 B，
 > worker 的 D/GMM1/SwiGLU/GMM2/C 必须在同一 MIX kernel 内；INC 使用同一次
@@ -126,7 +126,7 @@ scatter-add(y * weight) → 该 mb 的 combine 输入
 
 - **切分键**：按**行区间**切，且与 expert 边界对齐（不跨 expert 切一个 wave，避免多一层索引）；
 - **目的**：让 AIV 的 `act(w0)` 与 AIC 的 `GMM1(w1)` 交叠、`act(w1)` 与 `GMM2(w0)` 交叠，形成 AIC/AIV 两级软流水，而不是「整块 gate_up 算完再整块 act」；
-- **交接**：每个 wave 一次 AIC→AIV / AIV→AIC 的 set/wait。**禁止每 tile 一次交接**——当前构建上 AIC→AIV 方向已知会挂（见 `example/README.md`）；
+- **交接**：每个 wave 一次 AIC→AIV / AIV→AIC 的 set/wait。**禁止每 tile 一次交接**——当前构建上 AIC→AIV 方向已知会挂（见 `examples/README.md`）；
 - `W_act` 是可调常量（合法值 1/2/4，默认 2），**不写死**；`W_act = 1` 退化为现状，用作对照。
 
 ### 2.4 FFN 内层
@@ -311,7 +311,7 @@ mb i+1 :            INC-Dispatch ═══════════════�
 | 拓扑限制（本环境） | 两个 8 卡 HCCS 岛（Phy 0–7、8–15）。**`W + 1` 张卡必须落在同一个岛内**，因此本环境合法的 W 上限是 **7**；不测 W8+1 |
 | 验收规模 | 主力 W = 4，另测 W = 2；**W 必须是运行期参数，不得只对某几个值合法**（H20，见下条「任意卡数」） |
 | **任意卡数** | 数据面、ABI、host 侧换算都要支持单机任意 `W`（受上面 HCCS 岛约束）。禁止 `world = W + 2` 之类的写死换算，禁止按 W 查表切策略（H22）。`E` 不被 `W` 整除时（如 W=3/6/7 对 E=64），expert→rank 映射必须支持每 rank expert 数不等，且 FFN 与 combine 的分块不得假设 `E_loc` 相同 |
-| 备用环境 | **`910b-yuanmingyu`**（ACTIVE 资格化机，8×910B，CANN 9.1.0-beta.1，48 AIV/卡）。一旦可用即在其上补测，尤其是 **W8**；两机数字不得混报，各自按本机 roofline 判定 |
+| 其他环境 | 当前未资格化；换机后必须重新探测 topology/roofline 并重跑正确性、稳定性和性能矩阵，尤其不能用 nb 数字代替 W8 证据 |
 | 节点 | 单节点；多节点为后续项 |
 | INC rank 的模型加载 | **不加载**。INC 只做转发与加权归约，用不到任何权重，也不需要 KV cache。见 §6.6 |
 | worker AIV 预算 | D、C 各 ≤ `floor(live_AIV/2)`（H16），且必须为 FFN 的 Vector 计算显式留核。具体数字在 P1 环境确定后**写进报告并冻结**，不得随负载变化（H22） |
@@ -375,7 +375,7 @@ Fusion prepared API（`inc_fusion_api.h`，热路径不分配）+ host 侧预编
 | **P2 建立 A，再打开 B** | 先确认 `FFN(i) ∥ D(i+1)` 与 `FFN(i) ∥ C(i-1)`；再在同窗允许 `INC-D ∥ INC-C`，并实现 `D/C 互斥` 开关做对照 | A、B 分别给出 §8.2 的两组对照数字；D∥C 下 AIV cohort 不相交（H10/H17）；无 H18 回退 |
 | **P3 计算侧优化** | 按下方清单逐项做，每项单独 A-B | 每一项都不得让 A/B 收益或已资格化 case 回退；未达预期的项如实记录 |
 
-P3 清单（按 `example/README.md` 的预期收益排序，不必全做）：
+P3 清单（按 `examples/README.md` 的预期收益排序，不必全做）：
 
 1. **activation wave 化**（§2.3）；
 2. **本地 reduce 按目的行分区**——现在每个本地 expert 之间插 `shmemi_barrier_core()`，每 mb 有 E 次 barrier，是 combine 批量化后的主导同步开销。反转索引（由 `recv_group_idx` 经 argsort + counts 在 Python 端构建）后，每个核拥有互不重叠的目的行集合，expert 循环之间无需 barrier，每行只写一次；
@@ -435,7 +435,7 @@ P3 清单（按 `example/README.md` 的预期收益排序，不必全做）：
 
 ## 9. 故障诊断
 
-- 卡死先看 stage probe：`example/README.md` 的 stage 表（0-8 顶层、20-28 dispatch、40-46 combine、50-52 reduce、70-77 / 170-177 cube、100-108 / 110 v4 计算 rank、120-133 v4 switch）。所有核停在同一 PC 附近几十字节内 → 空转死锁而非崩溃。
+- 卡死先看 stage probe：`examples/README.md` 的 stage 表（0-8 顶层、20-28 dispatch、40-46 combine、50-52 reduce、70-77 / 170-177 cube、100-108 / 110 v4 计算 rank、120-133 v4 switch）。所有核停在同一 PC 附近几十字节内 → 空转死锁而非崩溃。
 - `ASCEND_LAUNCH_BLOCKING=1 ASCEND_PROCESS_LOG_PATH=./logs` 拿日志；`HCCL_EXEC_TIMEOUT=300` 让超时可回栈；`NPU_ASD_ENABLE=1` 查非法内存读。
 - `-DMOE_DISABLE_FFN=ON` 隔离通信流水线（仅 v3/v4 路径有此开关）。
 - 日志检索：`grep -E "E[0-9]{5}" ./logs/*/plog/plog-*.log`；`grep -iE "aicore timeout|task timeout|Stream Synchronize failed"`。
@@ -457,7 +457,7 @@ P3 清单（按 `example/README.md` 的预期收益排序，不必全做）：
 - **构建边界**：`fusion_kernel/ascend/` 进入 `examples/inc/CMakeLists.txt`，提供 plan、
   prepared C API、计算 probe 和 W2/W4 E2E；独立 D/C 带宽 gate 仍使用原 launcher。
 - **每阶段交付**：可运行代码 + 完整复现命令（含全部环境变量）+ §8.4 报告 + 已知问题清单。
-- **文档**：本文件是准则的唯一来源；实现落地后把「实际做成什么样」写进 `example/README.md`，不要在 `megamoe/` 下再开一份说明。
+- **文档**：本文件是准则的唯一来源；实现落地后把「实际做成什么样」写进 `examples/README.md`，不要在 `megamoe/` 下再开一份说明。
 
 ### 10.1 远端开发约定（开发在 `910b2c-nb` 上直接进行）
 
@@ -476,7 +476,7 @@ P3 清单（按 `example/README.md` 的预期收益排序，不必全做）：
 2. `megamoe/nvidia/deep_gemm/docs/sm90_fp8_mega_moe_warp_report.md`
 3. `megamoe/nvidia/deep_gemm/scheduler/mega_moe.cuh`
 4. `megamoe/nvidia/deep_gemm/impls/sm90_fp8_mega_moe.cuh` 文件头 PHASE 注释 + Pull/GMM 交叠
-5. `example/README.md` + `example/custom_moe_fused_inc.cpp`（v4）+ `example/custom_moe_fused.cpp`（v3）
+5. `examples/README.md`（当前示例入口；历史 v3/v4 文件不再保留）
 6. [`../dispatch_combine/single_inc/QUICKSTART.md`](../dispatch_combine/single_inc/QUICKSTART.md)（单 INC 的 Dispatch/Combine 主逻辑与同步点）
 7. `megamoe/ascend_related/vllm_dispatch_ffn_combine/dispatch_ffn_combine_kernel_report.md`（知差异，勿混同：它是 per-expert / group 流水，不是 expert-wave，也不是 INC）
 
@@ -509,7 +509,7 @@ P3 清单（按 `example/README.md` 的预期收益排序，不必全做）：
 
 **The INC rank loads no model.** It only relays and reduces, so it needs neither weights nor KV cache — v4's switch ranks load the full model merely because the relay logic was stuffed into ordinary vLLM ranks. Keep the INC out of vLLM's process group entirely: vLLM's world is the W compute ranks, and the INC is a separate process that joins only the fusion kernel's SHMEM symmetric world. Spend the freed HBM on the data path: raise `NSLOT` to 3 to unblock a deeper pipeline, widen the usable `MOE_MICROBATCH_SIZE` range, and give Dispatch and Combine separate non-reused buffers so concurrent D∥C cannot hit ping-pong WAR. Routing/layout metadata must then reach the INC through an explicit path, and the rank arithmetic in `custom_moe.py` (`world = W + 2`) has to change.
 
-**Environment and scale.** Development and qualification happen on **`910b2c-nb`** (16×910B2C, 64 GiB/card, CANN 9.1.0-beta.3, driver 25.0.rc1.1, 48 AIV/card; code root `/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem`). Its two 8-card HCCS islands (Phy 0–7, 8–15) force `W + 1` onto one island, so `W ≤ 7` here and W8 is not measured; main configurations are W=4 and W=2. `910b-yuanmingyu` (ACTIVE, 8×910B) is the fallback environment — re-measure there when it frees up, especially W8, and never mix numbers between machines. **`W` must be a runtime parameter**: no `world = W + 2` style hardcoding, no W-indexed strategy tables (H22), and when `E` is not divisible by `W`, the expert→rank map must tolerate unequal `E_loc` per rank. Use per-machine roofline anchors — on nb, per-HCCS-peer raw ≈ 28 GB/s and measured put-only aggregate is ≈ 42.71 (W2) / 85.45 (W4) GB/s, so the ACTIVE machine's 120/123 GB/s numbers do not apply and the overlap budget is tighter.
+**Environment and scale.** Development and qualification happen only on **`910b2c-nb`** (16×910B2C, 64 GiB/card, CANN 9.1.0-beta.3, driver 25.0.rc1.1, 48 AIV/card; code root `/export/home/yinjinrun.montyyin/.cursur/projects/default/shmem`). Its two 8-card HCCS islands (Phy 0–7, 8–15) force `W + 1` onto one island, so `W ≤ 7` here and W8 is not measured; main configurations are W=4 and W=2. No other cluster has current evidence. **`W` must be a runtime parameter**: no `world = W + 2` style hardcoding, no W-indexed strategy tables (H22), and when `E` is not divisible by `W`, the expert→rank map must tolerate unequal `E_loc` per rank. Any new environment needs its own topology, roofline, correctness and performance qualification; nb absolute numbers cannot be reused.
 
 **Deliverable is paper-grade evidence**, not product qualification: honour the hard rules in §5, but the required artifacts are the A/B comparisons, the metric discipline (warmup/measure/CV) and reproducible commands — not a full H1–H22 sweep. Record optimizations that turn out not to help.
 

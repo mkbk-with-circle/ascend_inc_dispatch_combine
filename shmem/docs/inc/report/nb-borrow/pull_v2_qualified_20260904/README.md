@@ -1,7 +1,7 @@
 # nb-borrow 单 INC Pull V2 资格报告（2026-09-04）
 
 本目录只记录 `nb-borrow`（Ascend 910B2C）上的 Pull-Dispatch V2 与
-Pull-Combine V2；不覆盖 yuanmingyu、Push V1 或历史实验。正式性能固定使用
+Pull-Combine V2；不包含旧协议或其他集群的历史实验。正式性能固定使用
 同一 HCCS 平面的 NPU 0--4（0--3 worker，4 为 INC）。运行前确认 16 张卡空闲。
 
 ## 协议闭环

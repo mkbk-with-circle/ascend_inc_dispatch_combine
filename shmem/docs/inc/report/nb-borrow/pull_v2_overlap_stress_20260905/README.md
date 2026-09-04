@@ -51,7 +51,7 @@ solo Combine active AIV   = floor(live_aiv / 2)
 overlap Combine active AIV = floor(live_aiv / 2) - worker_count
 ```
 
-该策略未设为生产默认；需要在 yuanmingyu/其他拓扑复测。把 Dispatch channels 从3
+该策略未设为生产默认；需要在任何其他硬件/拓扑上重新资格化。把 Dispatch channels 从3
 降到2会令 W4 union 增至20.5--20.7 ms，已明确拒绝。
 
 ## 3. 单 session 对照

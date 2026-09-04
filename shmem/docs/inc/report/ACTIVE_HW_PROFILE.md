@@ -1,14 +1,13 @@
 # 当前活跃硬件 Profile
 
-当前资格化环境为 **910b2c-nb**；`910b-yuanmingyu` 的星型拓扑数据保留为独立历史
-profile，不与 nb 的双 HCCS 平面结果混写或覆盖。
+当前且唯一有 Pull V2 资格证据的环境是 **910b2c-nb（nb-borrow）**。
 
-| 层 | nb 当前资格化 | yuanmingyu 保留结果 |
-|:---|:---|:---|
-| 环境状态 | `docs/inc/hardware_profiles/910b2c-nb/single_inc_ENV_STATUS.md` | `docs/inc/hardware_profiles/910b-yuanmingyu/single_inc_ENV_STATUS.md` |
-| 配置 | `docs/inc/configs/910b2c-nb.env` | `docs/inc/configs/910b-yuanmingyu.env` |
-| 结构化数据 | `docs/inc/hardware_profiles/910b2c-nb/` | `docs/inc/hardware_profiles/910b-yuanmingyu/` |
+| 项 | 路径 |
+|---|---|
+| 环境状态 | `docs/inc/hardware_profiles/910b2c-nb/single_inc_ENV_STATUS.md` |
+| 环境配置 | `docs/inc/configs/910b2c-nb.env` |
+| 正式结果 | `docs/inc/report/nb-borrow/pull_v2_qualified_20260904/` |
+| 压力/交叠 | `docs/inc/report/nb-borrow/pull_v2_overlap_stress_20260905/` |
 
-共享状态与硬 gate 位于 `docs/inc/report/single_inc_LIVE_STATUS.md`。换机器、CANN 或拓扑时，
-应新建/更新对应 hardware profile，再据该环境的实测 roofline 判定，不能直接复用另一台机器的
-绝对带宽 gate。
+当前实现尚未在其他集群上测试。换机器、CANN 或拓扑时必须新建独立 profile，重新
+探测 roofline、运行正确性/稳定性矩阵并设定本机 gate，不能复用 nb 的绝对数字。
