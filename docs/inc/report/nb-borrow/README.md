@@ -18,5 +18,8 @@ Fusion 数据统一入口：[`FUSION_KERNEL_RESULTS.md`](FUSION_KERNEL_RESULTS.m
 包含 W2/W4 128 MiB 正式 gate、任意长度/非对称/故障稳健性和采用独占 baseline
 的 D+C 真实交叠收益。
 
+后续交叠调优与非对称压力矩阵：
+[`pull_v2_overlap_stress_20260905`](pull_v2_overlap_stress_20260905/README.md)。
+
 当前容器、镜像 digest、构建参数和完整复现命令见
 `examples/inc/fusion_kernel/framework/vllm_ascend/RUNBOOK_NB_VLLM.md`。

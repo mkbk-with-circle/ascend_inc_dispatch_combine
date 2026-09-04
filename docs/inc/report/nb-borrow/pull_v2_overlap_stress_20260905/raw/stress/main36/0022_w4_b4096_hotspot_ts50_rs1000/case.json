@@ -1,0 +1,34 @@
+{
+  "channels": 3,
+  "correct": true,
+  "name": "0022_w4_b4096_hotspot_ts50_rs1000",
+  "operator_summary": {
+    "correct": true,
+    "cv_percent": 0,
+    "max_us": 1859.622,
+    "mean_us": 1859.622,
+    "measure": 1,
+    "min_us": 1859.622,
+    "protocol_cv_percent": 0,
+    "protocol_mean_gb_s": 0.266471497113,
+    "protocol_min_gb_s": 0.266471497113,
+    "test": "pull_dispatch_v2_device_e2e_summary",
+    "workers": 4,
+    "workload": "hotspot"
+  },
+  "payload_bytes": 4096,
+  "ready_skew_us": 1000,
+  "return_codes": [
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "route": "hotspot",
+  "seed": 20260904,
+  "timed_out": false,
+  "token_skew_percent": 50,
+  "wall_seconds": 5.662997730076313,
+  "workers": 4
+}

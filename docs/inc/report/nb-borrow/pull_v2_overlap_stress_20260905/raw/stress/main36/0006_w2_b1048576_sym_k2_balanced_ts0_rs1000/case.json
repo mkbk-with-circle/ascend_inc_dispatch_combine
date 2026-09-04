@@ -1,0 +1,32 @@
+{
+  "channels": 5,
+  "correct": true,
+  "name": "0006_w2_b1048576_sym_k2_balanced_ts0_rs1000",
+  "operator_summary": {
+    "correct": true,
+    "cv_percent": 0,
+    "max_us": 1501.735,
+    "mean_us": 1501.735,
+    "measure": 1,
+    "min_us": 1501.735,
+    "protocol_cv_percent": 0,
+    "protocol_mean_gb_s": 25.6668407311,
+    "protocol_min_gb_s": 25.6668407311,
+    "test": "pull_dispatch_v2_device_e2e_summary",
+    "workers": 2,
+    "workload": "sym_k2_balanced"
+  },
+  "payload_bytes": 1048576,
+  "ready_skew_us": 1000,
+  "return_codes": [
+    0,
+    0,
+    0
+  ],
+  "route": "sym_k2_balanced",
+  "seed": 20260904,
+  "timed_out": false,
+  "token_skew_percent": 0,
+  "wall_seconds": 6.070789255201817,
+  "workers": 2
+}

@@ -1,0 +1,32 @@
+{
+  "channels": 5,
+  "correct": true,
+  "name": "0015_w2_b134217728_hotspot_ts0_rs1000",
+  "operator_summary": {
+    "correct": true,
+    "cv_percent": 0,
+    "max_us": 1069179.211,
+    "mean_us": 1069179.211,
+    "measure": 1,
+    "min_us": 1069179.211,
+    "protocol_cv_percent": 0,
+    "protocol_mean_gb_s": 0.502734232065,
+    "protocol_min_gb_s": 0.502734232065,
+    "test": "pull_dispatch_v2_device_e2e_summary",
+    "workers": 2,
+    "workload": "hotspot"
+  },
+  "payload_bytes": 134217728,
+  "ready_skew_us": 1000,
+  "return_codes": [
+    0,
+    0,
+    0
+  ],
+  "route": "hotspot",
+  "seed": 20260904,
+  "timed_out": false,
+  "token_skew_percent": 0,
+  "wall_seconds": 11.003804668784142,
+  "workers": 2
+}

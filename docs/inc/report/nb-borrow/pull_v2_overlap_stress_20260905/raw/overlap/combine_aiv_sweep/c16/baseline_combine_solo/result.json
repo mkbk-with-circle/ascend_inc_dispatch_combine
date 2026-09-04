@@ -1,0 +1,26 @@
+{
+  "correct": true,
+  "duration_cycles": 372529,
+  "duration_us": 7450.58,
+  "role": "combine",
+  "sample": {
+    "active_aiv": 24,
+    "correct": true,
+    "cycle_kernel_done": 1029501910675239,
+    "cycle_kernel_start": 1029501910302710,
+    "cycle_plan_index_done": 1029501910337906,
+    "e2e_us": 7803.418,
+    "egress_bytes": 268435456,
+    "hidden": 8192,
+    "ingress_bytes": 536870912,
+    "iteration": 0,
+    "logical_gb_s": 103.199183742,
+    "rows": 8192,
+    "status": 0,
+    "test": "pull_combine_v2_npu_e2e",
+    "warmup": false,
+    "workers": 4,
+    "workload": "sym_k2_balanced"
+  },
+  "schema": "single-inc-pull-v2-solo-baseline.v2"
+}

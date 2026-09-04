@@ -1,0 +1,34 @@
+{
+  "channels": 3,
+  "correct": true,
+  "name": "0012_w4_b1048576_ragged_ts0_rs0",
+  "operator_summary": {
+    "correct": true,
+    "cv_percent": 0,
+    "max_us": 23348.653,
+    "mean_us": 23348.653,
+    "measure": 1,
+    "min_us": 23348.653,
+    "protocol_cv_percent": 0,
+    "protocol_mean_gb_s": 0.393624518419,
+    "protocol_min_gb_s": 0.393624518419,
+    "test": "pull_dispatch_v2_device_e2e_summary",
+    "workers": 4,
+    "workload": "ragged"
+  },
+  "payload_bytes": 1048576,
+  "ready_skew_us": 0,
+  "return_codes": [
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "route": "ragged",
+  "seed": 20260904,
+  "timed_out": false,
+  "token_skew_percent": 0,
+  "wall_seconds": 6.504373803734779,
+  "workers": 4
+}
