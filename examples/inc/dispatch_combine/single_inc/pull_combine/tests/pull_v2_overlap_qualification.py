@@ -226,6 +226,12 @@ def normalize_concurrent_combine_aiv(value: int) -> int | None:
     return None if value == 0 else value
 
 
+def normalize_concurrent_dispatch_channels(value: int) -> int | None:
+    if value < 0:
+        raise ValueError("concurrent Dispatch channels must be non-negative")
+    return None if value == 0 else value
+
+
 def apply_combine_aiv_environment(env: dict[str, str], role: str,
                                   active_aiv: int | None) -> None:
     # Never let a caller's shell accidentally throttle a solo baseline.
@@ -235,12 +241,16 @@ def apply_combine_aiv_environment(env: dict[str, str], role: str,
 
 
 def operator_commands(args: argparse.Namespace, role: str, endpoint: str,
-                      ordinal: int) -> list[list[str]]:
+                      ordinal: int,
+                      dispatch_channels: int | None = None
+                      ) -> list[list[str]]:
     if role == "dispatch":
+        selected_channels = (args.channels if dispatch_channels is None
+                             else dispatch_channels)
         tail = lambda pe: [
             str(args.workers), str(pe), endpoint, str(args.first_npu),
             str(args.payload_bytes), "sym_k2_balanced", str(args.hidden),
-            str(args.expert_count), str(args.channels), "0", "1",
+            str(args.expert_count), str(selected_channels), "0", "1",
             str(args.seed + ordinal), "0",
         ]
     elif role == "combine":
@@ -282,6 +292,9 @@ def run_solo_baseline(args: argparse.Namespace, role: str,
     gate = case / "gate"
     endpoint = f"tcp://127.0.0.1:{free_port()}"
     commands = operator_commands(args, role, endpoint, ordinal)
+    if role == "dispatch" and any(
+            int(command[8]) != args.channels for command in commands):
+        raise RuntimeError("solo Dispatch channels differ from --channels")
     binary = args.dispatch_bin if role == "dispatch" else args.combine_bin
     test_name = ("pull_dispatch_v2_device_e2e" if role == "dispatch" else
                  "pull_combine_v2_npu_e2e")
@@ -316,6 +329,7 @@ def run_solo_baseline(args: argparse.Namespace, role: str,
             "role": role,
             "duration_cycles": duration_cycles,
             "duration_us": duration_cycles * SYSTEM_CYCLE_US,
+            "dispatch_channels": args.channels if role == "dispatch" else None,
             "sample": sample,
             "correct": True,
         }
@@ -338,9 +352,15 @@ def run_case(args: argparse.Namespace, schedule: Schedule,
     endpoint_d = f"tcp://127.0.0.1:{free_port()}"
     endpoint_c = f"tcp://127.0.0.1:{free_port()}"
     dispatch_commands = operator_commands(
-        args, "dispatch", endpoint_d, ordinal)
+        args, "dispatch", endpoint_d, ordinal,
+        args.concurrent_dispatch_channels)
     combine_commands = operator_commands(
         args, "combine", endpoint_c, ordinal)
+    expected_dispatch_channels = (args.concurrent_dispatch_channels
+        if args.concurrent_dispatch_channels is not None else args.channels)
+    if any(int(command[8]) != expected_dispatch_channels
+           for command in dispatch_commands):
+        raise RuntimeError("concurrent Dispatch channel override was lost")
 
     procs: list[subprocess.Popen[str]] = []
     logs: list[Any] = []
@@ -412,6 +432,7 @@ def run_case(args: argparse.Namespace, schedule: Schedule,
             },
             "inter_case_cooldown_ms": args.inter_case_cooldown_ms,
             "concurrent_combine_active_aiv": expected_combine_aiv,
+            "concurrent_dispatch_channels": expected_dispatch_channels,
             "dispatch": dispatch,
             "combine": combine,
             "timeline": metrics,
@@ -482,7 +503,10 @@ def main() -> int:
     parser.add_argument("--payload-bytes", type=int, default=128 * MIB)
     parser.add_argument("--hidden", type=int, default=8192)
     parser.add_argument("--expert-count", type=int, default=64)
-    parser.add_argument("--channels", type=int, default=4)
+    parser.add_argument("--channels", type=int, default=3)
+    parser.add_argument(
+        "--concurrent-dispatch-channels", type=int, default=0,
+        help="qualification-only; 0 reuses the solo --channels value")
     parser.add_argument(
         "--concurrent-combine-aiv", type=int, default=0,
         help="qualification-only; 0 keeps dynamic floor(live/2)")
@@ -502,6 +526,9 @@ def main() -> int:
     try:
         args.concurrent_combine_aiv = normalize_concurrent_combine_aiv(
             args.concurrent_combine_aiv)
+        args.concurrent_dispatch_channels = \
+            normalize_concurrent_dispatch_channels(
+                args.concurrent_dispatch_channels)
         args.schedule_selection = parse_schedule_selection(args.schedules)
     except ValueError as error:
         raise SystemExit(str(error)) from error
@@ -560,6 +587,11 @@ def main() -> int:
         "inter_case_cooldown_ms": args.inter_case_cooldown_ms,
         "schedule_selection": list(args.schedule_selection),
         "solo_combine_active_aiv": args.solo_combine_active_aiv,
+        "solo_dispatch_channels": args.channels,
+        "concurrent_dispatch_channels": (
+            args.concurrent_dispatch_channels
+            if args.concurrent_dispatch_channels is not None
+            else args.channels),
         "concurrent_combine_active_aiv": (
             args.concurrent_combine_aiv
             if args.concurrent_combine_aiv is not None

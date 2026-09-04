@@ -126,6 +126,30 @@ class PullV2OverlapQualificationTest(unittest.TestCase):
         MODULE.apply_combine_aiv_environment(inherited, "dispatch", 12)
         self.assertNotIn("INC_DC_PULL_V2_COMBINE_ACTIVE_AIV", inherited)
 
+    def test_concurrent_dispatch_channels_only_override_concurrent_command(self):
+        self.assertIsNone(
+            MODULE.normalize_concurrent_dispatch_channels(0))
+        self.assertEqual(
+            MODULE.normalize_concurrent_dispatch_channels(2), 2)
+        with self.assertRaises(ValueError):
+            MODULE.normalize_concurrent_dispatch_channels(-1)
+
+        class Args:
+            workers = 4
+            first_npu = 0
+            payload_bytes = 128 << 20
+            hidden = 8192
+            expert_count = 64
+            channels = 3
+            seed = 7
+
+        solo = MODULE.operator_commands(
+            Args(), "dispatch", "tcp://127.0.0.1:1", 0)
+        concurrent = MODULE.operator_commands(
+            Args(), "dispatch", "tcp://127.0.0.1:1", 0, 2)
+        self.assertTrue(all(command[8] == "3" for command in solo))
+        self.assertTrue(all(command[8] == "2" for command in concurrent))
+
 
 if __name__ == "__main__":
     unittest.main()
