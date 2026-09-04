@@ -195,6 +195,36 @@ bool ParserScratchEntries(uint32_t blocks, uint32_t workers,
         Add(entries, source_extent, out);
 }
 
+void DumpParserState(const GuardedBuffer &buffer, uint32_t blocks,
+                     uint32_t workers)
+{
+    const uint32_t active = (blocks / workers) * workers;
+    const uint64_t source_state = 0u;
+    const uint64_t source_error = static_cast<uint64_t>(workers) * 16u;
+    uint64_t block_status = source_error +
+        static_cast<uint64_t>(workers) * 16u + workers + 1u;
+    block_status = (block_status + 15u) & ~15ull;
+    std::vector<uint32_t> words(static_cast<size_t>(active) * 16u);
+    std::vector<uint32_t> sources(static_cast<size_t>(workers) * 32u);
+    if (aclrtMemcpy(sources.data(), sources.size() * sizeof(uint32_t),
+                    buffer.data + source_state * sizeof(uint32_t),
+                    sources.size() * sizeof(uint32_t),
+                    ACL_MEMCPY_DEVICE_TO_HOST) != ACL_SUCCESS ||
+        aclrtMemcpy(words.data(), words.size() * sizeof(uint32_t),
+                    buffer.data + block_status * sizeof(uint32_t),
+                    words.size() * sizeof(uint32_t),
+                    ACL_MEMCPY_DEVICE_TO_HOST) != ACL_SUCCESS)
+        return;
+    for (uint32_t source = 0u; source < workers; ++source)
+        std::cerr << "[DEBUG] source_state[" << source << "]="
+                  << sources[source * 16u] << " source_error="
+                  << sources[workers * 16u + source * 16u] << '\n';
+    for (uint32_t parser = 0u; parser < active; ++parser)
+        std::cerr << "[DEBUG] parser_state[" << parser << "] pass2="
+                  << words[parser * 16u] << " metadata="
+                  << words[parser * 16u + 1u] << '\n';
+}
+
 uint64_t Mix(uint64_t value)
 {
     value += 0x9e3779b97f4a7c15ull;
@@ -795,6 +825,8 @@ bool ValidateInc(const Options &o, const WaveOracle &oracle,
                  const GuardedBuffer &destination_assignment_counts,
                  const GuardedBuffer &expert_counts,
                  const GuardedBuffer &status_line,
+                 const GuardedBuffer &parser_scratch,
+                 uint32_t dispatch_blocks,
                  PullTimeline *timeline_out,
                  uint64_t inc_rows_stride_bytes,
                  uint64_t inc_assignments_stride_bytes)
@@ -806,6 +838,7 @@ bool ValidateInc(const Options &o, const WaveOracle &oracle,
     if (timeline.status != expected_status) {
         std::cerr << "[FAIL] status actual=" << timeline.status
                   << " expected=" << expected_status << '\n';
+        DumpParserState(parser_scratch, dispatch_blocks, o.workers);
         return false;
     }
     *timeline_out = timeline;
@@ -1417,7 +1450,8 @@ int main(int argc, char **argv)
                 journal_assignments, row_map, source_token_prefix,
                 source_destination_prefix, destination_row_counts,
                 destination_assignment_counts, expert_counts, status_line,
-                &timeline, rows_slot_stride, assignments_slot_stride);
+                parser_scratch, dispatch_aiv_budget, &timeline,
+                rows_slot_stride, assignments_slot_stride);
         for (GuardedBuffer *buffer : buffers)
             iteration_correct = GuardsValid(*buffer) && iteration_correct;
         if (status == 0) aclshmem_barrier_all();
