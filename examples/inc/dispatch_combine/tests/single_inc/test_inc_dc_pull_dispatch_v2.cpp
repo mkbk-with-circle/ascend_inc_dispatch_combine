@@ -191,6 +191,66 @@ void TestJournalStateMachine()
     assert(TransitionJournal(&header, JournalSlotState::FREE) == Status::OK);
 }
 
+SourceInput UniformOrEmptyInput(uint32_t rank, bool active)
+{
+    SourceInput input{};
+    input.session = Session(4u, 8u, 3u, DataType::BF16);
+    input.generation = 91u;
+    input.sequence = 27u;
+    input.wave = 6u;
+    input.source_rank = rank;
+    input.source_region_id = rank + 1u;
+    input.ring_slot = 0u;
+    input.assignment_offsets = {0u};
+    if (!active) return input;
+    input.token_ids = {700u, 701u};
+    input.assignment_offsets = {0u, 2u, 4u};
+    input.assignments = {
+        {0u, 0u, 0u, 0.4f}, {2u, 1u, 1u, 0.6f},
+        {0u, 2u, 0u, 0.3f}, {2u, 3u, 1u, 0.7f},
+    };
+    input.hidden_payload.resize(2u * 3u * 2u, 0x5au);
+    return input;
+}
+
+void TestEmptySourcesAreUniform()
+{
+    std::vector<ParsedSource> one_active;
+    for (uint32_t rank = 0u; rank < 4u; ++rank) {
+        const ParsedSource source = BuildAndParse(
+            UniformOrEmptyInput(rank, rank == 0u));
+        assert((source.header.flags & kSlotFlagUniformDestinations) != 0u);
+        one_active.push_back(source);
+    }
+    LayoutConfig config{};
+    config.worker_count = 4u;
+    config.expert_count = 8u;
+    config.destination_row_capacity = 8u;
+    config.destination_assignment_capacity = 8u;
+    CompiledLayout layout{};
+    assert(CompileLayout(one_active, {0u, 1u, 2u, 3u}, config, &layout) ==
+           Status::OK);
+    assert((layout.journal_header.flags &
+            kJournalFlagUniformDestinations) != 0u);
+    assert(layout.journal_header.token_count == 2u);
+    assert(layout.destination_rows[0].size() == 2u);
+    assert(layout.destination_rows[2].size() == 2u);
+
+    std::vector<ParsedSource> all_empty;
+    for (uint32_t rank = 0u; rank < 4u; ++rank) {
+        const ParsedSource source = BuildAndParse(
+            UniformOrEmptyInput(rank, false));
+        assert((source.header.flags & kSlotFlagUniformDestinations) != 0u);
+        all_empty.push_back(source);
+    }
+    assert(CompileLayout(all_empty, {3u, 2u, 1u, 0u}, config, &layout) ==
+           Status::OK);
+    assert((layout.journal_header.flags &
+            kJournalFlagUniformDestinations) != 0u);
+    assert(layout.journal_header.token_count == 0u);
+    assert(layout.journal_header.contributor_count == 0u);
+}
+
 void TestRandomPackets()
 {
     constexpr uint64_t kSeed = 0x50444c4c7632ull;
@@ -349,6 +409,7 @@ int main()
     TestBasicProtocol();
     TestLayoutAndJournal();
     TestJournalStateMachine();
+    TestEmptySourcesAreUniform();
     TestRandomPackets();
     TestRandomLayouts();
     return 0;

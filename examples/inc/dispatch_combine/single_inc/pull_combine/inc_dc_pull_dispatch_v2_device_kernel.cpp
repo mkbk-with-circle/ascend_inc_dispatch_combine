@@ -653,6 +653,7 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinationsGeneric(
     uint32_t worker_count, uint32_t channel,
     uint32_t channels_per_source)
 {
+    if (header->token_count == 0u) return;
     __gm__ TokenRecord *tokens = reinterpret_cast<__gm__ TokenRecord *>(
         reinterpret_cast<__gm__ uint8_t *>(header) + header->tokens_offset);
     __gm__ AssignmentRecord *assignments =
@@ -740,6 +741,7 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinationsFixed(
     uint32_t worker_count, uint32_t channel,
     uint32_t channels_per_source)
 {
+    if (header->token_count == 0u) return;
     __gm__ TokenRecord *tokens = reinterpret_cast<__gm__ TokenRecord *>(
         reinterpret_cast<__gm__ uint8_t *>(header) + header->tokens_offset);
     __gm__ AssignmentRecord *assignments =
@@ -826,6 +828,7 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinations(
     uint32_t worker_count, uint32_t channel,
     uint32_t channels_per_source)
 {
+    if (header->token_count == 0u) return;
     __gm__ TokenRecord *tokens = reinterpret_cast<__gm__ TokenRecord *>(
         reinterpret_cast<__gm__ uint8_t *>(header) + header->tokens_offset);
     const uint32_t fanout = tokens[0].assignment_count;
@@ -1725,7 +1728,9 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                 const bool source_hint =
                     (source_header->flags &
                      kSlotFlagUniformDestinations) != 0u;
-                bool source_uniform = source_header->token_count != 0u;
+                // Empty sources contribute the empty set and are vacuously
+                // uniform; every destination delta must remain 0/0 below.
+                bool source_uniform = true;
                 for (uint32_t destination = 0u;
                      destination < worker_count; ++destination) {
                     const uint32_t row_begin =
@@ -1780,6 +1785,24 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             timeline->all_ready = last_ready_cycle;
             timeline->ready_sources = worker_count;
             timeline->headers_pulled = AscendC::GetSystemCycle();
+            // Empty parser chunks have no phase-2 writes.  Publish them from
+            // the prefix coordinator so sideband progress never depends on an
+            // otherwise work-free producer being scheduled.  A producer may
+            // later repeat the same idempotent publication.
+            for (uint32_t source = 0u; source < worker_count; ++source) {
+                __gm__ SlotHeader *source_header =
+                    reinterpret_cast<__gm__ SlotHeader *>(inc_slots +
+                        MulU64ByU32(source_slot_stride, source));
+                if (source_header->token_count != 0u) continue;
+                for (uint32_t lane = 0u; lane < parser_cohort; ++lane) {
+                    __gm__ uint32_t *parser_state = block_status +
+                        static_cast<uint64_t>(source * parser_cohort + lane) *
+                            scratch_layout.block_stride;
+                    *parser_state = kParserPass2Ready;
+                    dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
+                        parser_state));
+                }
+            }
         }
         FlushRange(source_token_prefix,
                    (static_cast<uint64_t>(worker_count) + 1u) *

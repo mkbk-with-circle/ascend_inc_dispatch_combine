@@ -169,7 +169,9 @@ Status BuildSlot(const SourceInput &input, std::vector<uint8_t> *slot,
                     "hidden payload size mismatch", error);
 
     std::vector<TokenRecord> tokens(input.token_ids.size());
-    bool uniform_destinations = !tokens.empty();
+    // An empty source is a vacuous member of a uniform wave.  It contributes
+    // no rows and must not force active peers onto the general data path.
+    bool uniform_destinations = true;
     std::vector<uint8_t> reference_destinations(
         input.session.worker_count, 0u);
     for (uint32_t token = 0u; token < tokens.size(); ++token) {
@@ -585,10 +587,7 @@ Status CompileLayout(const std::vector<ParsedSource> &sources,
     bool uniform_destinations = true;
     for (uint32_t rank = 0u; rank < config.worker_count; ++rank) {
         const ParsedSource &source = *by_rank[rank];
-        if (source.tokens.empty()) {
-            uniform_destinations = false;
-            break;
-        }
+        if (source.tokens.empty()) continue;
         std::vector<uint8_t> reference(config.worker_count, 0u);
         for (uint32_t token = 0u; token < source.tokens.size(); ++token) {
             const TokenRecord &record = source.tokens[token];
