@@ -42,6 +42,10 @@ function(inc_device_target target)
         --cce-fatobj-link ${CCE_AICORE_ARCH_VEC} ${SANITIZER_FLAGS})
 endfunction()
 
+# Current standalone single-INC Pull V2 protocol, API, qualification binaries,
+# and reference example. Legacy framework/fusion targets below remain separate.
+add_subdirectory(dispatch_combine/single_inc/pull_combine)
+
 # Shared framework-facing API.
 add_library(inc_dc_framework_api SHARED
     dispatch_combine/common/api/inc_dc_framework_c_api.cpp
