@@ -1,91 +1,41 @@
-# 单 INC — 环境状态（TEMPLATE）
+# Single-INC Pull V2 环境状态模板
 
-> 克隆到：`docs/inc/hardware_profiles/<profile-name>/single_inc_ENV_STATUS.md`  
-> 只写**本环境**事实与复测。硬约束 / gate 公式 / 全局队列 →  
-> [`../../single_inc_LIVE_STATUS.md`](../../single_inc_LIVE_STATUS.md)
+复制到 `docs/inc/hardware_profiles/<profile>/single_inc_ENV_STATUS.md`。新环境在完成
+以下项目之前必须标记为 UNVERIFIED，不能复用 nb 的绝对带宽数字。
 
-| 字段 | 值 |
-|:---|:---|
-| profile 名 | `<profile-name>` |
-| 上次更新 | YYYY-MM-DD |
-| 更新者 | |
-| 对应共享文档 | `docs/inc/report/single_inc_LIVE_STATUS.md` |
-
----
-
-## 1. 本机身份与软件
+## 环境
 
 | 项 | 值 |
-|:---|:---|
-| 主机 / SSH | |
-| 代码根 | `…/ascend-样机/shmem` |
-| NPU / 型号 | （`npu-smi info`） |
-| CANN（可多版本并存时逐行写） | 路径 + 版本号；标明**本次实测用哪一个** |
-| 其它本机 CANN（若有） | 例：系统 8.5 / 用户目录 9.0；**勿与别的环境混用数字** |
-| 驱动 | |
-| env 配置文件 | `docs/inc/configs/<profile>.env`（若有） |
+|---|---|
+| NPU/数量/HBM | |
+| CANN/驱动 | |
+| 普通 AIV | 运行时查询 |
+| HCCS/PCIe 拓扑 | |
+| INC 与 Worker placement | |
+| 可等效测试规模 | |
 
----
+## 链路与 Gate
 
-## 2. 本机拓扑与 AIV
+| 规模 | ingress roofline | egress roofline | raw 聚合口径 | gate 比例/数值 |
+|---|---:|---:|---:|---:|
+| | | | | |
 
-| 项 | 值 |
-|:---|:---|
-| Live AIV 总数 | （查询，勿抄别的环境） |
-| INC rank / Phy | |
-| Worker Phy 集合 | |
-| 禁用链路 | |
-| 当前 D/C AIV 分配（实测所用） | 例：动态 / 临时 16+32 |
-| NPU 空闲 / 独占 | |
+必须同时说明完整算子的计时区间和 logical-byte 分子，不能只用单程链路代替算子。
 
----
+## 正式矩阵
 
-## 3. 本机性能锚点
+| 算子 | W/top-k/bytes | 正确性 | Min/Mean/CV | Gate | 结果 |
+|---|---|---|---|---|---|
+| Dispatch | | | | | UNVERIFIED |
+| Combine | | | | | UNVERIFIED |
 
-| 项 | 值 |
-|:---|:---|
-| 单向 PushRoofline | ____ GB/s（供 shared `gate_dispatch`） |
-| 锚点测量命令/报告 | |
-| 套用 shared gate 时是否已更新锚点 | YES / NO |
+## 必做检查
 
----
-
-## 4. 本机复测红绿灯
-
-图例：`PASS` / `FAIL` / `GAP` / `UNVERIFIED`。  
-对照峰值：shared 文档 §5；gate：shared §2（用**本机** PushRoofline）。
-
-| Case | 正确性 | 带宽或 ratio | vs Gate | vs 共享峰值榜 | 报告路径 |
-|:---|:---|---:|:---|:---|:---|
-| D W8/K8 @128MiB | UNVERIFIED | | | | |
-| D W8/K8 @256MiB | UNVERIFIED | | | | |
-| D W8/K1 @128MiB | UNVERIFIED | | | | |
-| D W2/K8 @256MiB | UNVERIFIED | | | | |
-| C W8/K8 @128MiB | UNVERIFIED | | | | |
-| C W8/K8 @256MiB | UNVERIFIED | | | | |
-| C W8/K1 @128MiB | UNVERIFIED | | | | |
-| C W8/K1 @256MiB | UNVERIFIED | | | | |
-| Overlap W8 bal 256M/K8 | UNVERIFIED | | | | |
-
-本机结论（一句话）：
-
----
-
-## 5. 本机迁移 Checklist
-
-- [ ] 代码 / CANN env  
-- [ ] `npu-smi` 空闲  
-- [ ] live topo → §2  
-- [ ] live AIV → §2  
-- [ ] 测 PushRoofline → §3  
-- [ ] 跑 §4 最小集  
-- [ ] 若刷新全局峰值或关队列项 → **回写 shared LIVE_STATUS**  
-- [ ] 更新 `ACTIVE_HW_PROFILE.md`（若本环境成为 ACTIVE）
-
----
-
-## 6. 本机 Changelog
-
-| 日期 | 谁 | 变更 |
-|:---|:---|:---|
-| | | 从模板创建 |
+- [ ] 运行前后所有目标 NPU 空闲并取得独占锁；
+- [ ] live topology 与 placement 等效；
+- [ ] publication/cookie/digest/capacity/guard 正确；
+- [ ] warmup≥3、measure≥10、CV≤5%；
+- [ ] 空输入、尾块、不同 top-k、重复目的、ragged 和 skew；
+- [ ] 连续 wave 与 ring-slot 复用；
+- [ ] Dispatch/Combine 并发与错峰；
+- [ ] 原始日志本地归档，Git 只提交汇总和复现命令。

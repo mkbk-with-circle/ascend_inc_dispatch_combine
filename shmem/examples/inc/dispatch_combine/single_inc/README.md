@@ -15,11 +15,13 @@ Combine : B Notice → INC GET partials → FP32 reduce → INC PUT original A
 - 两张详细流程图：[`pull_combine/FLOW.md`](pull_combine/FLOW.md)
 - 设计与门禁：[`pull_combine/PULL_DISPATCH_V2_DESIGN.md`](pull_combine/PULL_DISPATCH_V2_DESIGN.md)
 
-历史实现从 `single-inc-v1-legacy` 标签读取，不应与当前 Pull V2 混用。
+历史 V1/Fusion 完整树从 `archive/pre-minimal-v1-fusion-20260904` 标签读取，
+不应与当前 Pull V2 混用。
 
 ## English
 
 The sole maintained standalone Dispatch/Combine path is `pull_combine/` (Pull
 V2). Use `QUICKSTART.md` for the shortest integration path and `FLOW.md` for
-the protocol diagrams. Recover legacy implementations from the Git tag rather
-than mixing them into the current build.
+the protocol diagrams. Recover legacy implementations from
+`archive/pre-minimal-v1-fusion-20260904`, rather than mixing them into the
+current build.

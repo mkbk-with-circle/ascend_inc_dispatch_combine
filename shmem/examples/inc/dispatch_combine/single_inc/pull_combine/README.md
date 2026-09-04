@@ -1,18 +1,13 @@
 # Single-INC Pull Dispatch / Combine V2
 
-本目录只保留当前 Pull V2 实现。历史 Push-Dispatch/Pull-Combine V1、旧 endpoint
-路径和调优 probe 已从当前树删除，可通过 Git 标签恢复：
+本目录只保留当前 Pull V2 实现。历史 V1、旧 endpoint、调优 probe 和 Fusion
+Kernel 已从当前树删除，可通过远端归档标签完整恢复：
 
 ```bash
-git show single-inc-v1-legacy:examples/inc/dispatch_combine/single_inc/pull_combine
-git switch --detach single-inc-v1-legacy
+git switch --detach archive/pre-minimal-v1-fusion-20260904
 ```
 
-清理前的 Pull V2 资格版本保存在：
-
-```text
-single-inc-pull-v2-qualified-pre-api
-```
+当前最小树之前的完整状态即该归档标签；无需在工作树中保留重复源码。
 
 ## 最短应用接口
 

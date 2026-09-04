@@ -1,5 +1,5 @@
-# Current single-INC Pull V2 implementation. Historical V1/endpoint sources
-# are available from the `single-inc-v1-legacy` Git tag, not from this tree.
+# Current single-INC Pull V2 implementation. Historical V1/Fusion sources are
+# available from `archive/pre-minimal-v1-fusion-20260904`, not this tree.
 
 set(INC_DC_PULL_V2_DIR ${CMAKE_CURRENT_LIST_DIR})
 set(INC_DC_PULL_V2_TEST_DIR

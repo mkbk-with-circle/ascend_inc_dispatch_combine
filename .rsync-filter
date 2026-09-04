@@ -1,32 +1,22 @@
-# rsync 同步样机工作区时排除（用法: rsync -av --filter='merge .rsync-filter' ...）
-# 保留 report/ 根下 gate JSON、audit md、trace csv；勿传 build/log/golden/bin
-
-- shmem/build/
+# Minimal source sync: omit all reproducible and machine-local artifacts.
 - **/build/
+- **/build-*/
+- **/cmake-build-*/
 - **/CMakeFiles/
+- **/install/
 - *.o
+- *.a
+- *.so
+- *.bin
 - *.log
-- *rank_*.log
-- driver.log
-- launcher
-- shmem/docs/inc/report/d03_dc_ll_logs/
-- shmem/docs/inc/report/*_logs/
-- shmem/docs/inc/report/c12c_logs/
-- shmem/docs/inc/report/c12c_bw_tune_logs/
-- shmem/docs/inc/report/c12c_tuned_logs/
-- shmem/docs/inc/report/p5/native_baseline_logs/
-- shmem/docs/inc/report/multi_inc_bw_matrix_*/
-- shmem/docs/inc/report/d03_dc_ll_logs/**/native/
-- shmem/docs/inc/report/d03_dc_ll_logs/**/golden/
-- shmem/docs/inc/report/d03_dc_ll_logs/**/*.bin
-- shmem/docs/inc/report/**/*_logs/**/native/
-- shmem/docs/inc/report/**/*_logs/**/golden/
-- shmem/docs/inc/report/**/*.bin
-- **/native/
-- **/golden/
-# git 策略在 tmp_sync_nb_ascend_{download,upload}.sh：
-#   download 整棵忽略 .git；upload 同步 GitHub .git（含 objects）
-- **/.git.nested-bak/
+- *.jsonl
+- core
+- core.*
 - __pycache__/
 - *.pyc
-- /tmp/
+- cann-packages/
+- .local/
+- _quarantine/
+- **/native/
+- **/golden/
+- **/.git.nested-bak/
