@@ -55,10 +55,12 @@ GET+PUT relay duplex roof，并报告链路腿和完整 makespan 两种口径。
 
 ## 复现
 
-二进制：
+该报告记录的是清理前的诊断 probe。当前发布树不再携带这个非产品二进制；源码可从
+`single-inc-pull-v2-qualified-pre-api` 标签复现：
 
 ```text
-/tmp/shmem-pull-dispatch-v2-build/bin/inc_dc_pull_combine_transport_probe
+git switch --detach single-inc-pull-v2-qualified-pre-api
+# 该版本构建产物：bin/inc_dc_pull_combine_transport_probe
 ```
 
 参数：

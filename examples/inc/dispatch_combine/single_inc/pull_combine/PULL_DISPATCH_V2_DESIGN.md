@@ -42,7 +42,7 @@ FREE -> DISPATCH_OPEN -> DISPATCH_SEALED -> COMBINE_ACTIVE
 ## 数据流水
 
 ```text
-INC Dispatch AIV 0..23
+INC Dispatch 动态半区（由运行时探测普通 AIV 总数）
 
 GET meta 0 -> parse/reserve 0 -> GET hidden 0 -> PUT destinations 0
                GET meta 1 -> parse/reserve 1 -> GET hidden 1 -> PUT destinations 1
@@ -71,14 +71,15 @@ JournalContributor(B rank, destination row)
 
 Combine 默认 canonical partial 布局：B 把同 GPU 多 expert 输出按 weight 本地归并回
 `partial[destination_row]`，发布一个 READY；INC 直接 GET、tile reduce、PUT owner。
-现有 1536-element FP32 tile、MTE2 ping/pong、UB Add、直接 PUT 和24 AIV reducer保留。
+Combine 使用运行时/profile 选择的 FP32 tile、MTE2 ping/pong、UB Add 和直接 PUT；
+Reducer 数量由 launcher 从当前芯片的普通 AIV 数量推导，不编码某一 SKU 的固定值。
 
 ## AIV 与并发
 
 ```text
-INC 48 AIV:
-  0..23   Pull-Dispatch
-  24..47  Pull-Combine
+INC ordinary AIV（运行时探测 N 个）:
+  前 floor(N/2) 个逻辑资源   Pull-Dispatch
+  后 N-floor(N/2) 个逻辑资源 Pull-Combine
 
 worker:
   READY/completion 常驻控制最多 1–2 AIV

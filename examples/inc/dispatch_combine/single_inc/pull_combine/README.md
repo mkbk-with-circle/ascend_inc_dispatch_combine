@@ -1,333 +1,142 @@
-# 单 INC Pull-Dispatch / Pull-Combine V2（当前候选）
+# Single-INC Pull Dispatch / Combine V2
 
-当前入口不再由 worker 预先上传 token plan：每个 worker 只发布一次 READY/Notice，
-INC 主动拉取 metadata 与 payload。核心文件：
-
-- `inc_dc_pull_dispatch_v2.{h,cpp}` / `_device_kernel.cpp`：slot ABI、在线路由与 fan-out；
-- `inc_dc_pull_combine_v2.{h,cpp}` / `_device_kernel.cpp`：Notice、READY GET、reduce 与回传；
-- `inc_dc_pull_dispatch_v2_device_e2e.cpp`、`inc_dc_pull_combine_v2_npu_e2e.cpp`：
-  W2/W4 真机资格程序；
-- `tests/pull_v2_overlap_qualification.py`：使用独占 baseline 的 D+C 任意时序交叠测试。
-
-```text
-Dispatch: worker READY -> INC GET(metadata+hidden) -> parse -> unique fan-out PUT
-Compute:  B local experts -> local reduce per (token, B)
-Combine:  worker Notice -> INC GET READY/partials -> reduce -> owner PUT
-```
-
-INC 的普通 AIV 按实时数量动态二分，Dispatch/Combine 各用
-`floor(live_vector_cores / 2)`。正式 nb-borrow 数据、真实/理论交叠收益和原始日志见
-[`docs/inc/report/nb-borrow/pull_v2_qualified_20260904`](../../../../../docs/inc/report/nb-borrow/pull_v2_qualified_20260904/README.md)。
-
-构建最小目标：
+本目录只保留当前 Pull V2 实现。历史 Push-Dispatch/Pull-Combine V1、旧 endpoint
+路径和调优 probe 已从当前树删除，可通过 Git 标签恢复：
 
 ```bash
-cmake --build /tmp/shmem-pull-dispatch-v2-build -j8 --target \
-  inc_dc_pull_dispatch_v2_tests inc_dc_pull_combine_v2_tests \
-  inc_dc_pull_dispatch_v2_device_e2e inc_dc_pull_combine_v2_npu_e2e
+git show single-inc-v1-legacy:examples/inc/dispatch_combine/single_inc/pull_combine
+git switch --detach single-inc-v1-legacy
 ```
 
-下面保留的是同目录早期 Push-Dispatch/Pull-Combine v1 的设计与历史证据，不能当作
-V2 当前接口或性能结论。
-
----
-
-# 历史：单 INC Push-Dispatch / Pull-Combine 协议 v1
-
-本目录实现新协议，不替换也不调用现有 V1 `SingleInc` 后端。当前稳定公共 API
-仍指向已验证的旧实现；新协议提供了独立的薄异步设备 API，供 gate 和后续框架
-接入共用。
-
-## 协议
+清理前的 Pull V2 资格版本保存在：
 
 ```text
-count:    A0..An ──PUT counts──> INC ──transpose/PUT reply──> B0..Bn
-dispatch: A ──PUT one hidden row + route──> INC ──dedup fan-out PUT──> B
-compute:  B local experts ──local reduce per (token, B)──> partial rows
-combine:  B ──ready(count)──> INC ──GET token IDs + partials/reduce──> result
-egress:   ready token runs ──coalesced PUT──> original A ──completion
+single-inc-pull-v2-qualified-pre-api
 ```
 
-核心不变量：
+## 最短应用接口
 
-- A 对每个 token 只向 INC 上传一份 hidden；同一 B 上的多个 expert 共享该份。
-- count 矩阵物理路径只能是 worker→INC→worker。
-- Combine 的每个 B 行都携带 token ID。规范顺序走 Dispatch journal 的零重排
-  快路径；任意顺序走 journal hash 动态建表，两种路径语义相同。
-- INC 只保留当前 generation/wave 的临时状态，跨 wave 不保存路由状态。
-- ACK 只在相关 GET 或下游 PUT 完成后发布；失败也发布负 ACK 释放发送槽。
-- generation、sequence、semantic digest、范围、字节数、保留字段均 fail-closed。
-- `generation / sequence / wave / ring_slot` 均由调用者显式传入设备路径；内核不再
-  假定首个 sequence 或第 0 槽，因此同一实现可直接被后续多槽 ring 驱动。
-- 严格路径使用 FP32 partial；性能路径允许 FP16/BF16 partial。
-
-## 当前完成度
-
-- 已完成：ABI、路由编译、count 转置、Dispatch/Combine 主机参考状态机。
-- 已完成：endpoint-owned Dispatch packet ABI；hidden、token ID 和 CSR 路由
-  metadata 同包上传，INC parser 不依赖预构造 `WavePlan`，并按 destination GPU
-  去重 hidden、保留全部 expert/weight/ordinal。
-- 已完成：设备 Dispatch correctness qualification：worker AIV PUT packet 后发布
-  commit 并返回；INC 在线轮询、转置 count、解析 metadata、去重 fan-out，并发布
-  source ACK 与 destination completion。路由没有作为 kernel 参数传入。
-- 已完成：设备 Dispatch 多 AIV 数据面。每个 source 的 token/assignment wire view
-  以两个连续 PUT 批量转发，destination 在本地筛选；hidden 仍只发给实际命中的
-  destination。INC 按 `(source,destination,token-lane)` 分片，lane 写入确定且互不
-  重叠的 packed hidden 区间，避免逐 token 远端标量控制写。
-- 已完成：设备端严格 metadata 校验。digest、CSR 连续性、count 重算、范围、
-  非有限权重和重复 ordinal 均在 fan-out 前 fail-closed；损坏包也发布负 ACK/
-  completion，不会永久占住槽位。
-- 已完成：Dispatch commit 按未完成 source 轮询，不再按 rank 顺序阻塞；任一低
-  rank 晚到时，INC 仍会先校验已就绪 source。设备侧 packet/payload 大小计算带
-  溢出保护，Dispatch、journal 与 Combine 统一拒绝超过当前双 64-bit contributor
-  bitmap 所支持的 128 workers；控制区大小由 worker 数推导，不依赖固定字节数。
-- 已完成：动态 per-wave journal 主机参考状态机。它只从各 source 的 endpoint
-  Dispatch packet 在线学习 token ID、原 owner/row 和 expected contributor bitmap；
-  不接收预构造 token plan。Combine 可按任意跨 rank 时序、任意合法 chunk 大小提交
-  `[token_ids, locally-reduced FP32 rows]`，整批先校验再原子消费，收齐 contributor
-  后才把结果放入 owner egress 队列。W2–W8 共 500 个随机 wave（含零路由 token）
-  已通过。
-- 已完成：设备 Dispatch 在 fan-out join 后发布独占 64B `DeviceJournalHeader`；
-  INC-owned endpoint packet 不被复制，直接作为本 wave 的不可变 journal。这样
-  worker 的发送槽可在 ACK 后复用，同时后续 Combine/index kernel 仍能从 INC
-  packet 在线恢复 token ID、owner row 和 contributor bitmap。64 MiB case 未出现
-  journal 构建导致的性能回退。
-- 已完成：Dispatch journal 驱动的稀疏设备 Combine。B 只发布 count/descriptor，
-  INC 按任意到达次序立即 GET token IDs；规范行序直接使用 journal row-map，乱序
-  行通过 token hash 恢复。随后由 24 个普通 AIV 直接从 B HBM 拉到 UB，严格 FP32
-  reduce，并仅向原 owner PUT 一份结果。
-- 已完成：Combine descriptor 采用 generation commit-word 两阶段发布，避免 128B
-  descriptor 跨 cache-line 撕裂；发布前会显式写回两条 cache line，避免第二条中的
-  offset/digest 偶发残留旧值。journal 的 `INDEX_READY` 也只在 entries/hash/
-  row-map/counts 全部 flush 后发布。
-- 已完成：B 晚到、行重排、空 batch、非 tile 对齐 hidden、top-k 大于 worker 数、
-  descriptor 损坏及 token ID 损坏的设备 gate；失败均负 ACK/负 completion，无挂死。
-- 已完成：空 wave、零路由 token、重复目的 rank、`topk > worker_count`、乱序到达、
-  分块传输、提前 egress、ring 回压、负 ACK 与计划生命周期保护。
-- 已完成：910B 上高阶 SHMEM GET 正确性和 W2/W4 聚合带宽锚点。
-- 已完成：设备 qualification 路径的 descriptor→pull→严格 FP32 reduce→
-  source ACK→按 owner 选择性回传，并在 W2/W4 上逐元素验证。
-- 已完成：1536-element UB tiled FP32 reduction，以及 contributor MTE2 与向量 Add
-  的 ping/pong 流水。
-- 已完成：归约结果从 UB 直接 PUT 到 owner，省去 INC 本地 GM store/read 与独立
-  egress；64B timeline 可拆分六个设备阶段。
-- 已完成：AIV 固定拥有 owner slice，并错开 source 顺序执行局部
-  pull→reduce→push；不再等待整 wave pull 完成。
-- 已完成：大消息采用独立 pull producer / owner reducer AIV；producer 每完成
-  512 KiB 就发布带 generation 的 cache-line ready，reducer 收齐该 chunk 的所有
-  source 后立即严格 FP32 reduce 并从 UB 直接 PUT 回 owner。
-- 已完成：chunk 按 owner 条带公平调度，所有 owner 尽早获得首块，避免后半 owner
-  在单调地址 pull 中长期空转；小于两个 chunk 时自动回退到零握手 owner-slice。
-- 已完成：descriptor 或 ready 超时均 fail-closed；成功 ACK 只在 source 已消费且
-  egress 完成后发布，失败 ACK 的 `rows_consumed=0`，不会永久占住发送槽。
-- 未完成：跨 wave ring 的持久化设备 server、高层 workspace/session owning API。
-  当前 endpoint Dispatch 是完整单 wave 算子，但 destination 侧 wire-view 筛选还只
-  在 qualification harness 中校验，尚未与正式 expert packing kernel 融合。
-
-设备物理 region 按 64B 向上对齐，但 descriptor 中的 `row_count` 和
-`payload_bytes` 始终是真实长度。lane 只在 cache-line 边界切分，最后一个物理
- span 最多包含 63B padding；因此真实元素数无需整除 worker、lane 或 cache line，
- 也不会产生跨 AIV false sharing。
-
-## 薄异步设备 API
-
-集成入口是 `inc_dc_endpoint_device_api.h`。调用者只需持有一次初始化好的 SHMEM
-session、对称 HBM workspace 和自己的 ACL stream；API 不分配、不 barrier、不做
-host synchronize，因此没有新增设备关键路径。一次 wave 的最短调用顺序为：
+公共头文件：[`inc_dc_pull_v2_api.h`](inc_dc_pull_v2_api.h)。
 
 ```cpp
-EndpointDispatchDeviceArgs dispatch = {/* workspace + shape + epoch */};
-LaunchEndpointDispatch(aiv_count, stream, dispatch);
+using namespace inc::dc::pull_v2::api;
 
-// B 侧收到 completion 后执行本地 expert，并写 token_ids + local-reduce rows。
+SingleIncSession session;
+single_inc_create(config, backend_ops, backend_context, &session);
 
-DeviceJournalIndexArgs index = {/* Dispatch-retained packet + journal */};
-LaunchDeviceJournalIndex(stream, index);  // 可与 B 侧 expert compute 交叠
+BatchHandle batch;
+Completion dispatch_done;
 
-SparseCombineDeviceArgs combine = {/* B regions + journal + owner output */};
-LaunchSparseCombine(aiv_count, stream, combine);
+shmem_dispatch_alltoall_inc<DataType::BF16>(
+    &session,
+    wave,
+    token_hidden,
+    token_ids,
+    topk_destination_gpus,
+    topk_expert_ids,
+    topk_expert_weights,
+    token_count,
+    topk,
+    &dispatch_output,
+    stream,
+    &batch,
+    &dispatch_done);
+
+// Grouped GEMM / Expert FFN，并在每个 B 上先做 local weighted reduce。
+run_experts_and_local_reduce(dispatch_output, fp32_partials, stream);
+
+Completion combine_done;
+shmem_combine_alltoall_inc<DataType::FP32>(
+    &session,
+    &batch,
+    fp32_partials,
+    partial_count,
+    partial_token_ids,
+    fp32_token_output,
+    token_capacity,
+    &output_count,
+    stream,
+    &combine_done);
+
+completion_wait(&session, combine_done);
+single_inc_destroy(&session);
 ```
 
-三个参数结构体显式携带容量与 `generation/sequence/wave/ring_slot`；Combine 的
-token/partial offset 是注册 region 内真实偏移，越界会由 INC 负 ACK。当前 API 是
-低层异步提交面，不隐藏 workspace 生命周期，便于 Megatron/vLLM 直接复用已有内存。
+完整可编译示例：
+[`inc_dc_pull_v2_api_example.cpp`](inc_dc_pull_v2_api_example.cpp)。示例覆盖初始化、
+Dispatch、Expert 计算、Combine、结果打印和资源释放。
 
-## 主机 gate
+### API 能力边界
+
+- Dispatch 输入支持 FP16、BF16、FP32 Hidden。
+- Route Weight 使用 FP32 Metadata。
+- 当前正式 Combine 只接受 FP32 Local Partial，并执行 FP32 Reduction；模板入口
+  `shmem_combine_alltoall_inc<DataType::FP32>` 会在编译期拒绝其他类型，避免隐式
+  精度转换。
+- 同一 GPU 上多个 Expert 的 Weight 应用与 Local Reduce 由调用方在 Combine 前完成。
+- `BatchHandle` 持有 generation-scoped Journal 生命周期；不可跨 Session、重复消费或
+  在 Combine 前复用 Ring Slot。
+- API 是异步 enqueue 接口；设备错误通过 `Completion` 查询或等待。
+- 当前仓库提供稳定 Frontend、Host Reference Example 和完整设备 qualification；
+  真实推理热路径还需要把框架 Router 的 Device Arrays 绑定到 Pull V2 Device Pack
+  Adapter。API 不会静默把 Device Route 拷回 CPU。
+
+## 协议概要
+
+```text
+Dispatch：A READY → INC GET(metadata + 一份 hidden) → unique-destination PUT → B
+Compute： B Expert FFN → same-GPU local weighted reduce → FP32 partial
+Combine： B Notice → INC GET READY/partial → reduce → selective owner PUT → A
+```
+
+详细的两张独立流程图见 [`FLOW.md`](FLOW.md)。
+
+关键不变量：
+
+- Worker 每个 Wave 只发布一次 READY/Notice。
+- Dispatch 中每个 Token Hidden 从源 Worker 只 GET 一份。
+- 同一目标 GPU 上多个 Expert 共享该 Hidden Row。
+- Combine READY Record 保留在 B 端；INC 收到64B Notice 后主动 GET。
+- Journal 使用 `(owner_rank, owner_row)` 作为主键，不以 Token ID 作为唯一身份。
+- Dispatch/Combine 使用互不重叠的动态半 AIV；并发时可对 Combine 启用 transport
+  lane governor，但 Solo 默认不变。
+
+## 当前源码
+
+| 文件 | 用途 |
+|---|---|
+| `inc_dc_pull_dispatch_v2.{h,cpp}` | Dispatch Host 协议、Slot 与 Journal 编译 |
+| `inc_dc_pull_dispatch_v2_abi.h` | Dispatch/Journal 设备 ABI |
+| `inc_dc_pull_dispatch_v2_device_kernel.cpp` | READY→GET→Parse→Fan-out 数据面 |
+| `inc_dc_pull_combine_v2.{h,cpp}` | Combine Notice、READY 和 Pull Index 协议 |
+| `inc_dc_pull_combine_v2_device_kernel.cpp` | Partial GET→Reduction→Owner PUT 数据面 |
+| `inc_dc_pull_v2_api.{h,cpp}` | 最短应用 Frontend API |
+| `inc_dc_pull_*_e2e.cpp` | Host/真机资格测试，不是应用调用路径 |
+| `tests/*.py` | Gate、Overlap、非对称和压力矩阵 Runner |
+
+## 构建与运行
 
 ```bash
-cmake -S . -B /tmp/shmem-pull-combine-v1-build \
+cmake -S . -B /tmp/shmem-pull-v2-build \
   -DUSE_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release -DSOC_TYPE=Ascend910B
-cmake --build /tmp/shmem-pull-combine-v1-build --target \
-  inc_dc_pull_combine_plan_tests \
-  inc_dc_pull_combine_dispatch_tests \
-  inc_dc_pull_combine_state_tests \
-  inc_dc_pull_combine_fuzz_tests \
-  inc_dc_endpoint_dispatch_packet_tests -j4
+
+cmake --build /tmp/shmem-pull-v2-build -j8 --target \
+  inc_dc_pull_dispatch_v2_tests \
+  inc_dc_pull_combine_v2_tests \
+  inc_dc_pull_v2_api_tests \
+  inc_dc_pull_v2_api_example \
+  inc_dc_pull_dispatch_v2_device_e2e \
+  inc_dc_pull_combine_v2_npu_e2e
+
+/tmp/shmem-pull-v2-build/bin/inc_dc_pull_v2_api_example
 ```
 
-随机 gate 固定种子运行 500 个 W2–W8 联合 wave；开发时另以
-`-Wall -Wextra -Werror`、ASan/UBSan 和 10,000-wave soak 通过。
-endpoint packet 另以固定种子运行 5,000 个随机 packet，覆盖 W2–W8、空 wave、
-0–32 token、每 token 0–12 assignments、重复目标 GPU、三种 dtype、非一致 top-k
-及随机 hidden payload；metadata digest、generation/sequence、重复 token/ordinal、
-非有限权重、范围、payload 大小和 count 重算均 fail-closed。
+## 结果
 
-设备 qualification target：
+- 正式性能与稳定性：
+  [`pull_v2_qualified_20260904`](../../../../../docs/inc/report/nb-borrow/pull_v2_qualified_20260904/README.md)
+- 非对称压力与交叠调优：
+  [`pull_v2_overlap_stress_20260905`](../../../../../docs/inc/report/nb-borrow/pull_v2_overlap_stress_20260905/README.md)
 
-```bash
-cmake --build /tmp/shmem-pull-combine-v1-build --target \
-  inc_dc_pull_combine_device_e2e \
-  inc_dc_endpoint_dispatch_device_e2e -j4
-```
-
-二进制参数为
-`<workers> <pe> <ipport> <first_npu> <真实字节数> <每 worker lane>`；
-同一 case 需要并发启动 `workers + 1` 个 PE，最后一个 PE 是 INC。它只用于协议
-gate，不是公共 API。lane 传 0 时，从实际 `VECTOR_CORE_NUM` 取一半作为 Combine
-预算，再平均分给 worker；不写死 910B 的 40 AIV 或 W2/W4。
-
-设备 Dispatch+Combine qualification 参数为
-`<workers> <pe> <ipport> <first_npu> <tokens> <hidden> <topk> [aiv] [fault]`
-` [delay_rank] [device_delay_cycles] [reorder_combine_rows] [overlap_replay]`。
-`aiv=0` 自动取实时 `VECTOR_CORE_NUM` 的一半；`fault=1..4` 分别注入 digest、重复
-ordinal、非有限 weight 和 count mismatch，`fault=5..6` 分别破坏 Combine
-descriptor 和 token ID，`fault=7..8` 分别令 token/payload ring offset 越界。
-`delay_rank` 在设备内延迟一个 B 的通知；最后一个参数为
-1 时会重排每个 B 的 Combine 行，强制走 hash fallback。当前 Dispatch 使用 BF16
-hidden，逐字节检查 A→INC packet、count reply、按 destination 去重后的 hidden、
-token/assignment wire view、ACK 和 completion；Combine 使用 FP32 partial 并对回传
-结果逐元素严格比较。W2/W4 边界矩阵覆盖 token=0/1、hidden=1、1535/1536/1537、
-4097、top-k=1–8 及 top-k>worker，六种损坏输入均正确拒绝。该 target 证明完整
-单 wave Dispatch→journal→Combine 语义闭环；带宽口径包含控制与数据面，不是纯链路。
-
-Combine 同时输出两种口径：`combine_us/logical_combine_gb_s` 从 INC kernel 启动
-起计，包含 B 到达抖动；`active_combine_us/active_combine_gb_s` 从最后一个 B 的
-descriptor 就绪起计，用于稳定的链路/归约 peak gate。设备 timeline 另输出
-`ready_wait_cycles/reduce_cycles/publish_cycles`。前一种是实际端到端观测，后一种
-只剥离调用方到达时序，不剥离任何 GET、FP32 reduce、PUT 或 completion 成本。
-`overlap_replay=1` 会在同一个 INC 上用两个 stream 同时 replay Dispatch 和
-Combine，各使用实时 AIV 总数的一半；所有 fan-out/reduce/ACK/completion 仍做完整
-检查。它报告 `overlap_serial_us`、实际 makespan `overlap_us`、真实加速比/节省比例
-及理论理想加速比 `(D+C)/max(D,C)`。
-
-### 当前 D+C 交叠（2026-09-03）
-
-nb 单平面大消息，W2 与 W4 分置两个 HCCS 平面并行跑，每个 case 连续 3 轮：
-
-| 规模 | 参数 | 串行 D+C | 实际交叠 | 实际收益 | 理论理想加速比 | 交叠逻辑带宽 | 结果 |
-|---|---|---:|---:|---:|---:|---:|---|
-| W2 | 4096×8192, top-k 2 | 18.40 ms | 13.10 ms | 1.404× / 28.8% | 1.992× | 61.5 GB/s | 3/3 PASS |
-| W4 | 2048×16384, top-k 4 | 30.63 ms | 22.86 ms | 1.340× / 25.4% | 1.818× | 105.7 GB/s | 3/3 PASS |
-
-“理论理想”只由同一 case 的 D/C 串行实测决定，不使用 rank 数臆测，因此 W2 并不
-天然低于或高于 W4。实际值低于理想值，表示两条流水并发时仍竞争 INC/HCCS 与
-调度资源；这正是交叠 gate 要量出的真实代价。
-
-### 当前设备 Dispatch 性能（2026-09-03）
-
-同一 HCCS 平面，自动使用 24/48 AIV。`logical_hidden_gb_s` 只累计一次 worker
-hidden ingress 和去重后的 destination hidden egress；metadata/control 虽未计入
-字节数，但其时间完整包含在分母中。
-
-| 规模 | 每 worker 输入 | 参数 | 完整 Dispatch | 结果 |
-|---|---:|---|---:|---|
-| W2 | 32 MiB | 4096 token, hidden 4096, top-k 2 | 22.87 GB/s（3 轮均值，CV 0.150%） | PASS |
-| W4 | 16 MiB | 2048 token, hidden 4096, top-k 4 | 37.97 GB/s（3 轮均值，CV 0.246%） | PASS |
-| W2 | 64 MiB | 4096 token, hidden 8192, top-k 2 | 29.62 GB/s | PASS |
-| W4 | 64 MiB | 2048 token, hidden 16384, top-k 4 | 57.27 GB/s | PASS |
-
-加入设备 journal header 后复测同一 64 MiB case：W2=29.50 GB/s、W4=57.63 GB/s；
-数据面与前一稳定点一致，header 发布不在关键路径形成可见回退。
-
-这是当前稳定正确检查点，不代表最终 90% gate 已通过。nb 的 W2/W4 单向 raw
-参考分别为 56/112 GB/s，而完整 Dispatch 同时包含 ingress、在线路由和 fan-out，
-两者不能直接当作相同口径；后续仍需用同一路由分布的实测 roofline 判定。
-
-### Endpoint 稀疏 Dispatch+Combine（2026-09-03）
-
-这是本目录新协议的完整单 wave 设备路径，不是单程链路：
-`A packet PUT → INC parse/fan-out → device journal/index → B ready →`
-`INC token-ID GET → partial GET/reduce → owner PUT → ACK/completion`。
-资格程序把 journal/index 串行计入 `serial_dc_us`；真实推理可让 INC 的 index 与
-worker expert compute 重叠，因此同时保留各阶段时间。Combine 的
-`logical_combine_gb_s=(实际 partial ingress + owner egress)/完整 Combine 时间`；
-上下行已流水交叠，所以该值可能超过单方向 raw roof，不能解释成单条链路速率。
-
-| 同平面规模 | 64 MiB/worker 参数 | Dispatch（3轮） | Combine（3轮） | 串行 D+index+C | 正确性 |
-|---|---|---:|---:|---:|---|
-| W2+1INC | 4096×8192, top-k 2 | 29.776 GB/s，CV 0.308% | 58.527 GB/s，CV 0.624% | 20.886 ms，38.54 GB/s | 全量逐元素 PASS |
-| W4+1INC | 2048×16384, top-k 4 | 56.094 GB/s，CV 0.275% | 96.078 GB/s，CV 0.532% | 35.329 ms，68.37 GB/s | 全量逐元素 PASS |
-
-同一批 W2 Combine 的 ingress/egress 均约 29.26 GB/s；W4 分别约
-64.05/32.03 GB/s（路由使 ingress 字节数为 egress 的 2 倍）。W2/W4 的 logical
-Combine 分别为单向 raw 参考 56/112 GB/s 的 104.5%/85.8%；W2 超过 100% 是双向
-交叠和 logical bytes 口径导致，不代表物理链路超频。W4 仍未达到按 112 GB/s
-直接计算的 90%（100.8 GB/s），因此这里只记录当前稳定最优值，不虚报 gate。
-
-额外 gate：六组 W2/W4 并行边界矩阵全部通过；Combine 行循环移位后 hash fallback
-通过；一个 B 在设备内晚到约 2 秒仍完成；Dispatch 四类和 Combine 两类故障均
-fail-closed。0-token/hidden=4096/top-k=0 的空 wave 也完成且输出 0 logical bytes。
-
-## nb-borrow 设备锚点（2026-09-02）
-
-卡 0–4 位于同一 HCCS 平面；每次运行前确认 16 卡均无其他 NPU 进程。
-数据逐 worker、逐字节校验。数值是 GET+completion 的 host 计时，包含 warmup
-传输字节；不是最终算子带宽。
-
-| 规模 | 每 worker | AIV/worker | 聚合带宽 | 相对 1 AIV |
-|---|---:|---:|---:|---:|
-| W2+1INC | 64 MiB | 1 | 22.41 GB/s | 1.00x |
-| W2+1INC | 64 MiB | 2 | 41.74 GB/s | 1.86x |
-| W2+1INC | 64 MiB | 4 | 41.76 GB/s | 1.86x |
-| W4+1INC | 64 MiB | 1 | 44.95 GB/s | 1.00x |
-| W4+1INC | 64 MiB | 2 | 83.49 GB/s | 1.86x |
-
-结论：当前 910B 纯 MTE pull 在 2 AIV/peer 饱和；完整 Combine 中，多出的 AIV
-继续并行 FP32 reduction，因此自动策略使用一半实时 AIV 预算，而不是把 transport
-饱和 lane 写死成整个算子的上限。低阶 UDMA 只在 Ascend 950 开启，本协议使用
-高阶 SHMEM RMA 自动选择 MTE、SDMA 或 UDMA。
-
-### 设备端正确性 gate
-
-同样使用同一 HCCS 平面的 NPU 0–4；输出按 owner 全量逐元素检查，ACK 字段也
-逐项检查。
-
-| 规模 | 真实字节数/worker | 边界 | 结果 |
-|---|---:|---|---:|
-| W2 | 68 B | 非 64B、非 worker 整分 | PASS |
-| W4 | 4 B | 三个 owner 为零元素 | PASS |
-| W2/W4 | 1,000,012 B | 非 64B、非 worker 整分 | 全部 PASS |
-| W2/W4 | 524,292 / 2,500,012 B | 刚跨流水阈值、非对齐多 chunk | 全部 PASS |
-| W2/W4 | 1 MiB | UB 向量路径，各连续 5 次 | 10/10 PASS |
-| W2/W4 | 64 MiB | 真 producer/consumer 流水，各 5 次 | 40 个 PE 进程全部 PASS |
-| W2 tiny + W4 64 MiB | 两个 HCCS 平面并发作业 | 8 个 PE 进程全部 PASS |
-
-### 当前设备 E2E 性能
-
-计时覆盖一次 kernel 的 descriptor 校验、pull、严格 FP32 reduction、ACK 和
-selective push；`logical_rma_gb_s=(W+1)×真实字节数/时间`，不是纯链路带宽。
-输出中的六项 `phase_pct` 依次是 descriptor、数据面、order、ACK、release、最终
-同步。流水版本的数据面包含 producer pull、generation-ready、严格 FP32 reduce
-和 UB direct push；各阶段是交叠的，不能再从该区间拆成可相加的独立耗时。
-
-| 规模 | lane/worker | owner-slice 稳定点 | 512 KiB 流水均值 | 代表单次 | 相对稳定点 |
-|---|---:|---:|---:|---:|---:|
-| W2×64 MiB | 12（自动） | 4.83 ms / 41.72 GB/s | 52.95 GB/s | 3.806 ms / 52.89 GB/s | +26.9%（均值） |
-| W4×64 MiB | 6（自动） | 4.22 ms / 79.43 GB/s | 91.81 GB/s | 3.574 ms / 93.89 GB/s | +15.6%（均值） |
-
-五轮 64 MiB soak 中，W2 均值 52.95 GB/s、CV 0.193%；W4 在另一 HCCS
-平面并与 W2 同时运行时均值 91.81 GB/s、CV 2.002%，全部逐元素和 ACK 通过。
-单独运行 W4 的代表值为 93.89 GB/s。
-
-纯 pull 锚点分别是 W2=41.74、W4=83.49 GB/s（只计算 `W×bytes` ingress）。
-把它换成完整 Combine 的传输受限 logical roof：
-`pull_anchor × (W+1)/W`，得到 W2=62.61、W4=104.36 GB/s。最终均值分别达到
-该实测 roof 的 84.6% 和 88.0%；W4 单独运行达到 90.0%。这个口径不会把
-`pull+push` 的 logical bytes 错当成一条物理链路带宽。W2 仍未达到 90%，所以
-不能宣称所有规模都通过最终性能 gate，但当前优化没有以牺牲正确性或稳定性换取
-峰值。
-
-nb 运行时报告 48 个 vector core，所以 Dispatch/Combine 各占一半时 Combine
-自动预算是 24 AIV；自动 lane 为 W2=12、W4=6，而不是沿用旧 40-AIV 环境的
-10/5。W2 将 reducer 并发人为降到 W4 同档后只得到 50.54 GB/s，低于自动策略，
-因此没有把机器特定的 reducer 上限写入协议。
+当前 nb-borrow 的 W2/W4 128 MiB、top-k2 Dispatch/Combine 均通过既定 Gate；任意
+Ragged/Hotspot 路由走正确性优先的安全重整路径，性能仍是后续优化项。
