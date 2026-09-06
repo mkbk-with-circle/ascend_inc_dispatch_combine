@@ -11,6 +11,7 @@ struct Mock {
     uint32_t dispatches = 0u;
     uint32_t combines = 0u;
     uint32_t releases = 0u;
+    StatusCode wait_result = StatusCode::OK;
 };
 
 StatusCode Create(void *, const SessionConfig &) { return StatusCode::OK; }
@@ -37,7 +38,8 @@ StatusCode Combine(
     return StatusCode::OK;
 }
 StatusCode Query(void *, const BackendTicket &) { return StatusCode::OK; }
-StatusCode Wait(void *, const BackendTicket &, uint64_t) { return StatusCode::OK; }
+StatusCode Wait(void *raw, const BackendTicket &, uint64_t)
+{ return static_cast<Mock *>(raw)->wait_result; }
 StatusCode Release(void *raw, const BackendTicket &)
 {
     ++static_cast<Mock *>(raw)->releases;
@@ -86,6 +88,7 @@ void TestWorkerLifecycle()
         2u, 2u, &output, reinterpret_cast<Stream>(1u), &batch,
         &dispatch_done));
     assert(mock.dispatches == 1u && batch.live && dispatch_done.live);
+    BatchHandle copied_batch = batch;
     assert(completion_query(&session, dispatch_done));
     float partials[16]{};
     float recv[8]{};
@@ -96,6 +99,12 @@ void TestWorkerLifecycle()
         &session, &batch, partials, 4u, partial_ids, recv, 2u,
         &recv_count, reinterpret_cast<Stream>(1u), &combine_done));
     assert(mock.combines == 1u && !batch.live && combine_done.live);
+    assert(batch_release(&session, &copied_batch).code == StatusCode::STALE_HANDLE);
+    assert(single_inc_destroy(&session).code == StatusCode::BUSY_SLOT);
+    mock.wait_result = StatusCode::TIMEOUT;
+    assert(completion_wait(&session, combine_done).code == StatusCode::TIMEOUT);
+    assert(single_inc_destroy(&session).code == StatusCode::BUSY_SLOT);
+    mock.wait_result = StatusCode::OK;
     assert(completion_wait(&session, combine_done));
     Status stale = shmem_combine_alltoall_inc<DataType::FP32>(
         &session, &batch, partials, 4u, partial_ids, recv, 2u,
@@ -131,17 +140,27 @@ void TestReleaseAndIncRank()
         experts, weights, 1u, 1u, &output, reinterpret_cast<Stream>(1u),
         &batch, &done));
     assert(single_inc_destroy(&worker).code == StatusCode::BUSY_SLOT);
+    assert(batch_release(&worker, &batch).code == StatusCode::BUSY_SLOT);
+    BatchHandle duplicate;
+    Completion duplicate_done;
+    assert(shmem_dispatch_alltoall_inc<DataType::FP32>(
+        &worker, WaveId{10u, 10u, 0u, 0u, 0u}, input, ids, destinations,
+        experts, weights, 1u, 1u, &output, reinterpret_cast<Stream>(1u),
+        &duplicate, &duplicate_done).code == StatusCode::BUSY_SLOT);
+    assert(completion_wait(&worker, done));
     assert(batch_release(&worker, &batch));
     assert(mock.releases == 1u);
     assert(single_inc_destroy(&worker));
 
     SingleIncSession inc;
     assert(single_inc_create(Config(2u), Ops(), &mock, &inc));
+    assert(completion_wait(&inc, done).code == StatusCode::STALE_HANDLE);
     BatchHandle inc_batch;
     Completion inc_done;
     assert(shmem_dispatch_alltoall_inc<DataType::BF16>(
         &inc, WaveId{10u, 10u, 0u, 0u, 0u}, nullptr, nullptr,
         reinterpret_cast<Stream>(1u), &inc_batch, &inc_done));
+    assert(completion_wait(&inc, inc_done));
     assert(batch_release(&inc, &inc_batch));
     assert(single_inc_destroy(&inc));
 }

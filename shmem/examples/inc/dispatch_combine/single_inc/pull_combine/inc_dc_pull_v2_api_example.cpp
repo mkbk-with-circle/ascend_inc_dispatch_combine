@@ -15,6 +15,8 @@
 #include <cstdint>
 #include <iostream>
 #include <vector>
+#include <map>
+#include <cmath>
 
 using namespace inc::dc::pull_v2::api;
 
@@ -25,12 +27,15 @@ struct Route {
     uint32_t destination;
     uint32_t expert;
     float weight;
+    uint32_t row;
 };
 
 struct ReferenceBackend {
     SessionConfig config{};
     std::vector<Route> routes;
     uint64_t next_ticket = 1u;
+    std::vector<uint32_t> row_tokens;
+    std::vector<uint64_t> token_ids;
 };
 
 StatusCode Create(void *raw, const SessionConfig &config)
@@ -52,6 +57,12 @@ StatusCode Dispatch(
     const auto *tokens = static_cast<const float *>(input->send_buffer);
     auto *expert_rows = static_cast<float *>(output->recv_buffer);
     backend->routes.clear();
+    backend->row_tokens.clear();
+    backend->token_ids.assign(input->send_token_ids,
+                             input->send_token_ids + input->token_count);
+    if (input->assignment_count > output->assignment_capacity)
+        return StatusCode::CAPACITY_EXCEEDED;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> compact;
     uint32_t row = 0u;
     for (uint32_t token = 0u; token < input->token_count; ++token) {
         const uint32_t begin = input->fixed_topk == 0u
@@ -61,16 +72,21 @@ StatusCode Dispatch(
             ? input->assignment_offsets[token + 1u]
             : begin + input->fixed_topk;
         for (uint32_t assignment = begin; assignment < end; ++assignment) {
+            const auto key = std::make_pair(token, input->destination_gpus[assignment]);
+            auto found = compact.find(key);
+            if (found == compact.end()) {
+                if (row >= output->row_capacity) return StatusCode::CAPACITY_EXCEEDED;
+                found = compact.emplace(key, row).first;
+                backend->row_tokens.push_back(token);
+                std::copy_n(tokens + static_cast<uint64_t>(token) * backend->config.hidden,
+                    backend->config.hidden,
+                    expert_rows + static_cast<uint64_t>(row) * backend->config.hidden);
+                ++row;
+            }
             backend->routes.push_back(Route{
                 token, input->destination_gpus[assignment],
                 input->expert_ids[assignment],
-                input->expert_weights[assignment]});
-            std::copy_n(
-                tokens + static_cast<uint64_t>(token) * backend->config.hidden,
-                backend->config.hidden,
-                expert_rows + static_cast<uint64_t>(row) *
-                    backend->config.hidden);
-            ++row;
+                input->expert_weights[assignment], found->second});
         }
     }
     *output->recv_row_count = row;
@@ -88,23 +104,25 @@ StatusCode Combine(
     auto *backend = static_cast<ReferenceBackend *>(raw);
     if (input == nullptr || output == nullptr ||
         batch.words[0] != id.generation ||
-        input->send_count != backend->routes.size())
+        input->send_count != backend->row_tokens.size() ||
+        output->recv_capacity < backend->token_ids.size())
         return StatusCode::INVALID_ARGUMENT;
     std::fill_n(
         output->recv_buffer,
         static_cast<uint64_t>(output->recv_capacity) * backend->config.hidden,
         0.0f);
     for (uint32_t row = 0u; row < input->send_count; ++row) {
-        const Route &route = backend->routes[row];
+        const uint32_t token = backend->row_tokens[row];
+        if (input->send_token_ids[row] != backend->token_ids[token])
+            return StatusCode::INVALID_ARGUMENT;
         for (uint32_t h = 0u; h < backend->config.hidden; ++h) {
             output->recv_buffer[
-                static_cast<uint64_t>(route.token) * backend->config.hidden +
+                static_cast<uint64_t>(token) * backend->config.hidden +
                 h] += input->send_buffer[
-                    static_cast<uint64_t>(row) * backend->config.hidden + h] *
-                route.weight;
+                    static_cast<uint64_t>(row) * backend->config.hidden + h];
         }
     }
-    *output->recv_count = output->recv_capacity;
+    *output->recv_count = static_cast<uint32_t>(backend->token_ids.size());
     completion->words[0] = backend->next_ticket++;
     return StatusCode::OK;
 }
@@ -162,7 +180,8 @@ int main()
         1, 2, 3, 4,
         10, 20, 30, 40};
     std::array<uint64_t, kTokens> token_ids{101u, 102u};
-    std::array<uint32_t, kRows> destinations{0u, 1u, 1u, 0u};
+    // Token 101 selects two experts on the SAME GPU: only one hidden row.
+    std::array<uint32_t, kRows> destinations{0u, 0u, 1u, 0u};
     std::array<uint32_t, kRows> experts{0u, 2u, 3u, 1u};
     std::array<float, kRows> weights{0.25f, 0.75f, 0.5f, 0.5f};
     std::array<float, kRows * kHidden> expert_input{};
@@ -191,26 +210,32 @@ int main()
 
     // Stand-in for grouped GEMM + same-GPU local weighted reduction.
     std::array<float, kRows * kHidden> local_partials{};
-    for (uint32_t row = 0u; row < kRows; ++row) {
-        const float expert_scale = static_cast<float>(experts[row] + 1u);
+    for (const Route &route : backend.routes) {
+        const uint32_t row = route.row;
+        const float expert_scale = static_cast<float>(route.expert + 1u);
         for (uint32_t h = 0u; h < kHidden; ++h)
-            local_partials[row * kHidden + h] =
-                expert_input[row * kHidden + h] * expert_scale;
+            local_partials[row * kHidden + h] +=
+                expert_input[row * kHidden + h] * expert_scale * route.weight;
     }
     std::cout << "[3/5] local expert compute complete\n";
 
-    std::array<uint64_t, kRows> partial_token_ids{101u, 101u, 102u, 102u};
+    std::array<uint64_t, kRows> partial_token_ids{101u, 102u, 102u, 0u};
     std::array<float, kTokens * kHidden> token_output{};
     uint32_t output_rows = 0u;
     Completion combine_done;
     status = shmem_combine_alltoall_inc<DataType::FP32>(
-        &session, &batch, local_partials.data(), kRows,
+        &session, &batch, local_partials.data(), recv_rows,
         partial_token_ids.data(), token_output.data(), kTokens, &output_rows,
         stream, &combine_done);
     if (!Check(status, "combine") ||
         !Check(completion_wait(&session, combine_done), "combine wait"))
         return 1;
     std::cout << "[4/5] combine output rows=" << output_rows << '\n';
+    const std::array<float, kTokens * kHidden> golden{2.5f, 5, 7.5f, 10, 30, 60, 90, 120};
+    if (recv_rows != 3u || recv_assignments != 4u || output_rows != kTokens)
+        return 2;
+    for (size_t i = 0; i < golden.size(); ++i)
+        if (std::fabs(token_output[i] - golden[i]) > 1e-6f) return 3;
     for (uint32_t token = 0u; token < kTokens; ++token) {
         std::cout << "token " << token << ':';
         for (uint32_t h = 0u; h < kHidden; ++h)

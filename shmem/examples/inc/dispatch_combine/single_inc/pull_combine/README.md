@@ -37,6 +37,7 @@ shmem_dispatch_alltoall_inc<DataType::BF16>(
     &batch,
     &dispatch_done);
 
+completion_wait(&session, dispatch_done);
 // Grouped GEMM / Expert FFN，并在每个 B 上先做 local weighted reduce。
 run_experts_and_local_reduce(dispatch_output, fp32_partials, stream);
 
@@ -72,9 +73,23 @@ Dispatch、Expert 计算、Combine、结果打印和资源释放。
 - `BatchHandle` 持有 generation-scoped Journal 生命周期；不可跨 Session、重复消费或
   在 Combine 前复用 Ring Slot。
 - API 是异步 enqueue 接口；设备错误通过 `Completion` 查询或等待。
+- 成功的 query/wait 消费 Completion；重复或跨 Session 使用返回 STALE_HANDLE。
+  Dispatch 完成后才可提交对应 Combine/release；Combine 完成前 Ring Slot 仍被占用，
+  destroy 返回 BUSY。Timeout 保留资源，不能视为释放 ACK。
+- 同一 Session 的 Host 调用需由调用方串行化；不同 Slot 的设备请求仍可并发。
+- `DispatchOutput` 可提供 `recv_rows`、`recv_assignments`、`recv_expert_counts`
+  三个设备结果视图，供专家计算和本地加权归约使用。后端必须填充调用方请求的视图。
 - 当前仓库提供稳定 Frontend、Host Reference Example 和完整设备 qualification；
   真实推理热路径还需要把框架 Router 的 Device Arrays 绑定到 Pull V2 Device Pack
   Adapter。API 不会静默把 Device Route 拷回 CPU。
+
+### 实际接通状态
+
+当前 NPU E2E 程序直接启动 kernel；公开 API 尚无随库提供的 NPU BackendOps。
+Combine 测试的 Pull Index 由 Host 参考布局构造，尚未接到真实 Dispatch 产生的
+设备 Journal。参考示例仅在 CPU 模拟所有目标 GPU：按唯一目标去重 Hidden，专家
+阶段应用一次 Weight 并本地归约，Combine 只累加 partial，并执行 golden 检查。
+该示例不测量网络，不是公开 API 的真机端到端验证。
 
 ## 协议概要
 
