@@ -8,6 +8,8 @@
   W2/W4 正式带宽、稳定性和扩展性；
 - [`nb-borrow/pull_v2_overlap_stress_20260905`](nb-borrow/pull_v2_overlap_stress_20260905/README.md)：
   交叠与非对称压力矩阵。
+- [`nb-borrow/pull_v2_w4_fixed_topk_20260909`](nb-borrow/pull_v2_w4_fixed_topk_20260909/README.md)：
+  W4固定expert top-k4/top-k8的128 MiB成对测试。
 
 Fusion、V1 和旧实验结果可从 `archive/pre-minimal-v1-fusion-20260904` 恢复，
 不在当前树中。
