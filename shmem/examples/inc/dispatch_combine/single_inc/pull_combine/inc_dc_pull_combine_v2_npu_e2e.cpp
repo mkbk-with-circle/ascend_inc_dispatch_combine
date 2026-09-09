@@ -157,6 +157,7 @@ struct Options {
     uint32_t warmup = 0u;
     uint32_t measure = 0u;
     uint32_t fault = 0u;
+    uint64_t route_seed = 0x636f6d62696e65ull;
 };
 
 struct GuardedBuffer {
@@ -392,7 +393,7 @@ ParsedSource MakeSource(const Options &o, uint32_t owner,
             if (o.workload == Workload::MIXED_K) {
                 // Stable per-row random subset, including no contributors.
                 // Keeping it stable across ring reuse also keeps sizing fixed.
-                selected = (Mix(global_row ^ 0x636f6d62696e65ull) &
+                selected = (Mix(global_row ^ o.route_seed) &
                             (1ull << destination)) != 0u;
             } else if (o.workload == Workload::FIXED_K1 ||
                        o.workload == Workload::FIXED_K3) {
@@ -763,14 +764,14 @@ bool ValidateInc(const Wave &wave_data, const GuardedBuffer &journal,
 
 int main(int argc, char **argv)
 {
-    if (argc != 10 && argc != 11) {
+    if (argc != 10 && argc != 11 && argc != 12) {
         std::cerr << "usage: " << argv[0]
                   << " <workers:2|4> <pe> <ipport> <first_npu> <hidden>"
                      " <rows> <sym_k2_balanced|sym_k4_gpu4|sym_k4_gpu2|sym_k8_gpu4|"
                      "sym_topk_all|asymmetric|"
                      "ready_skew|mixed_k|fixed_k1|fixed_k3>"
                      " <warmup> <measure> [fault:0=none,1=head,2=cycle,"
-                     "3=token,4=owner,5=last-owner]\n"
+                     "3=token,4=owner,5=last-owner] [route_seed]\n"
                   << "rows is the total A-token count. sym_k2_balanced is "
                      "the W2/W4 gate workload; sym_topk_all (legacy alias "
                      "symmetric) is the topk=W expansion stress case. "
@@ -790,6 +791,8 @@ int main(int argc, char **argv)
     o.measure = static_cast<uint32_t>(std::strtoul(argv[9], nullptr, 10));
     if (argc == 11)
         o.fault = static_cast<uint32_t>(std::strtoul(argv[10], nullptr, 10));
+    if (argc == 12)
+        o.route_seed = std::strtoull(argv[11], nullptr, 10);
     const uint32_t pes = o.workers + 1u;
     const int inc_pe = static_cast<int>(o.workers);
     g_npus = static_cast<int>(pes);
