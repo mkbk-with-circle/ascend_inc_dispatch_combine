@@ -81,6 +81,9 @@ constexpr double kSystemCycleUs = 0.02; // GetSystemCycle is 50 MHz on 910B.
 enum class Workload {
     SYM_DENSE,
     SYM_K2_BALANCED,
+    SYM_K4_GPU4,
+    SYM_K4_GPU2,
+    SYM_K8_GPU4,
     SYM_K1_RR,
     HOTSPOT,
     RAGGED,
@@ -273,6 +276,12 @@ bool ParseWorkload(const char *text, Workload *workload)
         *workload = Workload::SYM_DENSE;
     else if (std::strcmp(text, "sym_k2_balanced") == 0)
         *workload = Workload::SYM_K2_BALANCED;
+    else if (std::strcmp(text, "sym_k4_gpu4") == 0)
+        *workload = Workload::SYM_K4_GPU4;
+    else if (std::strcmp(text, "sym_k4_gpu2") == 0)
+        *workload = Workload::SYM_K4_GPU2;
+    else if (std::strcmp(text, "sym_k8_gpu4") == 0)
+        *workload = Workload::SYM_K8_GPU4;
     else if (std::strcmp(text, "sym_k1_rr") == 0)
         *workload = Workload::SYM_K1_RR;
     else if (std::strcmp(text, "hotspot") == 0)
@@ -346,6 +355,24 @@ SourceInput MakeInput(const Options &o, uint32_t source,
                 destinations.push_back(source % o.workers);
                 destinations.push_back((source + 1u) % o.workers);
                 break;
+            case Workload::SYM_K4_GPU4:
+                for (uint32_t destination = 0u; destination < 4u;
+                     ++destination)
+                    destinations.push_back(destination);
+                break;
+            case Workload::SYM_K4_GPU2:
+                destinations.push_back(source % o.workers);
+                destinations.push_back(source % o.workers);
+                destinations.push_back((source + 1u) % o.workers);
+                destinations.push_back((source + 1u) % o.workers);
+                break;
+            case Workload::SYM_K8_GPU4:
+                for (uint32_t destination = 0u; destination < 4u;
+                     ++destination) {
+                    destinations.push_back(destination);
+                    destinations.push_back(destination);
+                }
+                break;
             case Workload::SYM_K1_RR:
                 destinations.push_back(
                     (source + token + static_cast<uint32_t>(o.seed)) %
@@ -370,11 +397,23 @@ SourceInput MakeInput(const Options &o, uint32_t source,
              ++ordinal) {
             AssignmentRecord assignment{};
             assignment.destination_rank = destinations[ordinal];
-            assignment.expert_id = static_cast<uint32_t>(Mix(
-                random + ordinal * 17u) % o.expert_count);
+            if (o.workload == Workload::SYM_K4_GPU4) {
+                assignment.expert_id =
+                    destinations[ordinal] * 4u + source;
+                assignment.weight = 0.25f;
+            } else if (o.workload == Workload::SYM_K4_GPU2 ||
+                       o.workload == Workload::SYM_K8_GPU4) {
+                assignment.expert_id =
+                    destinations[ordinal] * 4u + (ordinal & 1u);
+                assignment.weight = o.workload == Workload::SYM_K8_GPU4
+                    ? 0.125f : 0.25f;
+            } else {
+                assignment.expert_id = static_cast<uint32_t>(Mix(
+                    random + ordinal * 17u) % o.expert_count);
+                assignment.weight = static_cast<float>(ordinal + 1u) /
+                    static_cast<float>(destinations.size() + 1u);
+            }
             assignment.ordinal = ordinal;
-            assignment.weight = static_cast<float>(ordinal + 1u) /
-                static_cast<float>(destinations.size() + 1u);
             input.assignments.push_back(assignment);
         }
         input.assignment_offsets.push_back(
@@ -1095,7 +1134,8 @@ int main(int argc, char **argv)
             << "usage: " << argv[0]
             << " <workers> <pe> <ipport> <first_npu>"
                " <per_worker_payload_bytes>"
-               " <sym_k2_balanced|sym_dense|sym_k1_rr|hotspot|ragged>"
+               " <sym_k2_balanced|sym_k4_gpu4|sym_k4_gpu2|sym_k8_gpu4|sym_dense|"
+               "sym_k1_rr|hotspot|ragged>"
                " <hidden> <expert_count> <channels_per_source>"
                " <warmup> <measure> <seed>"
                " <fault:0=none,1=digest,2=assignment,3=missing_ready,"
@@ -1140,6 +1180,11 @@ int main(int argc, char **argv)
         (o.fault != 0u && o.payload_bytes == 0u &&
                          (o.fault == 1u || o.fault == 2u)))
         return Fail("arguments", 2);
+    if ((o.workload == Workload::SYM_K4_GPU4 ||
+         o.workload == Workload::SYM_K4_GPU2 ||
+         o.workload == Workload::SYM_K8_GPU4) &&
+        (o.workers != 4u || o.expert_count < 16u))
+        return Fail("top-k4 requires W4 and at least 16 experts", 2);
     const uint64_t row_bytes = static_cast<uint64_t>(o.hidden) * 2u;
     if (row_bytes / 2u != o.hidden ||
         o.payload_bytes > static_cast<uint64_t>(

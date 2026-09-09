@@ -136,6 +136,9 @@ static_assert(sizeof(CombineDeviceTimelineV2) == 128u);
 enum class Workload {
     SYM_TOPK_ALL,
     SYM_K2_BALANCED,
+    SYM_K4_GPU4,
+    SYM_K4_GPU2,
+    SYM_K8_GPU4,
     ASYMMETRIC,
     READY_SKEW
 };
@@ -229,6 +232,12 @@ bool ParseWorkload(const char *text, Workload *workload)
         *workload = Workload::SYM_TOPK_ALL;
     else if (std::strcmp(text, "sym_k2_balanced") == 0)
         *workload = Workload::SYM_K2_BALANCED;
+    else if (std::strcmp(text, "sym_k4_gpu4") == 0)
+        *workload = Workload::SYM_K4_GPU4;
+    else if (std::strcmp(text, "sym_k4_gpu2") == 0)
+        *workload = Workload::SYM_K4_GPU2;
+    else if (std::strcmp(text, "sym_k8_gpu4") == 0)
+        *workload = Workload::SYM_K8_GPU4;
     else if (std::strcmp(text, "asymmetric") == 0)
         *workload = Workload::ASYMMETRIC;
     else if (std::strcmp(text, "ready_skew") == 0)
@@ -362,7 +371,8 @@ ParsedSource MakeSource(const Options &o, uint32_t owner,
         for (uint32_t destination = 0u; destination < o.workers;
              ++destination) {
             bool selected = true;
-            if (o.workload == Workload::SYM_K2_BALANCED) {
+            if (o.workload == Workload::SYM_K2_BALANCED ||
+                o.workload == Workload::SYM_K4_GPU2) {
                 selected = destination == owner ||
                     destination == (owner + 1u) % o.workers;
             } else if (o.workload == Workload::ASYMMETRIC &&
@@ -371,11 +381,26 @@ ParsedSource MakeSource(const Options &o, uint32_t owner,
                 selected = (global_row & ((1u << shift) - 1u)) == 0u;
             }
             if (!selected) continue;
-            for (uint32_t local = 0u; local < 2u; ++local) {
+            const uint32_t local_experts =
+                o.workload == Workload::SYM_K4_GPU4 ? 1u : 2u;
+            for (uint32_t local = 0u; local < local_experts; ++local) {
+                const uint32_t expert =
+                    o.workload == Workload::SYM_K4_GPU4
+                    ? destination * 4u + owner
+                    : (o.workload == Workload::SYM_K4_GPU2 ||
+                       o.workload == Workload::SYM_K8_GPU4)
+                        ? destination * 4u + local
+                        : (destination * 2u + local) % 16u;
+                const float weight =
+                    o.workload == Workload::SYM_K8_GPU4 ? 0.125f :
+                    (o.workload == Workload::SYM_K4_GPU4 ||
+                     o.workload == Workload::SYM_K4_GPU2)
+                    ? 0.25f : (local == 0u ? 0.75f : 0.25f);
                 source.assignments.push_back(AssignmentRecord{
-                    destination, (destination * 2u + local) % 16u,
-                    destination * 2u + local,
-                    local == 0u ? 0.75f : 0.25f});
+                    destination, expert,
+                    static_cast<uint32_t>(source.assignments.size() -
+                                          token.assignment_begin),
+                    weight});
             }
         }
         token.assignment_count = source.assignments.size() -
@@ -705,7 +730,8 @@ int main(int argc, char **argv)
     if (argc != 10) {
         std::cerr << "usage: " << argv[0]
                   << " <workers:2|4> <pe> <ipport> <first_npu> <hidden>"
-                     " <rows> <sym_k2_balanced|sym_topk_all|asymmetric|"
+                     " <rows> <sym_k2_balanced|sym_k4_gpu4|sym_k4_gpu2|sym_k8_gpu4|"
+                     "sym_topk_all|asymmetric|"
                      "ready_skew>"
                      " <warmup> <measure>\n"
                   << "rows is the total A-token count. sym_k2_balanced is "
@@ -735,6 +761,10 @@ int main(int argc, char **argv)
         !ParseWorkload(o.workload_name, &o.workload) ||
         !ParseDiagnosticActiveAiv(&requested_active_aiv))
         return Fail("arguments", 2);
+    if ((o.workload == Workload::SYM_K4_GPU4 ||
+         o.workload == Workload::SYM_K4_GPU2 ||
+         o.workload == Workload::SYM_K8_GPU4) && o.workers != 4u)
+        return Fail("fixed top-k4/top-k8 cases require W4", 2);
     uint64_t row_bytes = 0u;
     if (!Mul(o.hidden, sizeof(float), &row_bytes) ||
         static_cast<uint64_t>(o.rows) * row_bytes >
