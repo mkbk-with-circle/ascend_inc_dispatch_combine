@@ -150,7 +150,10 @@ cmake --build /tmp/shmem-pull-v2-build -j8 --target \
 按 token 生成短段并查询已生成的目标行。移除固定 K1/K2/K4 fan-out 函数以及
 整批拉齐后逐目标标量重整的独立数据路径。
 
-对齐段使用同一个 ping/pong 搬运循环。非对齐行采用单写入者的精确宽度原语，
+对齐段使用有界循环缓冲搬运。规则源段连续发送；随机路由由INC生成row map，
+描述符按已发布区间读取，跨token延续搬运流水。布局可并行生产，共享缓存行边界
+记录由单写入者修复后再发布metadata。row map不是端侧预上传的路由计划。
+非对齐行采用单写入者的精确宽度原语，
 避免多 AIV 对同一缓存行写入；统一主流程并不意味着取消必要的尾块处理。
 READY、完整路由校验、Journal、成功 Completion / Source ACK 的语义未改变。
 
@@ -181,4 +184,7 @@ relay 时间戳先保存在 AIV 本地，所有布局生产者汇合后才写回
   [`pull_v2_directional_20260909`](../../../../../docs/inc/report/nb-borrow/pull_v2_directional_20260909/README.md)
 
 旧 GET+PUT 相加带宽口径已删除。当前报告同时列出 raw gate 与实测 transport roof；
-Ragged/Hotspot 路由走正确性优先的安全重整路径，性能仍是后续优化项。
+随机路由性能仍未全部达到固定路由水平；不要把固定GPU数随机expert与全expert
+随机top-k混为一组负载。新增等尺寸随机测试入口为`tests/pull_v2_random_dispatch.py`。
+本轮修改、实际字节数、平面A/B差异和未达标项见
+[随机路由流水候选报告](../../../../../docs/inc/report/nb-borrow/random_routing_pipeline_20260910/README.md)。
