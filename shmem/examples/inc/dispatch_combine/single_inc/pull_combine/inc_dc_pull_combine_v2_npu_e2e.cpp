@@ -153,6 +153,7 @@ struct Options {
     const char *workload_name = nullptr;
     uint32_t warmup = 0u;
     uint32_t measure = 0u;
+    uint32_t fault = 0u;
 };
 
 struct GuardedBuffer {
@@ -727,13 +728,14 @@ bool ValidateInc(const Wave &wave_data, const GuardedBuffer &journal,
 
 int main(int argc, char **argv)
 {
-    if (argc != 10) {
+    if (argc != 10 && argc != 11) {
         std::cerr << "usage: " << argv[0]
                   << " <workers:2|4> <pe> <ipport> <first_npu> <hidden>"
                      " <rows> <sym_k2_balanced|sym_k4_gpu4|sym_k4_gpu2|sym_k8_gpu4|"
                      "sym_topk_all|asymmetric|"
                      "ready_skew>"
-                     " <warmup> <measure>\n"
+                     " <warmup> <measure> [fault:0=none,1=head,2=cycle,"
+                     "3=token,4=owner]\n"
                   << "rows is the total A-token count. sym_k2_balanced is "
                      "the W2/W4 gate workload; sym_topk_all (legacy alias "
                      "symmetric) is the topk=W expansion stress case. "
@@ -751,13 +753,16 @@ int main(int argc, char **argv)
     o.workload_name = argv[7];
     o.warmup = static_cast<uint32_t>(std::strtoul(argv[8], nullptr, 10));
     o.measure = static_cast<uint32_t>(std::strtoul(argv[9], nullptr, 10));
+    if (argc == 11)
+        o.fault = static_cast<uint32_t>(std::strtoul(argv[10], nullptr, 10));
     const uint32_t pes = o.workers + 1u;
     const int inc_pe = static_cast<int>(o.workers);
     g_npus = static_cast<int>(pes);
     uint32_t requested_active_aiv = 0u;
     if ((o.workers != 2u && o.workers != 4u) || o.pe < 0 ||
         o.pe >= static_cast<int>(pes) || o.first_npu < 0 ||
-        o.hidden == 0u || o.measure == 0u ||
+        o.hidden == 0u || o.measure == 0u || o.fault > 4u ||
+        (o.fault != 0u && o.rows == 0u) ||
         !ParseWorkload(o.workload_name, &o.workload) ||
         !ParseDiagnosticActiveAiv(&requested_active_aiv))
         return Fail("arguments", 2);
@@ -946,6 +951,32 @@ int main(int argc, char **argv)
                     sizeof(JournalSlotHeader),
                     &wave_data.layout.journal_header,
                     sizeof(JournalSlotHeader), ACL_MEMCPY_HOST_TO_DEVICE);
+            if (status == 0 && o.fault != 0u) {
+                // Corrupt only the device copy; keep the independent oracle
+                // and valid source registrations intact.
+                uint8_t *target = nullptr;
+                uint32_t value = 0u;
+                const uint32_t head = wave_data.plan.accumulator_heads[0];
+                if (o.fault == 1u) {
+                    target = heads.data;
+                    value = static_cast<uint32_t>(wave_data.plan.pulls.size());
+                } else if (o.fault == 2u) {
+                    target = pull_next.data + head * sizeof(uint32_t);
+                    value = head;
+                } else if (o.fault == 3u) {
+                    target = pulls.data + head * sizeof(CombinePullOp) +
+                        offsetof(CombinePullOp, journal_token);
+                    value = wave_data.plan.accumulator_count;
+                } else {
+                    const uint32_t result =
+                        wave_data.plan.accumulator_result_index[0];
+                    target = results.data + result * sizeof(CombineResultOp) +
+                        offsetof(CombineResultOp, owner_rank);
+                    value = o.workers;
+                }
+                status = aclrtMemcpy(target, sizeof(value), &value,
+                    sizeof(value), ACL_MEMCPY_HOST_TO_DEVICE);
+            }
         }
         if (status == 0) status = aclrtSynchronizeStream(stream);
         if (status == 0)
@@ -996,7 +1027,40 @@ int main(int argc, char **argv)
         if (status != 0) { correct = false; break; }
 
         CombineDeviceTimelineV2 timeline{};
-        if (o.pe < inc_pe)
+        if (o.fault != 0u) {
+            constexpr uint32_t invalid_journal = 2u;
+            if (o.pe == inc_pe) {
+                JournalSlotHeader header{};
+                correct = aclrtMemcpy(&timeline, sizeof(timeline),
+                    timeline_buffer.data, sizeof(timeline),
+                    ACL_MEMCPY_DEVICE_TO_HOST) == ACL_SUCCESS &&
+                    aclrtMemcpy(&header, sizeof(header), journal.data,
+                    sizeof(header), ACL_MEMCPY_DEVICE_TO_HOST) == ACL_SUCCESS &&
+                    timeline.status == invalid_journal &&
+                    header.status == invalid_journal &&
+                    header.state == static_cast<uint16_t>(JournalSlotState::ABORTED);
+            } else {
+                CombineSourceAckV2 ack{};
+                CombineOwnerCompletionV2 completion{};
+                const uint64_t index =
+                    static_cast<uint64_t>(ring_slot) * o.workers + o.pe;
+                correct = aclrtMemcpy(&ack, sizeof(ack),
+                    acks.data + index * sizeof(ack), sizeof(ack),
+                    ACL_MEMCPY_DEVICE_TO_HOST) == ACL_SUCCESS &&
+                    aclrtMemcpy(&completion, sizeof(completion),
+                    completions.data + index * sizeof(completion),
+                    sizeof(completion), ACL_MEMCPY_DEVICE_TO_HOST) == ACL_SUCCESS &&
+                    ack.status == invalid_journal &&
+                    completion.status == invalid_journal &&
+                    ack.generation == generation && completion.generation == generation &&
+                    ack.sequence == sequence && completion.sequence == sequence &&
+                    ack.row_count == 0u && completion.row_count == 0u &&
+                    ack.publication == Publication(&ack,
+                        offsetof(CombineSourceAckV2, publication)) &&
+                    completion.publication == Publication(&completion,
+                        offsetof(CombineOwnerCompletionV2, publication));
+            }
+        } else if (o.pe < inc_pe)
             correct = ValidateWorker(o, wave_data, ring_slot, acks, output,
                                      completions);
         else
@@ -1019,6 +1083,7 @@ int main(int argc, char **argv)
             std::cout << std::setprecision(12)
                       << "{\"test\":\"pull_combine_v2_npu_e2e\""
                       << ",\"iteration\":" << iteration
+                      << ",\"fault\":" << o.fault
                       << ",\"warmup\":" << (warmup ? "true" : "false")
                       << ",\"workers\":" << o.workers
                       << ",\"workload\":\"" << o.workload_name << "\""
@@ -1038,7 +1103,7 @@ int main(int argc, char **argv)
                       << ",\"cycle_kernel_done\":" << timeline.kernel_done
                       << ",\"correct\":" << (correct ? "true" : "false")
                       << "}\n";
-            if (!warmup) {
+            if (!warmup && o.fault == 0u) {
                 measured_us.push_back(us);
                 measured_gbps.push_back(gbps);
                 measured_uplink_gbps.push_back(uplink_gbps);

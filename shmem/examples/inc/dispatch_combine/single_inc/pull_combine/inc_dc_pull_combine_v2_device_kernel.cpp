@@ -840,6 +840,7 @@ __aicore__ inline bool ReduceTwoContributorTaskRange(
                 cached_first_source == cached_second_source ||
                 pulls[first].accumulator_index != accumulator ||
                 pulls[second].accumulator_index != accumulator ||
+                pulls[first].journal_token >= result_count ||
                 pulls[first].journal_token != pulls[second].journal_token ||
                 first < source_offsets[cached_first_source] ||
                 first >= source_offsets[cached_first_source + 1u] ||
@@ -1060,6 +1061,11 @@ __aicore__ inline bool ReduceFourContributorTaskRange(
             }
             uint32_t seen_sources = 0u;
             const uint32_t journal_token = pulls[op[0]].journal_token;
+            if (journal_token >= result_count) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
             for (uint32_t i = 0u; i < 4u; ++i) {
                 op_source[i] = pulls[op[i]].source_rank;
                 uint64_t row_offset = 0u;
@@ -1752,8 +1758,7 @@ finalize:
     // status are unchanged.
     AscendC::SyncAll<true>();
     dcci_cacheline(status_line);
-    if (block < worker_count) {
-        const uint32_t rank = block;
+    for (uint32_t rank = block; rank < worker_count; rank += blocks) {
         const uint32_t final_status = *status;
         __gm__ uint64_t *by_source =
             reinterpret_cast<__gm__ uint64_t *>(source_offsets);
