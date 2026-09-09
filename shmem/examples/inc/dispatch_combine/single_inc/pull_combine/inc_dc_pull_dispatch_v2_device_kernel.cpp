@@ -790,6 +790,58 @@ __aicore__ inline uint64_t RelayRowOffset(uint64_t row_bytes, uint32_t row,
                        : MulU64ByU32(row_bytes, row);
 }
 
+struct RelayTileTask {
+    uint64_t offset;
+    uint64_t sub;
+    uint32_t token;
+    uint32_t bytes;
+    bool valid;
+};
+
+__aicore__ inline uint32_t RelayBatchBytes(uint64_t row_bytes, uint32_t token,
+    uint64_t sub, uint32_t tokens, uint32_t tile_bytes, uint32_t row_shift)
+{
+    const uint32_t block_left = 8u - token % 8u;
+    const uint32_t rows = tokens - token < block_left ? tokens - token : block_left;
+    const uint64_t remaining = RelayRowOffset(row_bytes, rows, row_shift) - sub;
+    return static_cast<uint32_t>(remaining < tile_bytes ? remaining : tile_bytes);
+}
+
+__aicore__ inline void AdvanceRelayTask(RelayTileTask &task, bool coalesced,
+    uint64_t row_bytes, uint64_t source_bytes, uint32_t tokens,
+    uint32_t channels, uint32_t tile_bytes, uint32_t row_shift)
+{
+    if (!task.valid) return;
+    if (coalesced) {
+        const uint64_t step = static_cast<uint64_t>(channels) * tile_bytes;
+        task.valid = step < source_bytes - task.offset;
+        if (task.valid) task.offset += step;
+    } else {
+        uint64_t remaining = task.bytes;
+        while (remaining >= row_bytes - task.sub) {
+            remaining -= row_bytes - task.sub;
+            task.sub = 0u;
+            ++task.token;
+        }
+        task.sub += remaining;
+        if (task.sub == 0u && task.token % 8u == 0u) {
+            const uint32_t skip = (channels - 1u) * 8u;
+            task.valid = task.token < tokens && tokens - task.token > skip;
+            if (task.valid) task.token += skip;
+        } else {
+            task.valid = task.token < tokens;
+        }
+        if (task.valid)
+            task.offset = RelayRowOffset(row_bytes, task.token, row_shift) + task.sub;
+    }
+    if (task.valid) {
+        const uint64_t remaining = source_bytes - task.offset;
+        task.bytes = coalesced
+            ? static_cast<uint32_t>(remaining < tile_bytes ? remaining : tile_bytes)
+            : RelayBatchBytes(row_bytes, task.token, task.sub, tokens, tile_bytes, row_shift);
+    }
+}
+
 // One tile loop crosses token boundaries. Source prefetch does not depend on
 // the next destination descriptor: READY/header validation already proves its
 // source range. Destination resolution is performed while that GET is live.
@@ -822,6 +874,9 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
     __gm__ AssignmentRecord *assignments = reinterpret_cast<__gm__ AssignmentRecord *>(slot + header->assignments_offset);
     uint32_t destinations[kPullDispatchMaxWorkers];
     uint64_t offsets[kPullDispatchMaxWorkers];
+    uint64_t run_remote[kPullDispatchMaxWorkers];
+    uint32_t run_local[kPullDispatchMaxWorkers];
+    uint32_t run_bytes[kPullDispatchMaxWorkers];
     uint32_t count = 0u;
     if (coalesced) {
         uint32_t bits[4]{0u, 0u, 0u, 0u};
@@ -835,12 +890,12 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
         }
         if (count == 0u) return;
     }
-    constexpr uint32_t kTokenTileBytes = 16u * 1024u;
-    static_assert(3u * kTokenTileBytes <= ub_limit,
+    constexpr uint32_t kTokenTileBytes = 64u * 1024u;
+    static_assert(2u * kTokenTileBytes <= ub_limit,
                   "streaming relay exceeds the SHMEM backend UB capacity");
     const uint32_t tile_bytes = coalesced ? RelayTileBytes(count, channels) : kTokenTileBytes;
     const uint32_t ub_stride = coalesced ? kUbSlotBytes : kTokenTileBytes;
-    const uint32_t slots = coalesced ? 2u : 3u;
+    const uint32_t slots = 2u;
     const uint64_t source_bytes = RelayRowOffset(row_bytes, header->token_count, row_shift);
     // Keep a short contiguous source block on one relay. Token-at-a-time
     // striping creates unnecessary source and destination address jumps.
@@ -853,50 +908,43 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
     uint32_t bytes = static_cast<uint32_t>(
         (coalesced ? source_bytes - source_offset : row_bytes) < tile_bytes
         ? (coalesced ? source_bytes - source_offset : row_bytes) : tile_bytes);
+    if (!coalesced)
+        bytes = RelayBatchBytes(row_bytes, token, sub, header->token_count, tile_bytes, row_shift);
     __ubuf__ uint8_t *ub[3]{reinterpret_cast<__ubuf__ uint8_t *>(0),
                            reinterpret_cast<__ubuf__ uint8_t *>(ub_stride),
                            reinterpret_cast<__ubuf__ uint8_t *>(ub_stride * 2u)};
     bool busy[3]{false, false, false};
+    bool queued[3]{false, false, false};
+    RelayTileTask tasks[3];
+    RelayTileTask pending{source_offset, sub, token, bytes, true};
     uint32_t ping = 0u, cached_token = kInvalidRow;
     uint32_t ready_until = 0u, lane = 0u;
-    aclshmemi_copy_gm2ub(reinterpret_cast<__ubuf__ int8_t *>(ub[ping]),
-        reinterpret_cast<__gm__ int8_t *>(mapped_source + source_offset), bytes);
-    SetGetReady(ping);
+    // Populate the entire bounded GET window before the first fan-out.
+    // Recycling a slot is ordered after its own PUTs, not after every PUT.
+    for (uint32_t i = 0u; i < slots && pending.valid; ++i) {
+        tasks[i] = pending;
+        aclshmemi_copy_gm2ub(reinterpret_cast<__ubuf__ int8_t *>(ub[i]),
+            reinterpret_cast<__gm__ int8_t *>(mapped_source + pending.offset), pending.bytes);
+        SetGetReady(i);
+        queued[i] = true;
+        AdvanceRelayTask(pending, coalesced, row_bytes, source_bytes,
+            header->token_count, channels, tile_bytes, row_shift);
+    }
     for (;;) {
+        source_offset = tasks[ping].offset;
+        sub = tasks[ping].sub;
+        token = tasks[ping].token;
+        bytes = tasks[ping].bytes;
         WaitHiddenPull(ping);
-        uint64_t next_offset = 0u, next_sub = 0u;
-        uint32_t next_token = token;
-        bool more = false;
-        if (coalesced) {
-            next_offset = source_offset + static_cast<uint64_t>(channels) * tile_bytes;
-            more = next_offset < source_bytes;
-        } else {
-            next_sub = sub + bytes;
-            if (next_sub >= row_bytes) {
-                next_sub = 0u;
-                const uint32_t step = (token + 1u) % kTokensPerRelayBlock == 0u
-                    ? (channels - 1u) * kTokensPerRelayBlock + 1u : 1u;
-                if (header->token_count - token > step) {
-                    next_token = token + step;
-                    more = true;
-                }
-            } else more = true;
-            if (more) next_offset = RelayRowOffset(row_bytes, next_token, row_shift) + next_sub;
-        }
-        const uint32_t next_ping = ping + 1u == slots ? 0u : ping + 1u;
-        uint32_t next_bytes = 0u;
-        if (more) {
-            if (busy[next_ping]) {
-                WaitPutDone(next_ping);
-                busy[next_ping] = false;
-            }
-            const uint64_t remaining = coalesced ? source_bytes - next_offset : row_bytes - next_sub;
-            next_bytes = static_cast<uint32_t>(remaining < tile_bytes ? remaining : tile_bytes);
-            aclshmemi_copy_gm2ub(reinterpret_cast<__ubuf__ int8_t *>(ub[next_ping]),
-                reinterpret_cast<__gm__ int8_t *>(mapped_source + next_offset), next_bytes);
-            SetGetReady(next_ping);
-        }
+        queued[ping] = false;
         bool valid = true;
+        uint32_t slice = 0u;
+        if (!coalesced)
+            for (uint32_t destination = 0u; destination < workers; ++destination)
+                run_bytes[destination] = 0u;
+        while (slice < bytes && valid) {
+        const uint32_t slice_bytes = coalesced ? bytes : static_cast<uint32_t>(
+            row_bytes - sub < bytes - slice ? row_bytes - sub : bytes - slice);
         if (!coalesced && cached_token != token) {
             if (token >= ready_until) {
                 while (lane + 1u < parser_cohort &&
@@ -946,26 +994,69 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
                 cached_token = token;
             }
         }
+        if (!valid) break;
+        for (uint32_t i = 0u; i < count; ++i) {
+            const uint32_t destination = destinations[i];
+            if (coalesced) {
+                aclshmemi_copy_ub2gm(
+                    reinterpret_cast<__gm__ int8_t *>(mapped_destinations[destination] + offsets[i] + source_offset),
+                    reinterpret_cast<__ubuf__ int8_t *>(ub[ping]), slice_bytes);
+                continue;
+            }
+            // Merge only if both local and remote byte ranges are adjacent.
+            // Different expert assignments do not prevent hidden coalescing;
+            // destination metadata still retains every assignment separately.
+            const uint64_t remote = offsets[i] + sub;
+            if (run_bytes[destination] != 0u &&
+                run_remote[destination] + run_bytes[destination] == remote &&
+                run_local[destination] + run_bytes[destination] == slice) {
+                run_bytes[destination] += slice_bytes;
+            } else {
+                if (run_bytes[destination] != 0u)
+                    aclshmemi_copy_ub2gm(
+                        reinterpret_cast<__gm__ int8_t *>(mapped_destinations[destination] + run_remote[destination]),
+                        reinterpret_cast<__ubuf__ int8_t *>(ub[ping] + run_local[destination]), run_bytes[destination]);
+                run_remote[destination] = remote;
+                run_local[destination] = slice;
+                run_bytes[destination] = slice_bytes;
+            }
+        }
+        slice += slice_bytes;
+        sub += slice_bytes;
+        if (!coalesced && sub == row_bytes) {
+            ++token;
+            sub = 0u;
+        }
+        }
         if (!valid) {
             dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(error));
-            // The speculative next GET has an event which must be consumed
-            // even on a rejected descriptor before the UB can be released.
-            if (more) WaitHiddenPull(next_ping);
+            // Consume every speculative event, including error paths.
+            for (uint32_t i = 0u; i < slots; ++i)
+                if (queued[i]) WaitHiddenPull(i);
             break;
         }
-        for (uint32_t i = 0u; i < count; ++i)
-            aclshmemi_copy_ub2gm(
-                reinterpret_cast<__gm__ int8_t *>(mapped_destinations[destinations[i]] +
-                    offsets[i] + (coalesced ? source_offset : sub)),
-                reinterpret_cast<__ubuf__ int8_t *>(ub[ping]), bytes);
+        if (!coalesced)
+            for (uint32_t destination = 0u; destination < workers; ++destination)
+                if (run_bytes[destination] != 0u)
+                    aclshmemi_copy_ub2gm(
+                        reinterpret_cast<__gm__ int8_t *>(mapped_destinations[destination] + run_remote[destination]),
+                        reinterpret_cast<__ubuf__ int8_t *>(ub[ping] + run_local[destination]), run_bytes[destination]);
+        // Includes every token slice in this source GET batch.
         SetPutDone(ping);
         busy[ping] = true;
-        if (!more) break;
-        token = next_token;
-        sub = next_sub;
-        source_offset = next_offset;
-        bytes = next_bytes;
-        ping = next_ping;
+        if (pending.valid) {
+            WaitPutDone(ping);
+            busy[ping] = false;
+            tasks[ping] = pending;
+            aclshmemi_copy_gm2ub(reinterpret_cast<__ubuf__ int8_t *>(ub[ping]),
+                reinterpret_cast<__gm__ int8_t *>(mapped_source + pending.offset), pending.bytes);
+            SetGetReady(ping);
+            queued[ping] = true;
+            AdvanceRelayTask(pending, coalesced, row_bytes, source_bytes,
+                header->token_count, channels, tile_bytes, row_shift);
+        }
+        ping = ping + 1u == slots ? 0u : ping + 1u;
+        if (!queued[ping]) break;
     }
     for (uint32_t i = 0u; i < slots; ++i)
         if (busy[i]) WaitPutDone(i);
