@@ -775,7 +775,8 @@ __aicore__ inline bool ReduceTwoContributorTaskRange(
     __gm__ const CombineResultOp *results, __gm__ uint8_t *source_ready,
     __gm__ uint8_t *source_payload_offsets, uint64_t task_begin,
     uint64_t task_end, uint64_t tiles_per_row, uint32_t hidden,
-    uint64_t row_bytes, uint64_t output_slot_offset, uint64_t spin_cap,
+    uint64_t row_bytes, uint64_t output_slot_offset, uint32_t worker_count,
+    uint64_t spin_cap,
     __gm__ uint32_t *status)
 {
     __ubuf__ uint8_t *input0_ub = reinterpret_cast<__ubuf__ uint8_t *>(0);
@@ -788,11 +789,22 @@ __aicore__ inline bool ReduceTwoContributorTaskRange(
     bool input0_inflight = false;
     bool input1_inflight = false;
     bool ok = true;
+    uint32_t ready_mask = 0u;
+    uint64_t payload_offsets[8]{0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
+    uint32_t cached_accumulator = kInvalidIndex;
+    uint32_t cached_first_source = 0u;
+    uint32_t cached_second_source = 0u;
+    __gm__ float *cached_first_remote = nullptr;
+    __gm__ float *cached_second_remote = nullptr;
+    __gm__ float *cached_owner_output = nullptr;
+    uint32_t cached_owner = 0u;
     for (uint64_t task = task_begin; task < task_end; ++task) {
-        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(status));
-        if (*status != kStatusOk) {
-            ok = false;
-            break;
+        if (((task - task_begin) & 63u) == 0u) {
+            dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(status));
+            if (*status != kStatusOk) {
+                ok = false;
+                break;
+            }
         }
         const uint32_t accumulator = static_cast<uint32_t>(
             task / tiles_per_row);
@@ -803,50 +815,73 @@ __aicore__ inline bool ReduceTwoContributorTaskRange(
                 ? hidden - element_begin
                 : kTileElements);
 
-        const uint32_t head = accumulator_heads[accumulator];
-        const uint32_t first = head;
-        const uint32_t second = pull_next[first];
-        const uint32_t first_source = pulls[first].source_rank;
-        if (!WaitSourceReady(source_ready, first_source, spin_cap, status)) {
-            ok = false;
-            break;
+        if (accumulator != cached_accumulator) {
+            const uint32_t first = accumulator_heads[accumulator];
+            const uint32_t second = pull_next[first];
+            cached_first_source = pulls[first].source_rank;
+            cached_second_source = pulls[second].source_rank;
+            if (worker_count > 8u ||
+                cached_first_source >= worker_count ||
+                cached_second_source >= worker_count) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
+            const uint32_t sources[2]{cached_first_source,
+                                      cached_second_source};
+            for (uint32_t i = 0u; i < 2u; ++i) {
+                const uint32_t source = sources[i];
+                const uint32_t bit = 1u << source;
+                if ((ready_mask & bit) == 0u) {
+                    if (!WaitSourceReady(source_ready, source, spin_cap,
+                                         status)) {
+                        ok = false;
+                        break;
+                    }
+                    payload_offsets[source] = LoadSourcePayloadOffset(
+                        source_payload_offsets, source);
+                    ready_mask |= bit;
+                }
+            }
+            if (!ok) break;
+            uint64_t first_row_offset = 0u;
+            uint64_t second_row_offset = 0u;
+            if (!CheckedMulU64ByU32(row_bytes, pulls[first].source_row,
+                                    &first_row_offset) ||
+                !CheckedMulU64ByU32(row_bytes, pulls[second].source_row,
+                                    &second_row_offset)) {
+                SetFailure(status, kStatusSizeOverflow);
+                ok = false;
+                break;
+            }
+            cached_first_remote = reinterpret_cast<__gm__ float *>(
+                symmetric_partials + payload_offsets[cached_first_source] +
+                first_row_offset);
+            cached_second_remote = reinterpret_cast<__gm__ float *>(
+                symmetric_partials + payload_offsets[cached_second_source] +
+                second_row_offset);
+            const uint32_t result_index =
+                accumulator_result_index[accumulator];
+            cached_owner = results[result_index].owner_rank;
+            uint64_t result_row_offset = 0u;
+            if (!CheckedMulU64ByU32(row_bytes,
+                                    results[result_index].owner_row,
+                                    &result_row_offset)) {
+                SetFailure(status, kStatusSizeOverflow);
+                ok = false;
+                break;
+            }
+            cached_owner_output = reinterpret_cast<__gm__ float *>(
+                owner_output_base + output_slot_offset + result_row_offset);
+            cached_accumulator = accumulator;
         }
-        const uint32_t first_row = pulls[first].source_row;
-        uint64_t first_row_offset = 0u;
-        if (!CheckedMulU64ByU32(row_bytes, first_row,
-                                &first_row_offset)) {
-            SetFailure(status, kStatusSizeOverflow);
-            ok = false;
-            break;
-        }
-        __gm__ float *first_remote = reinterpret_cast<__gm__ float *>(
-            symmetric_partials +
-            LoadSourcePayloadOffset(source_payload_offsets, first_source) +
-            first_row_offset);
-        PullFp32ToUb(input0_ub, first_remote + element_begin, elements,
-                      static_cast<int32_t>(first_source), 0u);
+        PullFp32ToUb(input0_ub, cached_first_remote + element_begin,
+                      elements, static_cast<int32_t>(cached_first_source),
+                      0u);
         input0_inflight = true;
-
-        const uint32_t second_source = pulls[second].source_rank;
-        if (!WaitSourceReady(source_ready, second_source, spin_cap,
-                             status)) {
-            ok = false;
-            break;
-        }
-        const uint32_t second_row = pulls[second].source_row;
-        uint64_t second_row_offset = 0u;
-        if (!CheckedMulU64ByU32(row_bytes, second_row,
-                                &second_row_offset)) {
-            SetFailure(status, kStatusSizeOverflow);
-            ok = false;
-            break;
-        }
-        __gm__ float *second_remote = reinterpret_cast<__gm__ float *>(
-            symmetric_partials +
-            LoadSourcePayloadOffset(source_payload_offsets, second_source) +
-            second_row_offset);
-        PullFp32ToUb(input1_ub, second_remote + element_begin, elements,
-                      static_cast<int32_t>(second_source), 1u);
+        PullFp32ToUb(input1_ub, cached_second_remote + element_begin,
+                      elements, static_cast<int32_t>(cached_second_source),
+                      1u);
         input1_inflight = true;
 
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(kVecPingMte2V);
@@ -868,24 +903,9 @@ __aicore__ inline bool ReduceTwoContributorTaskRange(
         AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
 
-        const uint32_t result_index =
-            accumulator_result_index[accumulator];
-        const uint32_t owner = results[result_index].owner_rank;
-        const uint32_t owner_row = results[result_index].owner_row;
-        uint64_t result_row_offset = 0u;
-        if (!CheckedMulU64ByU32(row_bytes, owner_row,
-                                &result_row_offset)) {
-            SetFailure(status, kStatusSizeOverflow);
-            // Restore the output-credit event consumed above.
-            AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
-            ok = false;
-            break;
-        }
-        __gm__ float *owner_output = reinterpret_cast<__gm__ float *>(
-            owner_output_base + output_slot_offset + result_row_offset);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(kVecVMte3);
-        PutFp32ToOwner(output_ub, owner_output + element_begin, elements,
-                       static_cast<int32_t>(owner));
+        PutFp32ToOwner(output_ub, cached_owner_output + element_begin,
+                       elements, static_cast<int32_t>(cached_owner));
     }
 
     if (input0_inflight) {
@@ -1462,6 +1482,7 @@ void inc_dc_pull_combine_v2_device_kernel(
             WaveAllTwoContributorsAddress(source_ready_state);
         dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(all_two));
         const bool use_two_contributor_pipeline =
+            worker_count <= 8u &&
             *reinterpret_cast<__gm__ volatile uint32_t *>(all_two) == 1u;
         bool use_four_contributor_pipeline = false;
         if (!use_two_contributor_pipeline) {
@@ -1490,7 +1511,7 @@ void inc_dc_pull_combine_v2_device_kernel(
                 reinterpret_cast<__gm__ CombineResultOp *>(results),
                 source_ready_state, source_payload_offsets, task_begin,
                 task_end, tiles_per_row, hidden, row_bytes,
-                output_slot_offset, spin_cap, status);
+                output_slot_offset, worker_count, spin_cap, status);
         } else if (use_four_contributor_pipeline) {
             constexpr uint64_t kFourTileElements = 1536u;
             const uint64_t four_tiles_per_row =
@@ -1579,10 +1600,6 @@ finalize:
             dcci_cacheline(status_line);
         }
 
-        __gm__ uint64_t *by_source =
-            reinterpret_cast<__gm__ uint64_t *>(source_offsets);
-        __gm__ uint64_t *by_owner =
-            reinterpret_cast<__gm__ uint64_t *>(owner_offsets);
         uint32_t ready_sources = 0u;
         uint64_t first_ready = 0u;
         uint64_t all_ready = 0u;
@@ -1605,40 +1622,55 @@ finalize:
         timeline->ready_sources = ready_sources;
         timeline->first_ready = first_ready;
         timeline->all_ready = all_ready;
-        for (uint32_t source = 0u; source < worker_count; ++source) {
-            const uint32_t rows = static_cast<uint32_t>(
-                by_source[source + 1u] - by_source[source]);
-            uint64_t bytes = 0u;
-            CheckedMulU64ByU32(row_bytes, rows, &bytes);
-            __gm__ CombineRegionRegistration *registration =
-                reinterpret_cast<__gm__ CombineRegionRegistration *>(
-                    registrations) + source;
-            __gm__ CombineSourceAckV2 *ack =
-                reinterpret_cast<__gm__ CombineSourceAckV2 *>(source_acks) +
-                static_cast<uint64_t>(ring_slot * worker_count) + source;
-            PublishSourceAck(
-                ack, source, final_status, rows, bytes,
-                registration->region_id, session_id, placement_epoch,
-                generation, sequence, dispatch_cookie, wave,
-                static_cast<uint16_t>(ring_slot));
-        }
-        timeline->source_acks_done = AscendC::GetSystemCycle();
+        dcci_cacheline(status_line);
+    }
 
-        for (uint32_t owner = 0u; owner < worker_count; ++owner) {
-            const uint32_t rows = static_cast<uint32_t>(
-                by_owner[owner + 1u] - by_owner[owner]);
-            uint64_t bytes = 0u;
-            CheckedMulU64ByU32(row_bytes, rows, &bytes);
-            __gm__ CombineOwnerCompletionV2 *completion =
-                reinterpret_cast<__gm__ CombineOwnerCompletionV2 *>(
-                    owner_completions) +
-                static_cast<uint64_t>(ring_slot * worker_count) + owner;
-            PublishOwnerCompletion(
-                completion, owner, final_status, rows, bytes, session_id,
-                placement_epoch, generation, sequence, dispatch_cookie,
-                wave, static_cast<uint16_t>(ring_slot));
-        }
-        timeline->owner_completions_done = AscendC::GetSystemCycle();
+    // ACK and owner completion are independent per rank. Publish both records
+    // on one AIV per worker instead of serializing 24 remote quiet operations
+    // through block zero. The publication-last record format and fail-closed
+    // status are unchanged.
+    AscendC::SyncAll<true>();
+    dcci_cacheline(status_line);
+    if (block < worker_count) {
+        const uint32_t rank = block;
+        const uint32_t final_status = *status;
+        __gm__ uint64_t *by_source =
+            reinterpret_cast<__gm__ uint64_t *>(source_offsets);
+        __gm__ uint64_t *by_owner =
+            reinterpret_cast<__gm__ uint64_t *>(owner_offsets);
+        const uint32_t source_rows = static_cast<uint32_t>(
+            by_source[rank + 1u] - by_source[rank]);
+        uint64_t source_bytes = 0u;
+        CheckedMulU64ByU32(row_bytes, source_rows, &source_bytes);
+        __gm__ CombineRegionRegistration *registration =
+            reinterpret_cast<__gm__ CombineRegionRegistration *>(
+                registrations) + rank;
+        __gm__ CombineSourceAckV2 *ack =
+            reinterpret_cast<__gm__ CombineSourceAckV2 *>(source_acks) +
+            static_cast<uint64_t>(ring_slot * worker_count) + rank;
+        PublishSourceAck(
+            ack, rank, final_status, source_rows, source_bytes,
+            registration->region_id, session_id, placement_epoch,
+            generation, sequence, dispatch_cookie, wave,
+            static_cast<uint16_t>(ring_slot));
+
+        const uint32_t owner_rows = static_cast<uint32_t>(
+            by_owner[rank + 1u] - by_owner[rank]);
+        uint64_t owner_bytes = 0u;
+        CheckedMulU64ByU32(row_bytes, owner_rows, &owner_bytes);
+        __gm__ CombineOwnerCompletionV2 *completion =
+            reinterpret_cast<__gm__ CombineOwnerCompletionV2 *>(
+                owner_completions) +
+            static_cast<uint64_t>(ring_slot * worker_count) + rank;
+        PublishOwnerCompletion(
+            completion, rank, final_status, owner_rows, owner_bytes,
+            session_id, placement_epoch, generation, sequence,
+            dispatch_cookie, wave, static_cast<uint16_t>(ring_slot));
+    }
+    AscendC::SyncAll<true>();
+    if (block == 0u) {
+        timeline->source_acks_done = AscendC::GetSystemCycle();
+        timeline->owner_completions_done = timeline->source_acks_done;
         timeline->last_get = timeline->owner_completions_done;
         timeline->last_reduce = timeline->owner_completions_done;
         timeline->last_owner_put = timeline->owner_completions_done;
