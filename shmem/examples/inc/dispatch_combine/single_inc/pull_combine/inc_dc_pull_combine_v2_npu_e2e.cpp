@@ -1136,11 +1136,19 @@ int main(int argc, char **argv)
                       << ",\"warmup\":" << (warmup ? "true" : "false")
                       << ",\"workers\":" << o.workers
                       << ",\"workload\":\"" << o.workload_name << "\""
+                      << ",\"first_npu\":" << o.first_npu
+                      << ",\"route_seed\":" << o.route_seed
                       << ",\"hidden\":" << o.hidden
                       << ",\"rows\":" << o.rows
                       << ",\"active_aiv\":" << combine_aiv
                       << ",\"ingress_bytes\":" << wave_data.ingress_bytes
                       << ",\"egress_bytes\":" << wave_data.egress_bytes
+                      << ",\"source_partial_bytes\":[";
+            for (uint32_t source = 0u; source < o.workers; ++source) {
+                if (source != 0u) std::cout << ',';
+                std::cout << static_cast<uint64_t>(wave_data.plan.source_row_counts[source]) * row_bytes;
+            }
+            std::cout << ']'
                       << ",\"e2e_us\":" << us
                       << ",\"logical_gb_s\":" << gbps
                       << ",\"uplink_gb_s\":" << uplink_gbps

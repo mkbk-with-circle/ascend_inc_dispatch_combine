@@ -8,11 +8,14 @@ import socket
 import subprocess
 import time
 
+from pull_v2_k4_formal import wait_selected_devices_idle
+
 
 def run_case(args, case):
     name, route, hidden, rows, repeats, fault, aiv = case
     folder = args.output / name
     folder.mkdir()
+    wait_selected_devices_idle(args.first_npu // 8 * 8, 8, args.timeout)
     for device in range(args.first_npu, args.first_npu + 5):
         state = subprocess.run(
             ['npu-smi', 'info', '-t', 'proc-mem', '-i', str(device), '-c', '0'],
@@ -35,10 +38,14 @@ def run_case(args, case):
         for pe in range(5):
             log = (folder / f'pe{pe}.log').open('w')
             logs.append(log)
-            procs.append(subprocess.Popen([
+            command = [
                 str(binary), '4', str(pe), endpoint, str(args.first_npu),
                 str(hidden), str(rows), route, '0', str(repeats), str(fault)
-            ], env=env, stdout=log, stderr=subprocess.STDOUT))
+            ]
+            if getattr(args, 'route_seed', None) is not None:
+                command.append(str(args.route_seed))
+            procs.append(subprocess.Popen(command, env=env, stdout=log,
+                                          stderr=subprocess.STDOUT))
         deadline = time.monotonic() + args.timeout
         for proc in procs:
             proc.wait(timeout=max(0.1, deadline - time.monotonic()))
@@ -67,6 +74,7 @@ def run_case(args, case):
                 proc.wait()
         for log in logs:
             log.close()
+        wait_selected_devices_idle(args.first_npu // 8 * 8, 8, args.timeout)
 
 
 def main():
@@ -75,6 +83,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--first-npu', type=int, default=0)
     parser.add_argument('--timeout', type=float, default=90)
+    parser.add_argument('--route-seed', type=int,
+                        help='optional reproducible random route seed (also preserves fault argument)')
     args = parser.parse_args()
     if args.first_npu < 0 or args.first_npu + 4 >= 16 or (
             args.first_npu // 8 != (args.first_npu + 4) // 8):

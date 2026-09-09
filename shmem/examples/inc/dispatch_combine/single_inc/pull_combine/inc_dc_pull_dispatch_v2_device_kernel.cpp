@@ -2112,7 +2112,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                         uniform_producers_per_source != producer_lane)
                 continue;
         }
-        // Serialized block zero deliberately walks every parser chunk and
+        // The serial producer deliberately walks every parser chunk and
         // publishes every Pass2Ready cell; all other AIVs remain consumers.
         const uint32_t source = parser_index / parser_cohort;
         const uint32_t lane = parser_index % parser_cohort;

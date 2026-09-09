@@ -56,6 +56,7 @@ def run(args, name, build, workers, hidden, payload, route, warmup, measure,
         measured = [r['downlink_gb_s'] for r in samples if r['phase'] == 'measure']
         mean = statistics.mean(measured)
         result = dict(case=name, workers=workers, hidden=hidden, payload=payload,
+                      first_npu=args.first_npu,
                       route=route, seed=seed, fault=fault, samples=measure, correct=True,
                       token_skew=token_skew, ready_skew_us=ready_skew,
                       minimum=min(measured) if not fault else None,

@@ -1167,6 +1167,8 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
               << "{\"test\":\"pull_dispatch_v2_device_e2e\""
               << ",\"workers\":" << o.workers
               << ",\"workload\":\"" << o.workload_name << "\""
+              << ",\"first_npu\":" << o.first_npu
+              << ",\"route_seed\":" << o.seed
               << ",\"iteration\":" << iteration
               << ",\"phase\":\"" << (warmup ? "warmup" : "measure")
               << "\",\"generation\":" << oracle.generation
@@ -1329,8 +1331,8 @@ int main(int argc, char **argv)
     // assignment journal is an optional diagnostics workspace.
     const uint64_t journal_assignment_capacity = 0u;
     // Canonical V2 relay and Combine consume compact contributors directly.
-    // A zero capacity disables the legacy dense W x token row map.
-    // INC-generated destination rows; never upload a host routing plan.
+    // The optional row map is generated entirely by INC for streaming relay;
+    // it is never uploaded as a host routing plan.
     const uint64_t row_map_entries = total_tokens * o.workers;
     const uint64_t prefix_entries =
         static_cast<uint64_t>(o.workers + 1u) * o.workers;
