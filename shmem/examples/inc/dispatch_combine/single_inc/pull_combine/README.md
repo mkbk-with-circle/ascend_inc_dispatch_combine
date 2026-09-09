@@ -143,6 +143,26 @@ cmake --build /tmp/shmem-pull-v2-build -j8 --target \
 
 ## 结果
 
+### Dispatch 统一源段流水
+
+均匀和随机路由共用 `RelaySourceRuns`：去重目标 GPU，确定各目标行偏移，
+拉取一份源 hidden，再向所有唯一目标发送。均匀路由合并为连续长段；随机路由
+按 token 生成短段并查询已生成的目标行。移除固定 K1/K2/K4 fan-out 函数以及
+整批拉齐后逐目标标量重整的独立数据路径。
+
+对齐段使用同一个 ping/pong 搬运循环。非对齐行采用单写入者的精确宽度原语，
+避免多 AIV 对同一缓存行写入；统一主流程并不意味着取消必要的尾块处理。
+READY、完整路由校验、Journal、成功 Completion / Source ACK 的语义未改变。
+
+relay 时间戳先保存在 AIV 本地，所有布局生产者汇合后才写回，防止覆盖同一
+缓存行上的布局完成标志。移植时仍须遵守 API 的容量和 ABI worker 上限；
+当前设备验证范围仅 W2/W4。
+
+性能按 fan-out 下行字节 / 完整调用时间，使用同平面基线 A/B 检查128 MiB正式
+矩阵的均值和最低值下降均小于1%；小消息与错误输入单独检查正确性和有限完成。
+测试入口为 `tests/pull_v2_dispatch_unified.py`。
+结果见 [Dispatch统一对照](../../../../../docs/inc/report/nb-borrow/dispatch_unified_20260909/README.md)。
+
 ### Combine 统一流水候选
 
 当前开发分支将 K2、K4 和一般贡献数合并为同一个设备执行函数。

@@ -20,8 +20,8 @@
 │ 8. 建立 Journal：Owner Token ↔ Contributor B Rows           │
 │                                                              │
 │ 9. 每个 Token Hidden 只从源 Worker GET 一次                 │
-│    ├─ Uniform：Worker → INC UB → 多个目标直接 PUT            │
-│    └─ Non-uniform：INC 按目标重整 → 每目标一次 Bulk PUT       │
+│    同一源段循环：确定目标行 → GET 一段 → 向唯一目标 PUT     │
+│    均匀路由合并成长段；随机路由按 Token 生成短段             │
 │                                                              │
 │10. PUT DestinationRow / ExpertAssignment / ExpertCount      │
 │11. 等待所有远端数据可见，Journal 进入 DISPATCH_SEALED       │
@@ -40,6 +40,8 @@ Dispatch 的核心语义：
 ```
 
 同一 GPU 上多个 Expert 只增加 Assignment，不增加网络 Hidden 副本。
+当前候选所有路由共用源段执行入口。非对齐行使用单写入者的精确宽度搬运原语；
+这是避免缓存行覆盖的底层约束，不是按 top-k 选择另一个协议。
 
 ## Combine
 
@@ -55,12 +57,12 @@ Dispatch 的核心语义：
 ┌──────────────────────── INC Combine 半区 ────────────────────┐
 │ 5. 验证 Notice 的 Session / Generation / Wave / Source       │
 │ 6. 主动 GET 128B READY，校验 Cookie / Row Count / Offset     │
-│ 7. 读取 Dispatch Seal 时生成的确定性 Pull Index              │
-│ 8. 已 READY 的 Source 可以先处理，不等待 Rank 顺序            │
+│ 7. 校验不可变 Pull Index；当前测试由 Host 构造此索引         │
+│ 8. 每 Token 校验贡献链并等待其 Source READY                  │
 │                                                               │
 │ 9. 按 Token GET 各 B 的 Partial Rows                          │
-│    ├─ Top-k2：两个 GET → 一次 FP32 Add                        │
-│    └─ Generic：按 Journal 固定顺序逐 Contributor Reduction    │
+│    所有 K：两份一批 GET、累加；奇数尾项单独处理              │
+│    零贡献输出零；输入双缓冲与交替输出缓冲                    │
 │                                                               │
 │10. 上一 Task 的 Owner PUT 与下一 Task 的 Partial GET 交叠     │
 │11. 最终结果只 PUT 给原始 Owner Rank / Owner Row               │
