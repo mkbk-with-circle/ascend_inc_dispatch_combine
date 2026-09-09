@@ -16,22 +16,13 @@
 
 ## 正式 Gate 与结果
 
-本机单平面 raw 聚合口径为 W2=56 GB/s、W4=112 GB/s，正式 gate 为其 92%。
-带宽按完整算子的 logical bytes / READY-to-completion device makespan 计算。
-
-| 算子 | 规模 | Gate | Min | Mean | CV | 结果 |
-|---|---:|---:|---:|---:|---:|---|
-| Dispatch | W2 | 51.52 GB/s | 56.505 | 56.906 | 0.237% | PASS |
-| Dispatch | W4 | 103.04 GB/s | 104.907 | 105.627 | 0.476% | PASS |
-| Combine | W2 | 51.52 GB/s | 56.641 | 56.750 | 0.105% | PASS |
-| Combine | W4 | 103.04 GB/s | 107.254 | 107.663 | 0.194% | PASS |
-
-额外 256 MiB/worker 单 wave：W2 57.268 GB/s、W4 106.690 GB/s，均正确。
+本机 W2/W4 目标为 51.52/103.04 GB/s，当前尚未达到。
+Dispatch 计 fan-out 下行字节，Combine 计归约上行字节，均除以完整算子时间。
+最新数值统一见下方单方向报告。
 
 ## 交叠与稳健性
 
-- W2 16 MiB/worker：真实加速 1.1205x–1.1681x，真实节时 10.76%–14.39%。
-- W4 128 MiB/worker：真实加速 1.1290x–1.1446x，真实节时 11.43%–12.63%。
+- 当前 Combine 优化版本的交叠性能需要重新测定。
 - 62 个 size/skew/hotspot/ragged/READY-skew case：62/62 PASS。
 - Dispatch/Combine W2/W4 各连续 100 device waves：全部正确，无 timeout、guard
   损坏或状态泄漏。
@@ -40,14 +31,13 @@
 
 ## 当前开放项
 
-1. Ragged/non-uniform 安全重整路径约 0.37–0.47 GB/s，正确但仍需性能优化。
+1. Ragged/non-uniform 安全重整路径仍需性能优化与新口径复测。
 2. 独立 API 的真实框架热路径仍需部署环境对应的 `BackendOps` device adapter。
 3. W8 与其他硬件/拓扑均未验证；移植后必须重新测 roofline、正确性和 gate。
 
 ## 证据
 
-- [正式资格报告](../../../../docs/inc/report/nb-borrow/pull_v2_qualified_20260904/README.md)
-- [交叠与非对称压力报告](../../../../docs/inc/report/nb-borrow/pull_v2_overlap_stress_20260905/README.md)
+- [当前单方向带宽与稳健性报告](../../../../docs/inc/report/nb-borrow/pull_v2_directional_20260909/README.md)
 - [协议、API 与构建](pull_combine/README.md)
 - [Dispatch/Combine 流程图](pull_combine/FLOW.md)
 

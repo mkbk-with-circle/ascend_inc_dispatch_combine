@@ -35,21 +35,22 @@ Combine : B Notice → INC GET FP32 partials → reduce → INC PUT original A
 
 ## Gate 与正式结果
 
-> 2026-09-09 已修正带宽口径：Dispatch 只统计 fan-out 下行，Combine 只统计
-> 归约上行，且均除以完整算子时间。下表是历史 GET+PUT 口径，不能继续作为
-> 当前 PASS 结论；新结果见
-> `nb-borrow/pull_v2_directional_20260909/README.md`。
+当前带宽口径为：Dispatch 的 fan-out 下行 hidden 字节 / 完整算子时间；Combine
+的归约上行 partial 字节 / 完整算子时间。旧 GET+PUT 相加口径及报告已从当前树删除。
 
-本机物理 raw 聚合口径：W2=56 GB/s、W4=112 GB/s；性能 gate=92%。计时从
-READY publication 到 destination completion/source ACK 全部可见，分子为完整算子
-实际 logical GET+PUT payload，不含 metadata/control bytes。
+本机 W2/W4 nominal raw 为 56/112 GB/s，92% raw gate 为 51.52/103.04 GB/s；
+put-only 既有实测 W2 约 42.7、W4 约 83.3--85.4 GB/s，仅作为调优参照，
+不能当作严格上界或用于降低 gate。完整结果与效率见
+`nb-borrow/pull_v2_directional_20260909/README.md`。
 
-| 算子 | 规模 | Gate | Min | Mean | CV | 状态 |
-|---|---:|---:|---:|---:|---:|---|
-| Dispatch | W2 | 51.52 | 56.505 | 56.906 | 0.237% | PASS |
-| Dispatch | W4 | 103.04 | 104.907 | 105.627 | 0.476% | PASS |
-| Combine | W2 | 51.52 | 56.641 | 56.750 | 0.105% | PASS |
-| Combine | W4 | 103.04 | 107.254 | 107.663 | 0.194% | PASS |
+| 算子 | 规模/路由 | Min GB/s | Mean GB/s | CV |
+|---|---|---:|---:|---:|
+| Dispatch | W2 top-k2 | 37.618 | 37.849 | 0.509% |
+| Combine | W2 top-k2 | 39.289 | 39.429 | 0.197% |
+| Dispatch | W4 top-k2 | 69.117 | 69.705 | 0.533% |
+| Combine | W4 top-k2 | 77.468 | 77.730 | 0.190% |
+| Dispatch | W4 expert-k4/GPU4 | 76.632 | 76.970 | 0.215% |
+| Combine | W4 expert-k4/GPU4 | 78.405 | 78.600 | 0.154% |
 
 ## 稳定性与扩展性
 
@@ -60,12 +61,11 @@ READY publication 到 destination completion/source ACK 全部可见，分子为
 - Host reference 覆盖 5000 个随机 packet、500 个 W2–W8 随机 layout/control plan、
   三种 dtype、可变 top-k、重复 token ID 与非法输入拒绝。
 
-## 交叠
+## 当前优化版本安全验证
 
-| 规模 | 数据 | 理论上限 | 真实加速范围 | 真实节时范围 |
-|---|---:|---:|---:|---:|
-| W2 | 16 MiB/worker | 1.4768x | 1.1205x–1.1681x | 10.76%–14.39% |
-| W4 | 128 MiB/worker | 1.4914x | 1.1290x–1.1446x | 11.43%–12.63% |
+新增设备安全回归共 14 组、236 wave，通过固定 K2/K4 的坏索引、链环、
+token/owner 越界拒绝、连续 ring 复用、少 AIV 和尾块检查。当前优化版本的
+Dispatch/Combine 交叠性能尚需重新测定。
 
 ## 未关闭事项
 
@@ -77,7 +77,6 @@ READY publication 到 destination completion/source ACK 全部可见，分子为
 
 - `examples/inc/dispatch_combine/single_inc/pull_combine/README.md`
 - `examples/inc/dispatch_combine/single_inc/pull_combine/FLOW.md`
-- `docs/inc/report/nb-borrow/pull_v2_qualified_20260904/README.md`
-- `docs/inc/report/nb-borrow/pull_v2_overlap_stress_20260905/README.md`
+- `docs/inc/report/nb-borrow/pull_v2_directional_20260909/README.md`
 
 原始 JSONL/日志不进入 Git，只保留汇总、测试口径与复现脚本。

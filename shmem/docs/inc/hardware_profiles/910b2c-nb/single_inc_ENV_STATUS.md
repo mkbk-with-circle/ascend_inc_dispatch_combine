@@ -44,20 +44,15 @@
 | W4 | all→INC | 85.445 | 85.478 | 0.0244% |
 | W4 | INC→all | 83.258 | 84.038 | 1.2484% |
 
-这些单向 roofline 只用于解释物理链路；Pull V2 正式 gate 使用完整 GET+PUT 流水的
-logical bytes 口径，固定为 raw 聚合的 92%。完整算子分子累计两个方向的 logical
-bytes，而 put-only 只计算单一方向，因此两类 GB/s 不能直接作“链路利用率”比较。
+这些单向实测值是调优参照。正式 Dispatch 使用下行 hidden 字节，Combine 使用
+上行 partial 字节，均除以完整算子时间；目标仍固定为 raw 聚合的 92%。
 
 ## Pull V2 正式结果
 
 128 MiB/worker、top-k2 balanced、3 warmup + 10 measure：
 
-| 算子 | 规模 | Gate | Min | Mean | CV | 结果 |
-|---|---:|---:|---:|---:|---:|---|
-| Dispatch | W2 | 51.52 | 56.505 | 56.906 | 0.237% | PASS |
-| Dispatch | W4 | 103.04 | 104.907 | 105.627 | 0.476% | PASS |
-| Combine | W2 | 51.52 | 56.641 | 56.750 | 0.105% | PASS |
-| Combine | W4 | 103.04 | 107.254 | 107.663 | 0.194% | PASS |
+当前性能统一使用单方向有效带宽：Dispatch 统计 fan-out 下行，Combine 统计归约
+上行，并除以完整算子时间。最新 W2/W4、K2/K4/K8 结果见下方唯一权威报告。
 
 ## 稳健性
 
@@ -69,7 +64,6 @@ bytes，而 put-only 只计算单一方向，因此两类 GB/s 不能直接作�
 
 ## 权威报告
 
-- `docs/inc/report/nb-borrow/pull_v2_qualified_20260904/README.md`
-- `docs/inc/report/nb-borrow/pull_v2_overlap_stress_20260905/README.md`
+- `docs/inc/report/nb-borrow/pull_v2_directional_20260909/README.md`
 
 原始 JSONL、PE 日志和 build 产物保存在实验机本地，不进入 Git。

@@ -143,10 +143,8 @@ cmake --build /tmp/shmem-pull-v2-build -j8 --target \
 
 ## 结果
 
-- 正式性能与稳定性：
-  [`pull_v2_qualified_20260904`](../../../../../docs/inc/report/nb-borrow/pull_v2_qualified_20260904/README.md)
-- 非对称压力与交叠调优：
-  [`pull_v2_overlap_stress_20260905`](../../../../../docs/inc/report/nb-borrow/pull_v2_overlap_stress_20260905/README.md)
+- 当前单方向有效带宽、拓扑与稳健性：
+  [`pull_v2_directional_20260909`](../../../../../docs/inc/report/nb-borrow/pull_v2_directional_20260909/README.md)
 
-当前 nb-borrow 的 W2/W4 128 MiB、top-k2 Dispatch/Combine 均通过既定 Gate；任意
+旧 GET+PUT 相加带宽口径已删除。当前报告同时列出 raw gate 与实测 transport roof；
 Ragged/Hotspot 路由走正确性优先的安全重整路径，性能仍是后续优化项。

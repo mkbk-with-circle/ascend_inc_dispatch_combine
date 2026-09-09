@@ -98,13 +98,13 @@ publication 计到 destination 重整完成、destination completion 和 source 
 均发布：
 
 ```text
-logical bytes = hidden GET once + hidden PUT once per unique destination
+bandwidth = hidden PUT bytes across unique destinations / complete operator time
 W2 min >= 51.52 GB/s   # 56 GB/s nominal raw x 92%
 W4 min >= 103.04 GB/s  # 112 GB/s nominal raw x 92%
 10 measures 全正确，CV <= 5%
 ```
 
 另外记录 GET-only、PUT-only、匹配 fan-out 比例的 GET+PUT mixed roofline，以及
-重整带宽；旧 Push-Dispatch 数据不覆盖，只作为 legacy 对照。小消息及不同程度
+重整带宽。小消息及不同程度
 的非对称 workload 在正式 gate 通过后测试，不套用上述固定 raw gate；它们必须
 正确、稳定、无死锁或越界，并报告带宽、延迟和相对对称基线的退化。

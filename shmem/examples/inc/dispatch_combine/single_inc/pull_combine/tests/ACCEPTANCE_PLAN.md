@@ -49,14 +49,13 @@
 ### 2.1 Dispatch
 
 ```text
-logical_dispatch_bytes =
-    sum(source token hidden bytes)
-  + sum(one hidden row for every (token, unique destination))
+dispatch_downlink_bytes =
+    sum(one hidden row for every (token, unique destination))
 
-bandwidth = logical_dispatch_bytes / full_dispatch_makespan
+bandwidth = dispatch_downlink_bytes / full_dispatch_makespan
 ```
 
-固定 raw gate **只适用于**完整 Dispatch、`sym_k2_balanced` 对称路由，并且每个 worker
+固定 raw gate 适用于完整 Dispatch 的对称 K2/K4 路由，并且每个 worker
 的 source hidden payload 恰好为 128 MiB：
 
 | 规模 | nominal raw 参考 | 92% gate |
@@ -64,17 +63,17 @@ bandwidth = logical_dispatch_bytes / full_dispatch_makespan
 | W2 | 56 GB/s | min >= 51.52 GB/s |
 | W4 | 112 GB/s | min >= 103.04 GB/s |
 
-因此正式 hard-gated case 只有 W2 和 W4 各一个。纯 GET 新标定仅用于诊断和解释
+正式大消息覆盖 W2/W4 的对称 K2/K4 路由。纯 GET 新标定仅用于诊断和解释
 物理瓶颈，不能下调以上完整算子 gate。小消息、其他数据量及任何非对称 workload
 均不套用固定 raw gate。
 
 ### 2.2 Combine
 
-Combine 使用 `partial ingress + owner egress` 的 logical bytes，READY Notice、
+Combine 使用 `partial ingress` 有效字节，READY Notice、
 INC GET READY、FP32 reduce、owner PUT、ACK/completion 的时间全部计入分母。正式
 `sym_k2_balanced`、每个 B 恰好 128 MiB partial 的 W2/W4 case 使用相同的
-51.52/103.04 GB/s hard gate，并以 10 个 measure 的最小值判定。其他 top-k、
-非对称和小消息只要求正确、稳定、有限完成，并作为配对回归数据记录。
+51.52/103.04 GB/s gate，并以 10 个 measure 的最小值判定；对称 K4 也采用相同
+目标。非对称和小消息检查正确、稳定、有限完成，并单独报告性能。
 
 ## 3. 固定验收矩阵
 
@@ -101,8 +100,8 @@ host validation 阶段明确拒绝，而不是截断或补成另一个逻辑 sha
 ### 3.2 数据量阶梯
 
 Dispatch 的 size step 指**每个 worker 的 source hidden payload**；对于
-`sym_k2_balanced`，runner 再精确计算完整算子的 logical bytes。其他场景的
-`target_logical_bytes` 仍指算子逻辑字节，不是含 padding 的 allocation bytes：
+所有路由均由实际 unique destination fan-out 计算下行有效字节，
+不能把 padding 或 GET 字节加入 Dispatch 的性能分子：
 
 ```text
 0, 4 KiB, 64 KiB, 1 MiB, 16 MiB, 64 MiB,
