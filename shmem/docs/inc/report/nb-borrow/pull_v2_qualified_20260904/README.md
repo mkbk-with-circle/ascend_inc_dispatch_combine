@@ -1,5 +1,10 @@
 # nb-borrow 单 INC Pull V2 资格报告（2026-09-04）
 
+> **历史口径说明（2026-09-09）：** 本报告把 GET 与 PUT 字节相加后除以
+> device makespan。当前正式口径已改为 Dispatch 仅统计 fan-out 下行、Combine
+> 仅统计归约上行，并使用完整算子时间；因此本页的性能 PASS 不可沿用。请以
+> `../pull_v2_directional_20260909/README.md` 为准。
+
 本目录只记录 `nb-borrow`（Ascend 910B2C）上的 Pull-Dispatch V2 与
 Pull-Combine V2；不包含旧协议或其他集群的历史实验。正式性能固定使用
 同一 HCCS 平面的 NPU 0--4（0--3 worker，4 为 INC）。运行前确认 16 张卡空闲。

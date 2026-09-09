@@ -35,6 +35,11 @@ Combine : B Notice → INC GET FP32 partials → reduce → INC PUT original A
 
 ## Gate 与正式结果
 
+> 2026-09-09 已修正带宽口径：Dispatch 只统计 fan-out 下行，Combine 只统计
+> 归约上行，且均除以完整算子时间。下表是历史 GET+PUT 口径，不能继续作为
+> 当前 PASS 结论；新结果见
+> `nb-borrow/pull_v2_directional_20260909/README.md`。
+
 本机物理 raw 聚合口径：W2=56 GB/s、W4=112 GB/s；性能 gate=92%。计时从
 READY publication 到 destination completion/source ACK 全部可见，分子为完整算子
 实际 logical GET+PUT payload，不含 metadata/control bytes。
