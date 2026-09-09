@@ -611,6 +611,11 @@ __aicore__ inline uint32_t RelayTileBytes(uint32_t contributors,
     // window while metadata work is active on the remaining AIVs.
     if (channels_per_source <= 3u && contributors == 2u)
         return 6u * 1024u;
+    // One UB tile is reused for every destination. Fanout four therefore
+    // does not consume four independent UB windows; keep each transfer at the
+    // qualified 8-KiB MTE ceiling instead of shrinking it to 4 KiB.
+    if (contributors == 4u && channels_per_source <= 4u)
+        return kMaxHiddenTileBytes;
     const uint32_t in_flight_budget = channels_per_source <= 4u
         ? 16u * 1024u : kUbSlotBytes;
     uint32_t bytes = in_flight_budget / contributors;
@@ -660,7 +665,19 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinationsGeneric(
         reinterpret_cast<__gm__ AssignmentRecord *>(
             reinterpret_cast<__gm__ uint8_t *>(header) +
             header->assignments_offset);
-    const uint32_t destination_count = tokens[0].assignment_count;
+    uint32_t destination_count = 0u;
+    uint32_t destination_bits[4]{0u, 0u, 0u, 0u};
+    uint32_t destinations[kPullDispatchMaxWorkers];
+    for (uint32_t assignment = 0u;
+         assignment < tokens[0].assignment_count; ++assignment) {
+        const uint32_t destination = assignments[
+            tokens[0].assignment_begin + assignment].destination_rank;
+        const uint32_t word = destination >> 5u;
+        const uint32_t mask = 1u << (destination & 31u);
+        if ((destination_bits[word] & mask) != 0u) continue;
+        destination_bits[word] |= mask;
+        destinations[destination_count++] = destination;
+    }
     if (destination_count == 0u) return;
     const uint32_t tile_bytes = RelayTileBytes(
         destination_count, channels_per_source);
@@ -669,11 +686,8 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinationsGeneric(
     const uint64_t tiles =
         (source_bytes + tile_bytes - 1u) / tile_bytes;
     uint64_t destination_byte_base[kPullDispatchMaxWorkers];
-    uint32_t destinations[kPullDispatchMaxWorkers];
     for (uint32_t local = 0u; local < destination_count; ++local) {
-        const uint32_t destination = assignments[
-            tokens[0].assignment_begin + local].destination_rank;
-        destinations[local] = destination;
+        const uint32_t destination = destinations[local];
         const uint32_t destination_row = source_destination_prefix[
             static_cast<uint64_t>(source) * worker_count + destination];
         destination_byte_base[local] =
@@ -831,7 +845,23 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinations(
     if (header->token_count == 0u) return;
     __gm__ TokenRecord *tokens = reinterpret_cast<__gm__ TokenRecord *>(
         reinterpret_cast<__gm__ uint8_t *>(header) + header->tokens_offset);
-    const uint32_t fanout = tokens[0].assignment_count;
+    __gm__ AssignmentRecord *assignments =
+        reinterpret_cast<__gm__ AssignmentRecord *>(
+            reinterpret_cast<__gm__ uint8_t *>(header) +
+            header->assignments_offset);
+    uint32_t destination_bits[4]{0u, 0u, 0u, 0u};
+    uint32_t fanout = 0u;
+    for (uint32_t assignment = 0u;
+         assignment < tokens[0].assignment_count; ++assignment) {
+        const uint32_t destination = assignments[
+            tokens[0].assignment_begin + assignment].destination_rank;
+        const uint32_t word = destination >> 5u;
+        const uint32_t mask = 1u << (destination & 31u);
+        if ((destination_bits[word] & mask) == 0u) {
+            destination_bits[word] |= mask;
+            ++fanout;
+        }
+    }
     if (fanout == 0u) return;
     const uint64_t source_bytes = MulU64ByU32(row_bytes,
                                                header->token_count);
@@ -849,12 +879,15 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinations(
                             static_cast<uint32_t>(source_bytes),
                             static_cast<int32_t>(source));
             FlushRange(staging, source_bytes);
-            __gm__ AssignmentRecord *assignments =
-                reinterpret_cast<__gm__ AssignmentRecord *>(
-                    slot + header->assignments_offset);
-            for (uint32_t local = 0u; local < fanout; ++local) {
+            uint32_t tiny_bits[4]{0u, 0u, 0u, 0u};
+            for (uint32_t local = 0u;
+                 local < tokens[0].assignment_count; ++local) {
                 const uint32_t destination = assignments[
                     tokens[0].assignment_begin + local].destination_rank;
+                const uint32_t word = destination >> 5u;
+                const uint32_t mask = 1u << (destination & 31u);
+                if ((tiny_bits[word] & mask) != 0u) continue;
+                tiny_bits[word] |= mask;
                 const uint32_t destination_row = source_destination_prefix[
                     static_cast<uint64_t>(source) * worker_count +
                     destination];
@@ -867,21 +900,23 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinations(
         }
         return;
     }
-    if (fanout == 1u) {
+    const bool one_assignment_per_destination =
+        fanout == tokens[0].assignment_count;
+    if (one_assignment_per_destination && fanout == 1u) {
         RelayUniformDestinationsFixed<1u>(
             source_base, destination_hidden_base, source_destination_prefix,
             header, row_bytes, source, worker_count, channel,
             channels_per_source);
         return;
     }
-    if (fanout == 2u) {
+    if (one_assignment_per_destination && fanout == 2u) {
         RelayUniformDestinationsFixed<2u>(
             source_base, destination_hidden_base, source_destination_prefix,
             header, row_bytes, source, worker_count, channel,
             channels_per_source);
         return;
     }
-    if (fanout == 4u) {
+    if (one_assignment_per_destination && fanout == 4u) {
         RelayUniformDestinationsFixed<4u>(
             source_base, destination_hidden_base, source_destination_prefix,
             header, row_bytes, source, worker_count, channel,
@@ -1175,6 +1210,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             *reinterpret_cast<__gm__ uint64_t *>(state + 2u) = 0u;
             *reinterpret_cast<__gm__ uint64_t *>(state + 4u) = 0u;
             state[6] = 0u;
+            state[7] = 0u;
+            for (uint32_t word = 8u; word < 12u; ++word) state[word] = 0u;
             source_errors[static_cast<uint64_t>(source) *
                           scratch_layout.source_stride] = 0u;
         }
@@ -1450,6 +1487,57 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             const uint32_t token_end = ParserTokenBoundary(
                 header->token_count, lane + 1u, parser_cohort);
 
+            // Verify the uniform hint in parallel. Lane zero publishes the
+            // first token's exact destination bitmap; every parser lane then
+            // compares only its own token slice. This retains independent INC
+            // validation without a serial O(tokens*topk) prefix bottleneck.
+            if ((header->flags & kSlotFlagUniformDestinations) != 0u) {
+                if (lane == 0u) {
+                    uint32_t reference[4]{0u, 0u, 0u, 0u};
+                    if (header->token_count != 0u) {
+                        __gm__ TokenRecord *first = tokens;
+                        uint64_t first_end = 0u;
+                        if (first->assignment_begin != 0u ||
+                            !AddU64(first->assignment_begin,
+                                    first->assignment_count, &first_end) ||
+                            first_end > header->assignment_count) {
+                            local_status = kStatusInvalidToken;
+                        } else {
+                            for (uint32_t local = 0u;
+                                 local < first->assignment_count; ++local) {
+                                const uint32_t destination = assignments[
+                                    first->assignment_begin + local]
+                                    .destination_rank;
+                                if (destination >= worker_count) {
+                                    local_status = kStatusInvalidAssignment;
+                                    break;
+                                }
+                                reference[destination >> 5u] |=
+                                    1u << (destination & 31u);
+                            }
+                        }
+                    }
+                    for (uint32_t word = 0u; word < 4u; ++word)
+                        cohort_state[8u + word] = reference[word];
+                    cohort_state[7] = local_status == kStatusOk
+                        ? 1u : (kOrdinalVisited | local_status);
+                    dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
+                        cohort_state));
+                } else {
+                    uint32_t observed = 0u;
+                    for (uint64_t spin = 0u; spin < spin_cap; ++spin) {
+                        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
+                            cohort_state));
+                        observed = cohort_state[7];
+                        if (observed != 0u) break;
+                    }
+                    if (observed == 0u)
+                        local_status = kStatusReadyTimeout;
+                    else if ((observed & kOrdinalVisited) != 0u)
+                        local_status = observed & ~kOrdinalVisited;
+                }
+            }
+
             if (lane == 0u && header->token_count == 0u &&
                 header->assignment_count != 0u)
                 local_status = kStatusInvalidToken;
@@ -1559,6 +1647,16 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                         break;
                     }
                     ++my_experts[expert_index];
+                }
+                if (local_status == kStatusOk &&
+                    (header->flags & kSlotFlagUniformDestinations) != 0u) {
+                    for (uint32_t word = 0u; word < 4u; ++word) {
+                        if (destination_bits[word] !=
+                            cohort_state[8u + word]) {
+                            local_status = kStatusInvalidAssignment;
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1745,7 +1843,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                             source_assignment_start[destination];
                     if ((source_rows == 0u && source_assignments == 0u) ||
                         (source_rows == source_header->token_count &&
-                         source_assignments == source_header->token_count))
+                         source_assignments >= source_header->token_count))
                         continue;
                     source_uniform = false;
                 }
@@ -2266,8 +2364,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(relay_state));
     }
     if (*status == kStatusOk && uniform_fast &&
-        row_bytes % kPullDispatchAlignment == 0u &&
-        block < required_channels) {
+        row_bytes % kPullDispatchAlignment == 0u && block < required_channels) {
         // Interleave peers across physical AIV ids.  This is the qualified
         // relay mapping; grouping adjacent AIVs by source underutilizes W4
         // multi-peer MTE/HCCS issue bandwidth.

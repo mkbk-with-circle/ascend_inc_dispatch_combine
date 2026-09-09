@@ -190,8 +190,6 @@ Status BuildSlot(const SourceInput &input, std::vector<uint8_t> *slot,
                             "invalid token assignment", error);
             }
             ordinals[assignment.ordinal] = 1u;
-            if (destinations[assignment.destination_rank] != 0u)
-                uniform_destinations = false;
             destinations[assignment.destination_rank] = 1u;
         }
         if (token == 0u)
@@ -596,10 +594,6 @@ Status CompileLayout(const std::vector<ParsedSource> &sources,
                  ++local) {
                 const uint32_t destination = source.assignments[
                     record.assignment_begin + local].destination_rank;
-                if (destinations[destination] != 0u) {
-                    uniform_destinations = false;
-                    break;
-                }
                 destinations[destination] = 1u;
             }
             if (!uniform_destinations) break;

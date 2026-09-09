@@ -119,12 +119,14 @@ def run_group(args: argparse.Namespace, role: str, workload: str,
                 raise RuntimeError(
                     f"{role}/{workload} PE{pe} lacks 13 successful waves")
         row = summary(case / "logs/pe4.log", test_name)
-        minimum = float(row.get("protocol_min_gb_s",
-                                row.get("min_logical_gb_s", 0.0)))
-        mean = float(row.get("protocol_mean_gb_s",
-                             row.get("mean_logical_gb_s", 0.0)))
-        cv = float(row.get("protocol_cv_percent",
-                           row.get("cv_pct", 100.0)))
+        if role == "dispatch":
+            minimum = float(row.get("downlink_min_gb_s", 0.0))
+            mean = float(row.get("downlink_mean_gb_s", 0.0))
+            cv = float(row.get("downlink_cv_percent", 100.0))
+        else:
+            minimum = float(row.get("min_uplink_gb_s", 0.0))
+            mean = float(row.get("mean_uplink_gb_s", 0.0))
+            cv = float(row.get("uplink_cv_pct", 100.0))
         expert_topk = 8 if workload == "sym_k8_gpu4" else 4
         gpu_topk = 2 if workload == "sym_k4_gpu2" else 4
         return {
@@ -196,7 +198,7 @@ def main() -> int:
         "W4+1INC on NPU0--4; H=8192; 128 MiB/worker; "
         "3 warmup + 10 measure.", "",
         "| Operator | Route | Expert K | GPU K | Partial K | Min GB/s | "
-        "Mean GB/s | CV | vs 103.04 reference |",
+        "Mean GB/s | CV | vs 103.04 gate |",
         "|---|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in results:
@@ -207,9 +209,10 @@ def main() -> int:
             f'{row["gpu_topk"]} | {partial} | {row["min_gb_s"]:.3f} | '
             f'{row["mean_gb_s"]:.3f} | {row["cv_pct"]:.3f}% | '
             f'{"PASS" if row["reference_gate_pass"] else "FAIL"} |')
-    lines += ["", "103.04 GB/s is the existing W4 reference gate; the "
-              "repository previously defined its hard-gate scope only for "
-              "sym_k2_balanced. This report preserves that distinction."]
+    lines += ["", "Bandwidth definition: Dispatch uses total fan-out hidden "
+              "bytes / complete operator time; Combine uses total reduction "
+              "input bytes / complete operator time. Control traffic is "
+              "included in time and excluded from bytes."]
     (args.output / "README.md").write_text("\n".join(lines) + "\n",
                                            encoding="utf-8")
     return 0

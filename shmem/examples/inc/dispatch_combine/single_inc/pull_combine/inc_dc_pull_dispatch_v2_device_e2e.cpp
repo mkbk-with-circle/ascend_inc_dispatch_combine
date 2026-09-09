@@ -1066,6 +1066,8 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
     const double seconds = us * 1e-6;
     const double gbps = seconds == 0.0 ? 0.0 :
         static_cast<double>(oracle.logical_bytes) / seconds / 1e9;
+    const double downlink_gbps = seconds == 0.0 ? 0.0 :
+        static_cast<double>(oracle.egress_hidden_bytes) / seconds / 1e9;
     const double protocol_us = timeline.all_ready != 0u &&
         timeline.kernel_done > timeline.all_ready
         ? static_cast<double>(timeline.kernel_done - timeline.all_ready) *
@@ -1095,6 +1097,7 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
               << ",\"logical_bytes\":" << oracle.logical_bytes
               << ",\"makespan_us\":" << us
               << ",\"logical_gb_s\":" << gbps
+              << ",\"downlink_gb_s\":" << downlink_gbps
               << ",\"protocol_makespan_us\":" << protocol_us
               << ",\"protocol_logical_gb_s\":" << protocol_gbps
               << ",\"status\":" << timeline.status
@@ -1353,6 +1356,7 @@ int main(int argc, char **argv)
     const uint32_t iterations = o.warmup + o.measure;
     std::vector<double> measured;
     std::vector<double> measured_protocol_gbps;
+    std::vector<double> measured_downlink_gbps;
     for (uint32_t iteration = 0u; iteration < iterations; ++iteration) {
         bool iteration_correct = true;
         const uint64_t generation = kFirstGeneration + iteration;
@@ -1513,6 +1517,9 @@ int main(int argc, char **argv)
                       iteration_correct);
             if (!warmup) {
                 measured.push_back(us);
+                measured_downlink_gbps.push_back(
+                    static_cast<double>(oracle.egress_hidden_bytes) /
+                    (us * 1e-6) / 1e9);
                 const double protocol_us = timeline.all_ready != 0u &&
                     timeline.kernel_done > timeline.all_ready
                     ? static_cast<double>(timeline.kernel_done -
@@ -1542,6 +1549,14 @@ int main(int argc, char **argv)
             protocol_variance += (value - protocol_mean) *
                                  (value - protocol_mean);
         protocol_variance /= measured_protocol_gbps.size();
+        const double downlink_mean = std::accumulate(
+            measured_downlink_gbps.begin(), measured_downlink_gbps.end(),
+            0.0) / measured_downlink_gbps.size();
+        double downlink_variance = 0.0;
+        for (double value : measured_downlink_gbps)
+            downlink_variance += (value - downlink_mean) *
+                                 (value - downlink_mean);
+        downlink_variance /= measured_downlink_gbps.size();
         std::cout << std::setprecision(12)
                   << "{\"test\":\"pull_dispatch_v2_device_e2e_summary\""
                   << ",\"workers\":" << o.workers
@@ -1561,6 +1576,13 @@ int main(int argc, char **argv)
                   << ",\"protocol_cv_percent\":"
                   << (protocol_mean == 0.0 ? 0.0 :
                       std::sqrt(protocol_variance) / protocol_mean * 100.0)
+                  << ",\"downlink_min_gb_s\":"
+                  << *std::min_element(measured_downlink_gbps.begin(),
+                                       measured_downlink_gbps.end())
+                  << ",\"downlink_mean_gb_s\":" << downlink_mean
+                  << ",\"downlink_cv_percent\":"
+                  << (downlink_mean == 0.0 ? 0.0 :
+                      std::sqrt(downlink_variance) / downlink_mean * 100.0)
                   << ",\"correct\":true}\n";
     }
 

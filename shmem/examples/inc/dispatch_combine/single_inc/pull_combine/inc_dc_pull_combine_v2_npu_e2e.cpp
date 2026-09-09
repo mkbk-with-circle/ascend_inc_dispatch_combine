@@ -869,7 +869,7 @@ int main(int argc, char **argv)
     }
 
     bool correct = status == 0;
-    std::vector<double> measured_us, measured_gbps;
+    std::vector<double> measured_us, measured_gbps, measured_uplink_gbps;
     const uint32_t iterations = o.warmup + o.measure;
     for (uint32_t iteration = 0u; iteration < iterations && correct;
          ++iteration) {
@@ -1013,6 +1013,8 @@ int main(int argc, char **argv)
             const double logical_bytes = static_cast<double>(
                 wave_data.ingress_bytes + wave_data.egress_bytes);
             const double gbps = logical_bytes / us / 1.0e3;
+            const double uplink_gbps =
+                static_cast<double>(wave_data.ingress_bytes) / us / 1.0e3;
             const bool warmup = iteration < o.warmup;
             std::cout << std::setprecision(12)
                       << "{\"test\":\"pull_combine_v2_npu_e2e\""
@@ -1027,6 +1029,7 @@ int main(int argc, char **argv)
                       << ",\"egress_bytes\":" << wave_data.egress_bytes
                       << ",\"e2e_us\":" << us
                       << ",\"logical_gb_s\":" << gbps
+                      << ",\"uplink_gb_s\":" << uplink_gbps
                       << ",\"status\":" << timeline.status
                       << ",\"cycle_kernel_start\":"
                       << timeline.kernel_start
@@ -1038,6 +1041,7 @@ int main(int argc, char **argv)
             if (!warmup) {
                 measured_us.push_back(us);
                 measured_gbps.push_back(gbps);
+                measured_uplink_gbps.push_back(uplink_gbps);
             }
         }
     }
@@ -1053,6 +1057,16 @@ int main(int argc, char **argv)
         variance /= measured_gbps.size();
         const double mean_us = std::accumulate(measured_us.begin(),
             measured_us.end(), 0.0) / measured_us.size();
+        const double uplink_mean = std::accumulate(
+            measured_uplink_gbps.begin(), measured_uplink_gbps.end(), 0.0) /
+            measured_uplink_gbps.size();
+        const double uplink_minimum = *std::min_element(
+            measured_uplink_gbps.begin(), measured_uplink_gbps.end());
+        double uplink_variance = 0.0;
+        for (double value : measured_uplink_gbps)
+            uplink_variance += (value - uplink_mean) *
+                               (value - uplink_mean);
+        uplink_variance /= measured_uplink_gbps.size();
         std::cout << std::setprecision(12)
                   << "{\"test\":\"pull_combine_v2_npu_e2e_summary\""
                   << ",\"workers\":" << o.workers
@@ -1064,6 +1078,11 @@ int main(int argc, char **argv)
                   << ",\"mean_us\":" << mean_us
                   << ",\"min_logical_gb_s\":" << minimum
                   << ",\"mean_logical_gb_s\":" << mean
+                  << ",\"min_uplink_gb_s\":" << uplink_minimum
+                  << ",\"mean_uplink_gb_s\":" << uplink_mean
+                  << ",\"uplink_cv_pct\":"
+                  << (uplink_mean == 0.0 ? 0.0 :
+                      100.0 * std::sqrt(uplink_variance) / uplink_mean)
                   << ",\"cv_pct\":"
                   << (mean == 0.0 ? 0.0 : 100.0 * std::sqrt(variance) / mean)
                   << ",\"correct\":true}\n";

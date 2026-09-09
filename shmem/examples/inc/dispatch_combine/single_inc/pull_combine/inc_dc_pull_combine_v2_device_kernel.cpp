@@ -32,6 +32,7 @@ constexpr uint64_t kHashOffset = 1469598103934665603ull;
 constexpr uint64_t kSourceScratchStride = kPullCombineV2Alignment;
 constexpr uint64_t kSourceAcceptedCycleOffset = 8u;
 constexpr uint64_t kWaveAllTwoContributorsOffset = 16u;
+constexpr uint64_t kWaveAllFourContributorsOffset = 20u;
 
 constexpr uint32_t kVecPingMte2V = 0u;
 constexpr uint32_t kVecPingVMte2 = 1u;
@@ -300,6 +301,13 @@ __aicore__ inline __gm__ uint32_t *WaveAllTwoContributorsAddress(
 {
     return reinterpret_cast<__gm__ uint32_t *>(
         source_ready + kWaveAllTwoContributorsOffset);
+}
+
+__aicore__ inline __gm__ uint32_t *WaveAllFourContributorsAddress(
+    __gm__ uint8_t *source_ready)
+{
+    return reinterpret_cast<__gm__ uint32_t *>(
+        source_ready + kWaveAllFourContributorsOffset);
 }
 
 __aicore__ inline __gm__ uint64_t *SourcePayloadOffsetAddress(
@@ -895,6 +903,148 @@ __aicore__ inline bool ReduceTwoContributorTaskRange(
     return ok && *status == kStatusOk;
 }
 
+// Uniform four-contributor path: two 6-KiB input tiles plus double-buffered
+// 6-KiB outputs exactly fit the portable 24-KiB AIV UB budget. Computing into
+// the alternate output overlaps all four GETs/reduction with the prior PUT.
+__aicore__ inline bool ReduceFourContributorTaskRange(
+    __gm__ uint8_t *symmetric_partials,
+    __gm__ uint8_t *owner_output_base,
+    __gm__ const CombinePullOp *pulls, __gm__ const uint32_t *pull_next,
+    __gm__ const uint32_t *accumulator_heads,
+    __gm__ const uint32_t *accumulator_result_index,
+    __gm__ const CombineResultOp *results, __gm__ uint8_t *source_ready,
+    __gm__ uint8_t *source_payload_offsets, uint64_t task_begin,
+    uint64_t task_end, uint64_t tiles_per_row, uint32_t hidden,
+    uint64_t row_bytes, uint64_t output_slot_offset, uint64_t spin_cap,
+    __gm__ uint32_t *status)
+{
+    constexpr uint32_t kFourTileElements = 1536u;
+    constexpr uint32_t kFourTileBytes =
+        kFourTileElements * sizeof(float);
+    static_assert(kFourTileBytes * 4u <= INC_VEC_UB_BUDGET_BYTES,
+                  "fixed4 double buffer exceeds AIV UB");
+    __ubuf__ uint8_t *input0_ub = reinterpret_cast<__ubuf__ uint8_t *>(0);
+    __ubuf__ uint8_t *input1_ub = input0_ub + kFourTileBytes;
+    __ubuf__ uint8_t *output0_ub = input1_ub + kFourTileBytes;
+    __ubuf__ uint8_t *output1_ub = output0_ub + kFourTileBytes;
+    AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
+    AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
+    AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+    bool ok = true;
+    uint64_t payload_offsets[4]{0u, 0u, 0u, 0u};
+    for (uint32_t source = 0u; source < 4u; ++source) {
+        if (!WaitSourceReady(source_ready, source, spin_cap, status)) {
+            ok = false;
+            break;
+        }
+        payload_offsets[source] =
+            LoadSourcePayloadOffset(source_payload_offsets, source);
+    }
+    uint32_t cached_accumulator = kInvalidIndex;
+    uint32_t op[4]{kInvalidIndex, kInvalidIndex, kInvalidIndex,
+                   kInvalidIndex};
+    uint32_t op_source[4]{0u, 0u, 0u, 0u};
+    __gm__ float *remote_base[4]{nullptr, nullptr, nullptr, nullptr};
+    __gm__ float *cached_owner_output = nullptr;
+    uint32_t cached_owner = 0u;
+    uint32_t output_ping = 0u;
+
+    for (uint64_t task = task_begin; task < task_end && ok; ++task) {
+        if (((task - task_begin) & 63u) == 0u) {
+            dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(status));
+            if (*status != kStatusOk) break;
+        }
+        const uint32_t accumulator = static_cast<uint32_t>(
+            task / tiles_per_row);
+        const uint64_t element_begin =
+            (task % tiles_per_row) * kFourTileElements;
+        const uint32_t elements = static_cast<uint32_t>(
+            hidden - element_begin < kFourTileElements
+                ? hidden - element_begin : kFourTileElements);
+        if (accumulator != cached_accumulator) {
+            op[0] = accumulator_heads[accumulator];
+            op[1] = pull_next[op[0]];
+            op[2] = pull_next[op[1]];
+            op[3] = pull_next[op[2]];
+            for (uint32_t i = 0u; i < 4u; ++i) {
+                op_source[i] = pulls[op[i]].source_rank;
+                uint64_t row_offset = 0u;
+                if (op_source[i] >= 4u ||
+                    !CheckedMulU64ByU32(row_bytes,
+                                        pulls[op[i]].source_row,
+                                        &row_offset)) {
+                    SetFailure(status, kStatusSizeOverflow);
+                    ok = false;
+                    break;
+                }
+                remote_base[i] = reinterpret_cast<__gm__ float *>(
+                    symmetric_partials + payload_offsets[op_source[i]] +
+                    row_offset);
+            }
+            if (!ok) break;
+            const uint32_t result_index =
+                accumulator_result_index[accumulator];
+            const uint32_t owner = results[result_index].owner_rank;
+            uint64_t result_row_offset = 0u;
+            if (!CheckedMulU64ByU32(row_bytes,
+                                    results[result_index].owner_row,
+                                    &result_row_offset)) {
+                SetFailure(status, kStatusSizeOverflow);
+                ok = false;
+                break;
+            }
+            cached_owner_output = reinterpret_cast<__gm__ float *>(
+                owner_output_base + output_slot_offset + result_row_offset);
+            cached_owner = owner;
+            cached_accumulator = accumulator;
+        }
+        // Do not phase-lock all AIVs onto the same two HCCS peers. Rotate the
+        // commutative reduction order by tile so all four ingress links stay
+        // active while retaining the immutable pull chain.
+        const uint32_t rotation = static_cast<uint32_t>(task) & 3u;
+        __ubuf__ uint8_t *output_ub =
+            output_ping == 0u ? output0_ub : output1_ub;
+        for (uint32_t pair = 0u; pair < 2u; ++pair) {
+            const uint32_t source0 = (rotation + pair * 2u) & 3u;
+            const uint32_t source1 = (source0 + 1u) & 3u;
+            PullFp32ToUb(input0_ub,
+                          remote_base[source0] + element_begin, elements,
+                          static_cast<int32_t>(op_source[source0]), 0u);
+            PullFp32ToUb(input1_ub,
+                          remote_base[source1] + element_begin, elements,
+                          static_cast<int32_t>(op_source[source1]), 1u);
+            AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(kVecPingMte2V);
+            AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(kVecPongMte2V);
+            AscendC::LocalTensor<float> input0 =
+                IncVecBindFloatUb(input0_ub, elements * sizeof(float));
+            AscendC::LocalTensor<float> input1 =
+                IncVecBindFloatUb(input1_ub, elements * sizeof(float));
+            AscendC::LocalTensor<float> output =
+                IncVecBindFloatUb(output_ub, elements * sizeof(float));
+            if (pair == 0u)
+                AscendC::Add(output, input0, input1, elements);
+            else {
+                AscendC::Add(output, output, input0, elements);
+                AscendC::PipeBarrier<PIPE_V>();
+                AscendC::Add(output, output, input1, elements);
+            }
+            AscendC::PipeBarrier<PIPE_V>();
+            AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
+            AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
+        }
+        AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+        AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(kVecVMte3);
+        PutFp32ToOwner(output_ub, cached_owner_output + element_begin,
+                       elements, static_cast<int32_t>(cached_owner));
+        output_ping ^= 1u;
+    }
+    AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
+    AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
+    AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
+    aclshmemx_mte_quiet();
+    return ok && *status == kStatusOk;
+}
+
 } // namespace
 
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__
@@ -1044,6 +1194,7 @@ void inc_dc_pull_combine_v2_device_kernel(
             }
         }
         *WaveAllTwoContributorsAddress(source_ready_state) = 0u;
+        *WaveAllFourContributorsAddress(source_ready_state) = 0u;
         if (*status == kStatusOk &&
             (by_source[0] != 0u ||
              by_source[worker_count] != pull_count ||
@@ -1056,11 +1207,14 @@ void inc_dc_pull_combine_v2_device_kernel(
         // after the first synchronization below.
         uint64_t indexed_pulls = 0u;
         bool all_two_contributors = accumulator_count != 0u;
+        bool all_four_contributors = accumulator_count != 0u;
         for (uint32_t accumulator = 0u;
              accumulator < accumulator_count && *status == kStatusOk;
              ++accumulator) {
             if (counts[accumulator] != 2u)
                 all_two_contributors = false;
+            if (counts[accumulator] != 4u)
+                all_four_contributors = false;
             if (counts[accumulator] > worker_count ||
                 !AddU64(indexed_pulls, counts[accumulator],
                         &indexed_pulls) || indexed_pulls > pull_count)
@@ -1070,6 +1224,8 @@ void inc_dc_pull_combine_v2_device_kernel(
             *status = kStatusInvalidJournal;
         *WaveAllTwoContributorsAddress(source_ready_state) =
             all_two_contributors ? 1u : 0u;
+        *WaveAllFourContributorsAddress(source_ready_state) =
+            all_four_contributors ? 1u : 0u;
 
         uint64_t maximum_owner_bytes = 0u;
         for (uint32_t owner = 0u;
@@ -1307,14 +1463,23 @@ void inc_dc_pull_combine_v2_device_kernel(
         dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(all_two));
         const bool use_two_contributor_pipeline =
             *reinterpret_cast<__gm__ volatile uint32_t *>(all_two) == 1u;
+        bool use_four_contributor_pipeline = false;
+        if (!use_two_contributor_pipeline) {
+            __gm__ uint32_t *all_four =
+                WaveAllFourContributorsAddress(source_ready_state);
+            dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(all_four));
+            use_four_contributor_pipeline =
+                worker_count == 4u &&
+                *reinterpret_cast<__gm__ volatile uint32_t *>(all_four) == 1u;
+        }
+        const uint64_t tasks_per_block = total_tasks / blocks;
+        const uint64_t extra = total_tasks % blocks;
+        const uint64_t task_begin =
+            MulU64ByU32(tasks_per_block, block) +
+            (block < extra ? block : extra);
+        const uint64_t task_end = task_begin + tasks_per_block +
+            (block < extra ? 1u : 0u);
         if (use_two_contributor_pipeline) {
-            const uint64_t tasks_per_block = total_tasks / blocks;
-            const uint64_t extra = total_tasks % blocks;
-            const uint64_t task_begin =
-                MulU64ByU32(tasks_per_block, block) +
-                (block < extra ? block : extra);
-            const uint64_t task_end = task_begin + tasks_per_block +
-                (block < extra ? 1u : 0u);
             ReduceTwoContributorTaskRange(
                 symmetric_partials, owner_output,
                 reinterpret_cast<__gm__ CombinePullOp *>(pulls),
@@ -1325,6 +1490,32 @@ void inc_dc_pull_combine_v2_device_kernel(
                 reinterpret_cast<__gm__ CombineResultOp *>(results),
                 source_ready_state, source_payload_offsets, task_begin,
                 task_end, tiles_per_row, hidden, row_bytes,
+                output_slot_offset, spin_cap, status);
+        } else if (use_four_contributor_pipeline) {
+            constexpr uint64_t kFourTileElements = 1536u;
+            const uint64_t four_tiles_per_row =
+                (static_cast<uint64_t>(hidden) + kFourTileElements - 1u) /
+                kFourTileElements;
+            const uint64_t four_total_tasks =
+                static_cast<uint64_t>(accumulator_count) *
+                four_tiles_per_row;
+            const uint64_t four_tasks_per_block = four_total_tasks / blocks;
+            const uint64_t four_extra = four_total_tasks % blocks;
+            const uint64_t four_task_begin =
+                MulU64ByU32(four_tasks_per_block, block) +
+                (block < four_extra ? block : four_extra);
+            const uint64_t four_task_end = four_task_begin +
+                four_tasks_per_block + (block < four_extra ? 1u : 0u);
+            ReduceFourContributorTaskRange(
+                symmetric_partials, owner_output,
+                reinterpret_cast<__gm__ CombinePullOp *>(pulls),
+                reinterpret_cast<__gm__ uint32_t *>(pull_next),
+                reinterpret_cast<__gm__ uint32_t *>(accumulator_heads),
+                reinterpret_cast<__gm__ uint32_t *>(
+                    accumulator_result_index),
+                reinterpret_cast<__gm__ CombineResultOp *>(results),
+                source_ready_state, source_payload_offsets, four_task_begin,
+                four_task_end, four_tiles_per_row, hidden, row_bytes,
                 output_slot_offset, spin_cap, status);
         } else {
             AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);

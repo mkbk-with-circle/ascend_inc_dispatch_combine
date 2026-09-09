@@ -10,7 +10,8 @@ constexpr uint16_t kPullDispatchAbiVersion = 2u;
 constexpr uint32_t kPullDispatchAlignment = 64u;
 constexpr uint32_t kPullDispatchMaxWorkers = 128u;
 // The source promises that every token has exactly the same set of unique
-// destinations and exactly one assignment for each selected destination.
+// destinations. Multiple expert assignments on one selected destination are
+// legal: they share one network hidden row and remain distinct metadata.
 // Destination sets may differ between source ranks.  This is a hint only:
 // both host and INC derive/verify the property independently before success.
 constexpr uint16_t kSlotFlagUniformDestinations = 1u << 0u;
