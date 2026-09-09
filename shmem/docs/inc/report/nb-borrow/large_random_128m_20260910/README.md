@@ -1,5 +1,10 @@
 # 128 MiB 随机 token 路由压力测试（nb，2026-09-10）
 
+> 尺度勘误：本批D的128 MiB是输入上限。ragged在skew=0时也将W4源量设为
+> 128/96/64/32 MiB，非每个worker等量128 MiB。C W4的rows设置使上行总量
+> 约1 GiB（seed17为1027.3125 MiB），平均每worker约256 MiB，亦非128 MiB。
+> 本页保留压力测试证据，但不能直接与等量128 MiB的正式带宽表比较。
+
 代码：本地 `193a3c2`。所有 Dispatch 路由共用 `RelaySourceRuns`，所有 Combine
 贡献数共用 `ReduceContributorTaskRange`。每组为 3 warmup + 10 measure，所有
 rank 的数值、协议状态、completion/ACK 和 guard 均检查。

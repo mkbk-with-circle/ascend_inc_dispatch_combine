@@ -143,6 +143,7 @@ enum class Workload {
     MIXED_K,
     FIXED_K1,
     FIXED_K3,
+    RANDOM_K2,
     READY_SKEW
 };
 
@@ -259,6 +260,8 @@ bool ParseWorkload(const char *text, Workload *workload)
         *workload = Workload::FIXED_K1;
     else if (std::strcmp(text, "fixed_k3") == 0)
         *workload = Workload::FIXED_K3;
+    else if (std::strcmp(text, "random_k2") == 0)
+        *workload = Workload::RANDOM_K2;
     else if (std::strcmp(text, "ready_skew") == 0)
         *workload = Workload::READY_SKEW;
     else
@@ -387,10 +390,16 @@ ParsedSource MakeSource(const Options &o, uint32_t owner,
         token.assignment_begin = source.assignments.size();
         const uint64_t global_row = static_cast<uint64_t>(owner) +
             static_cast<uint64_t>(row) * o.workers;
+        const uint32_t first = Mix(global_row ^ o.route_seed) % o.workers;
+        const uint32_t second = (first + 1u +
+            Mix(global_row ^ o.route_seed ^ 0x9e3779b97f4a7c15ull) %
+                (o.workers - 1u)) % o.workers;
         for (uint32_t destination = 0u; destination < o.workers;
              ++destination) {
             bool selected = true;
-            if (o.workload == Workload::MIXED_K) {
+            if (o.workload == Workload::RANDOM_K2) {
+                selected = destination == first || destination == second;
+            } else if (o.workload == Workload::MIXED_K) {
                 // Stable per-row random subset, including no contributors.
                 // Keeping it stable across ring reuse also keeps sizing fixed.
                 selected = (Mix(global_row ^ o.route_seed) &
@@ -769,7 +778,7 @@ int main(int argc, char **argv)
                   << " <workers:2|4> <pe> <ipport> <first_npu> <hidden>"
                      " <rows> <sym_k2_balanced|sym_k4_gpu4|sym_k4_gpu2|sym_k8_gpu4|"
                      "sym_topk_all|asymmetric|"
-                     "ready_skew|mixed_k|fixed_k1|fixed_k3>"
+                     "ready_skew|mixed_k|fixed_k1|fixed_k3|random_k2>"
                      " <warmup> <measure> [fault:0=none,1=head,2=cycle,"
                      "3=token,4=owner,5=last-owner] [route_seed]\n"
                   << "rows is the total A-token count. sym_k2_balanced is "
@@ -789,7 +798,7 @@ int main(int argc, char **argv)
     o.workload_name = argv[7];
     o.warmup = static_cast<uint32_t>(std::strtoul(argv[8], nullptr, 10));
     o.measure = static_cast<uint32_t>(std::strtoul(argv[9], nullptr, 10));
-    if (argc == 11)
+    if (argc >= 11)
         o.fault = static_cast<uint32_t>(std::strtoul(argv[10], nullptr, 10));
     if (argc == 12)
         o.route_seed = std::strtoull(argv[11], nullptr, 10);

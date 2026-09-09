@@ -87,6 +87,13 @@ enum class Workload {
     SYM_K1_RR,
     HOTSPOT,
     RAGGED,
+    RANDOM_K2_GPU2,
+    RANDOM_K4_GPU2,
+    RANDOM_K4_GPU4,
+    RANDOM_K8_GPU4,
+    RANDOM_EXPERT_K2,
+    RANDOM_EXPERT_K4,
+    RANDOM_EXPERT_K8,
 };
 
 struct Options {
@@ -195,7 +202,11 @@ bool ParserScratchEntries(uint32_t blocks, uint32_t workers,
         Add(entries, row_extent, &entries) &&
         Add(entries, row_extent, &entries) &&
         Add(entries, expert_extent, &entries) &&
-        Add(entries, source_extent, out);
+        Add(entries, source_extent, &entries) &&
+        Add(entries, row_extent, &entries) &&
+        Add(entries, row_extent, &entries) &&
+        Add(entries, block_extent, &entries) &&
+        Add(entries, static_cast<uint64_t>(active) * (2u + 2u * workers) * 8u * 32u, out);
 }
 
 void DumpParserState(const GuardedBuffer &buffer, uint32_t blocks,
@@ -288,9 +299,34 @@ bool ParseWorkload(const char *text, Workload *workload)
         *workload = Workload::HOTSPOT;
     else if (std::strcmp(text, "ragged") == 0)
         *workload = Workload::RAGGED;
+    else if (std::strcmp(text, "random_k2_gpu2") == 0)
+        *workload = Workload::RANDOM_K2_GPU2;
+    else if (std::strcmp(text, "random_k4_gpu2") == 0)
+        *workload = Workload::RANDOM_K4_GPU2;
+    else if (std::strcmp(text, "random_k4_gpu4") == 0)
+        *workload = Workload::RANDOM_K4_GPU4;
+    else if (std::strcmp(text, "random_k8_gpu4") == 0)
+        *workload = Workload::RANDOM_K8_GPU4;
+    else if (std::strcmp(text, "random_expert_k2") == 0)
+        *workload = Workload::RANDOM_EXPERT_K2;
+    else if (std::strcmp(text, "random_expert_k4") == 0)
+        *workload = Workload::RANDOM_EXPERT_K4;
+    else if (std::strcmp(text, "random_expert_k8") == 0)
+        *workload = Workload::RANDOM_EXPERT_K8;
     else
         return false;
     return true;
+}
+
+bool RandomRouting(Workload workload)
+{
+    return workload == Workload::RANDOM_K2_GPU2 ||
+           workload == Workload::RANDOM_K4_GPU2 ||
+           workload == Workload::RANDOM_K4_GPU4 ||
+           workload == Workload::RANDOM_K8_GPU4 ||
+           workload == Workload::RANDOM_EXPERT_K2 ||
+           workload == Workload::RANDOM_EXPERT_K4 ||
+           workload == Workload::RANDOM_EXPERT_K8;
 }
 
 uint32_t TokensForSource(const Options &o, uint32_t source,
@@ -345,7 +381,45 @@ SourceInput MakeInput(const Options &o, uint32_t source,
         const uint64_t random = Mix(o.seed ^
             (static_cast<uint64_t>(source) << 32u) ^ token);
         std::vector<uint32_t> destinations;
+        std::vector<uint32_t> selected_experts;
         switch (o.workload) {
+            case Workload::RANDOM_EXPERT_K2:
+            case Workload::RANDOM_EXPERT_K4:
+            case Workload::RANDOM_EXPERT_K8: {
+                const uint32_t k = o.workload == Workload::RANDOM_EXPERT_K2 ? 2u :
+                    o.workload == Workload::RANDOM_EXPERT_K4 ? 4u : 8u;
+                std::vector<uint32_t> sorted;
+                for (uint32_t i = 0u; i < k; ++i) {
+                    // Draw from the remaining experts without a retry loop or
+                    // an O(expert_count) temporary permutation per token.
+                    uint32_t expert = Mix(random ^ (i + 1u)) % (o.expert_count - i);
+                    for (uint32_t previous : sorted)
+                        if (expert >= previous) ++expert;
+                    sorted.insert(std::lower_bound(sorted.begin(), sorted.end(), expert), expert);
+                    selected_experts.push_back(expert);
+                    destinations.push_back(static_cast<uint64_t>(expert) * o.workers / o.expert_count);
+                }
+                break;
+            }
+            case Workload::RANDOM_K2_GPU2:
+            case Workload::RANDOM_K4_GPU2:
+            case Workload::RANDOM_K4_GPU4:
+            case Workload::RANDOM_K8_GPU4: {
+                std::vector<uint32_t> peers(o.workers);
+                std::iota(peers.begin(), peers.end(), 0u);
+                for (uint32_t i = o.workers - 1u; i > 0u; --i)
+                    std::swap(peers[i], peers[Mix(random ^ i) % (i + 1u)]);
+                const uint32_t gpu_k =
+                    o.workload == Workload::RANDOM_K2_GPU2 ||
+                    o.workload == Workload::RANDOM_K4_GPU2 ? 2u : 4u;
+                const uint32_t copies =
+                    o.workload == Workload::RANDOM_K4_GPU2 ||
+                    o.workload == Workload::RANDOM_K8_GPU4 ? 2u : 1u;
+                for (uint32_t i = 0u; i < gpu_k; ++i)
+                    for (uint32_t e = 0u; e < copies; ++e)
+                        destinations.push_back(peers[i]);
+                break;
+            }
             case Workload::SYM_DENSE:
                 for (uint32_t destination = 0u;
                      destination < o.workers; ++destination)
@@ -397,7 +471,20 @@ SourceInput MakeInput(const Options &o, uint32_t source,
              ++ordinal) {
             AssignmentRecord assignment{};
             assignment.destination_rank = destinations[ordinal];
-            if (o.workload == Workload::SYM_K4_GPU4) {
+            if (!selected_experts.empty()) {
+                assignment.expert_id = selected_experts[ordinal];
+                assignment.weight = 1.0f / selected_experts.size();
+            } else if (RandomRouting(o.workload)) {
+                const uint32_t copies =
+                    o.workload == Workload::RANDOM_K4_GPU2 ||
+                    o.workload == Workload::RANDOM_K8_GPU4 ? 2u : 1u;
+                const uint32_t local_experts = o.expert_count / o.workers;
+                const uint32_t base = static_cast<uint32_t>(
+                    Mix(random ^ (static_cast<uint64_t>(destinations[ordinal]) << 40u)) % local_experts);
+                assignment.expert_id = destinations[ordinal] * local_experts +
+                    (base + ordinal % copies) % local_experts;
+                assignment.weight = 1.0f / destinations.size();
+            } else if (o.workload == Workload::SYM_K4_GPU4) {
                 assignment.expert_id =
                     destinations[ordinal] * 4u + source;
                 assignment.weight = 0.25f;
@@ -1094,7 +1181,17 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
               << oracle.ingress_hidden_bytes
               << ",\"egress_hidden_bytes\":"
               << oracle.egress_hidden_bytes
-              << ",\"logical_bytes\":" << oracle.logical_bytes
+              << ",\"source_hidden_bytes\":[";
+    for (uint32_t source = 0u; source < o.workers; ++source) {
+        if (source) std::cout << ',';
+        std::cout << static_cast<uint64_t>(oracle.source_tokens[source]) * o.hidden * 2u;
+    }
+    std::cout << "],\"destination_hidden_bytes\":[";
+    for (uint32_t destination = 0u; destination < o.workers; ++destination) {
+        if (destination) std::cout << ',';
+        std::cout << static_cast<uint64_t>(oracle.layout.destination_rows[destination].size()) * o.hidden * 2u;
+    }
+    std::cout << ']' << ",\"logical_bytes\":" << oracle.logical_bytes
               << ",\"makespan_us\":" << us
               << ",\"logical_gb_s\":" << gbps
               << ",\"downlink_gb_s\":" << downlink_gbps
@@ -1138,7 +1235,9 @@ int main(int argc, char **argv)
             << " <workers> <pe> <ipport> <first_npu>"
                " <per_worker_payload_bytes>"
                " <sym_k2_balanced|sym_k4_gpu4|sym_k4_gpu2|sym_k8_gpu4|sym_dense|"
-               "sym_k1_rr|hotspot|ragged>"
+               "sym_k1_rr|hotspot|ragged|random_k2_gpu2|random_k4_gpu2|"
+               "random_k4_gpu4|random_k8_gpu4|random_expert_k2|"
+               "random_expert_k4|random_expert_k8>"
                " <hidden> <expert_count> <channels_per_source>"
                " <warmup> <measure> <seed>"
                " <fault:0=none,1=digest,2=assignment,3=missing_ready,"
@@ -1194,6 +1293,15 @@ int main(int argc, char **argv)
             std::numeric_limits<uint32_t>::max()) * row_bytes)
         return Fail("payload range", 2);
 
+    if (RandomRouting(o.workload) &&
+        (o.expert_count < o.workers * 2u ||
+         ((o.workload == Workload::RANDOM_K4_GPU4 ||
+           o.workload == Workload::RANDOM_K8_GPU4) && o.workers < 4u)))
+        return Fail("random route requires enough GPUs/experts", 2);
+    if ((o.workload == Workload::RANDOM_EXPERT_K8 && o.expert_count < 8u) ||
+        (o.workload == Workload::RANDOM_EXPERT_K4 && o.expert_count < 4u))
+        return Fail("random expert top-k exceeds expert count", 2);
+
     // Capacity is the exact maximum required by this workload.  It is
     // independent of wave identity, so one bounded allocation serves every
     // ring slot without hiding reallocations in the timed region.
@@ -1222,7 +1330,8 @@ int main(int argc, char **argv)
     const uint64_t journal_assignment_capacity = 0u;
     // Canonical V2 relay and Combine consume compact contributors directly.
     // A zero capacity disables the legacy dense W x token row map.
-    const uint64_t row_map_entries = 0u;
+    // INC-generated destination rows; never upload a host routing plan.
+    const uint64_t row_map_entries = total_tokens * o.workers;
     const uint64_t prefix_entries =
         static_cast<uint64_t>(o.workers + 1u) * o.workers;
     const uint64_t expert_entries =

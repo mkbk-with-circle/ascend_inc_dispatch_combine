@@ -480,32 +480,40 @@ __aicore__ inline void SetGetReady(uint32_t slot)
 {
     if (slot == 0u)
         AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE3>(0u);
-    else
+    else if (slot == 1u)
         AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE3>(1u);
+    else
+        AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE3>(2u);
 }
 
 __aicore__ inline void WaitGetReady(uint32_t slot)
 {
     if (slot == 0u)
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_MTE3>(0u);
-    else
+    else if (slot == 1u)
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_MTE3>(1u);
+    else
+        AscendC::WaitFlag<AscendC::HardEvent::MTE2_MTE3>(2u);
 }
 
 __aicore__ inline void SetPutDone(uint32_t slot)
 {
     if (slot == 0u)
         AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(0u);
-    else
+    else if (slot == 1u)
         AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(1u);
+    else
+        AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(2u);
 }
 
 __aicore__ inline void WaitPutDone(uint32_t slot)
 {
     if (slot == 0u)
         AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(0u);
-    else
+    else if (slot == 1u)
         AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(1u);
+    else
+        AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(2u);
 }
 
 __aicore__ inline void PullHiddenToUb(__ubuf__ uint8_t *ub,
@@ -549,6 +557,11 @@ struct ParserScratchLayout {
     uint64_t block_assignments;
     uint64_t block_experts;
     uint64_t metadata_tails;
+    uint64_t block_row_ends;
+    uint64_t block_assignment_ends;
+    uint64_t block_contributor_ends;
+    uint64_t boundary_records;
+    uint64_t boundary_block_stride;
     uint64_t source_stride;
     uint64_t block_stride;
     uint64_t row_stride;
@@ -596,8 +609,42 @@ __aicore__ inline bool BuildParserScratchLayout(
     layout->metadata_tails = cursor;
     if (!CheckedMulU64ByU32(16u, workers, &extent) ||
         !AddU64(cursor, extent, &cursor)) return false;
+    layout->block_row_ends = cursor;
+    if (!CheckedMulU64ByU32(layout->row_stride, active_blocks, &extent) ||
+        !AddU64(cursor, extent, &cursor)) return false;
+    layout->block_assignment_ends = cursor;
+    if (!AddU64(cursor, extent, &cursor)) return false;
+    layout->block_contributor_ends = cursor;
+    if (!CheckedMulU64ByU32(16u, active_blocks, &extent) ||
+        !AddU64(cursor, extent, &cursor)) return false;
+    layout->boundary_records = cursor;
+    layout->boundary_block_stride = (2u + static_cast<uint64_t>(workers) * 2u) * 8u * 32u;
+    if (!CheckedMulU64ByU32(layout->boundary_block_stride, active_blocks, &extent) ||
+        !AddU64(cursor, extent, &cursor)) return false;
     layout->entries = cursor;
     return cursor <= capacity;
+}
+
+// Parallel producers own full records, but not necessarily full cachelines.
+// Redirect only boundary records to private 128B slots. One repair owner later
+// copies those records after all producers have flushed their interiors.
+__aicore__ inline __gm__ uint8_t *BoundaryRecord(
+    __gm__ uint8_t *record, __gm__ uint8_t *begin, __gm__ uint8_t *end,
+    uint32_t bytes, __gm__ uint8_t *private_slots)
+{
+    const uint64_t a = reinterpret_cast<uint64_t>(record);
+    const uint64_t b = reinterpret_cast<uint64_t>(begin);
+    const uint64_t e = reinterpret_cast<uint64_t>(end);
+    uint64_t slot = 8u;
+    if ((b & 63u) != 0u && a < ((b + 63u) & ~63ull))
+        slot = (a - b) / bytes;
+    else if ((e & 63u) != 0u && a + bytes > (e & ~63ull))
+        slot = 4u + (e - a - bytes) / bytes;
+    if (slot == 8u) return record;
+    __gm__ uint8_t *entry = private_slots + slot * 128u;
+    *reinterpret_cast<__gm__ uint64_t *>(entry) = a;
+    *reinterpret_cast<__gm__ uint32_t *>(entry + 8u) = bytes;
+    return entry + 64u;
 }
 
 __aicore__ inline uint32_t RelayTileBytes(uint32_t contributors,
@@ -651,22 +698,42 @@ __aicore__ inline bool WaitParserReady(
     return false;
 }
 
-__attribute__((noinline)) __aicore__ void RelayRun(
+struct RelayBuffers {
+    bool put_busy[2]{false, false};
+    uint32_t next_ping = 0u;
+};
+
+__aicore__ inline void DrainRelay(RelayBuffers *buffers)
+{
+    for (uint32_t slot = 0u; slot < 2u; ++slot) {
+        if (buffers->put_busy[slot]) WaitPutDone(slot);
+        buffers->put_busy[slot] = false;
+    }
+    aclshmemx_mte_quiet();
+}
+
+__aicore__ inline void RelayRun(
     __gm__ uint8_t *source_hidden, __gm__ uint8_t *destination_hidden_base,
     uint64_t source_bytes, uint32_t source, uint32_t channel,
     uint32_t channels_per_source, uint32_t destination_count,
-    uint32_t *destinations, uint64_t *destination_byte_base)
+    uint32_t *destinations, uint64_t *destination_byte_base, RelayBuffers *buffers,
+    uint32_t requested_tile_bytes)
 {
     if (destination_count == 0u || source_bytes == 0u) return;
-    const uint32_t tile_bytes = RelayTileBytes(destination_count, channels_per_source);
+    const uint32_t tile_bytes = requested_tile_bytes != 0u ? requested_tile_bytes :
+        RelayTileBytes(destination_count, channels_per_source);
     const uint64_t tiles = (source_bytes + tile_bytes - 1u) / tile_bytes;
     __ubuf__ uint8_t *ub[2]{
         reinterpret_cast<__ubuf__ uint8_t *>(0),
         reinterpret_cast<__ubuf__ uint8_t *>(kUbSlotBytes)};
-    bool put_busy[2]{false, false};
-    uint32_t ping = 0u;
+    bool *put_busy = buffers->put_busy;
+    uint32_t ping = buffers->next_ping;
     uint64_t tile = channel;
     if (tile < tiles) {
+        if (put_busy[ping]) {
+            WaitPutDone(ping);
+            put_busy[ping] = false;
+        }
         uint64_t byte_offset = tile * tile_bytes;
         uint32_t bytes = static_cast<uint32_t>(
             source_bytes - byte_offset < tile_bytes
@@ -709,8 +776,199 @@ __attribute__((noinline)) __aicore__ void RelayRun(
             bytes = next_bytes;
         }
     }
-    for (uint32_t slot = 0u; slot < 2u; ++slot)
-        if (put_busy[slot]) WaitPutDone(slot);
+    buffers->next_ping = ping ^ 1u;
+}
+
+
+// Keep exact wide addressing without running the compiler-workaround limb
+// multiply on every row of a power-of-two hidden size. Arbitrary sizes retain
+// the exact multiply; no shape is rejected to obtain this optimization.
+__aicore__ inline uint64_t RelayRowOffset(uint64_t row_bytes, uint32_t row,
+                                       uint32_t shift)
+{
+    return shift < 64u ? static_cast<uint64_t>(row) << shift
+                       : MulU64ByU32(row_bytes, row);
+}
+
+// One tile loop crosses token boundaries. Source prefetch does not depend on
+// the next destination descriptor: READY/header validation already proves its
+// source range. Destination resolution is performed while that GET is live.
+__attribute__((noinline)) __aicore__ void RelayMappedTasks(
+    __gm__ uint8_t *source_base, __gm__ uint8_t *destination_base,
+    __gm__ uint32_t *prefix, __gm__ SlotHeader *header,
+    uint64_t row_bytes, uint32_t source, uint32_t workers,
+    uint32_t channel, uint32_t channels, __gm__ uint32_t *error,
+    __gm__ uint32_t *row_map, __gm__ uint32_t *token_prefix,
+    __gm__ uint32_t *block_status, uint64_t block_stride,
+    uint32_t parser_cohort, uint64_t spin_cap)
+{
+    if (header->token_count == 0u) return;
+    const bool coalesced = (header->flags & kSlotFlagUniformDestinations) != 0u;
+    uint32_t row_shift = 0u;
+    uint64_t stride_bits = row_bytes;
+    while (stride_bits > 1u && (stride_bits & 1u) == 0u) {
+        stride_bits >>= 1u;
+        ++row_shift;
+    }
+    if (stride_bits != 1u) row_shift = 64u;
+    __gm__ uint8_t *mapped_source = reinterpret_cast<__gm__ uint8_t *>(
+        aclshmem_ptr(source_base + header->hidden_offset, static_cast<int32_t>(source)));
+    __gm__ uint8_t *mapped_destinations[kPullDispatchMaxWorkers];
+    for (uint32_t destination = 0u; destination < workers; ++destination)
+        mapped_destinations[destination] = reinterpret_cast<__gm__ uint8_t *>(
+            aclshmem_ptr(destination_base, static_cast<int32_t>(destination)));
+    __gm__ uint8_t *slot = reinterpret_cast<__gm__ uint8_t *>(header);
+    __gm__ TokenRecord *tokens = reinterpret_cast<__gm__ TokenRecord *>(slot + header->tokens_offset);
+    __gm__ AssignmentRecord *assignments = reinterpret_cast<__gm__ AssignmentRecord *>(slot + header->assignments_offset);
+    uint32_t destinations[kPullDispatchMaxWorkers];
+    uint64_t offsets[kPullDispatchMaxWorkers];
+    uint32_t count = 0u;
+    if (coalesced) {
+        uint32_t bits[4]{0u, 0u, 0u, 0u};
+        for (uint32_t i = 0u; i < tokens[0].assignment_count; ++i) {
+            const uint32_t destination = assignments[tokens[0].assignment_begin + i].destination_rank;
+            const uint32_t mask = 1u << (destination & 31u);
+            if (bits[destination >> 5u] & mask) continue;
+            bits[destination >> 5u] |= mask;
+            destinations[count] = destination;
+            offsets[count++] = RelayRowOffset(row_bytes, prefix[static_cast<uint64_t>(source) * workers + destination], row_shift);
+        }
+        if (count == 0u) return;
+    }
+    constexpr uint32_t kTokenTileBytes = 16u * 1024u;
+    static_assert(3u * kTokenTileBytes <= ub_limit,
+                  "streaming relay exceeds the SHMEM backend UB capacity");
+    const uint32_t tile_bytes = coalesced ? RelayTileBytes(count, channels) : kTokenTileBytes;
+    const uint32_t ub_stride = coalesced ? kUbSlotBytes : kTokenTileBytes;
+    const uint32_t slots = coalesced ? 2u : 3u;
+    const uint64_t source_bytes = RelayRowOffset(row_bytes, header->token_count, row_shift);
+    // Keep a short contiguous source block on one relay. Token-at-a-time
+    // striping creates unnecessary source and destination address jumps.
+    constexpr uint32_t kTokensPerRelayBlock = 8u;
+    uint32_t token = coalesced ? 0u : channel * kTokensPerRelayBlock;
+    uint64_t sub = 0u;
+    uint64_t source_offset = coalesced ? static_cast<uint64_t>(channel) * tile_bytes :
+                                        RelayRowOffset(row_bytes, token, row_shift);
+    if (source_offset >= source_bytes) return;
+    uint32_t bytes = static_cast<uint32_t>(
+        (coalesced ? source_bytes - source_offset : row_bytes) < tile_bytes
+        ? (coalesced ? source_bytes - source_offset : row_bytes) : tile_bytes);
+    __ubuf__ uint8_t *ub[3]{reinterpret_cast<__ubuf__ uint8_t *>(0),
+                           reinterpret_cast<__ubuf__ uint8_t *>(ub_stride),
+                           reinterpret_cast<__ubuf__ uint8_t *>(ub_stride * 2u)};
+    bool busy[3]{false, false, false};
+    uint32_t ping = 0u, cached_token = kInvalidRow;
+    uint32_t ready_until = 0u, lane = 0u;
+    aclshmemi_copy_gm2ub(reinterpret_cast<__ubuf__ int8_t *>(ub[ping]),
+        reinterpret_cast<__gm__ int8_t *>(mapped_source + source_offset), bytes);
+    SetGetReady(ping);
+    for (;;) {
+        WaitHiddenPull(ping);
+        uint64_t next_offset = 0u, next_sub = 0u;
+        uint32_t next_token = token;
+        bool more = false;
+        if (coalesced) {
+            next_offset = source_offset + static_cast<uint64_t>(channels) * tile_bytes;
+            more = next_offset < source_bytes;
+        } else {
+            next_sub = sub + bytes;
+            if (next_sub >= row_bytes) {
+                next_sub = 0u;
+                const uint32_t step = (token + 1u) % kTokensPerRelayBlock == 0u
+                    ? (channels - 1u) * kTokensPerRelayBlock + 1u : 1u;
+                if (header->token_count - token > step) {
+                    next_token = token + step;
+                    more = true;
+                }
+            } else more = true;
+            if (more) next_offset = RelayRowOffset(row_bytes, next_token, row_shift) + next_sub;
+        }
+        const uint32_t next_ping = ping + 1u == slots ? 0u : ping + 1u;
+        uint32_t next_bytes = 0u;
+        if (more) {
+            if (busy[next_ping]) {
+                WaitPutDone(next_ping);
+                busy[next_ping] = false;
+            }
+            const uint64_t remaining = coalesced ? source_bytes - next_offset : row_bytes - next_sub;
+            next_bytes = static_cast<uint32_t>(remaining < tile_bytes ? remaining : tile_bytes);
+            aclshmemi_copy_gm2ub(reinterpret_cast<__ubuf__ int8_t *>(ub[next_ping]),
+                reinterpret_cast<__gm__ int8_t *>(mapped_source + next_offset), next_bytes);
+            SetGetReady(next_ping);
+        }
+        bool valid = true;
+        if (!coalesced && cached_token != token) {
+            if (token >= ready_until) {
+                while (lane + 1u < parser_cohort &&
+                       token >= ParserTokenBoundary(header->token_count, lane + 1u, parser_cohort))
+                    ++lane;
+                __gm__ uint32_t *progress = block_status +
+                    static_cast<uint64_t>(source * parser_cohort + lane) * block_stride + 4u;
+                uint32_t observed = 0u;
+                for (uint64_t spin = 0u; spin < spin_cap; ++spin) {
+                    dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(progress));
+                    observed = *reinterpret_cast<__gm__ volatile uint32_t *>(progress);
+                    if (observed > token) break;
+                }
+                valid = observed > token;
+                if (!valid) *error = kStatusReadyTimeout;
+                if (valid) {
+                    // A progress publication releases this immutable range.
+                    // Invalidate it once, not once per token (several tokens
+                    // share each scalar cacheline). Never touch unpublished
+                    // rows, which their producer may still be modifying.
+                    __gm__ uint32_t *published = row_map +
+                        (static_cast<uint64_t>(token_prefix[source]) + token) * workers;
+                    FlushRange(reinterpret_cast<__gm__ uint8_t *>(published),
+                        static_cast<uint64_t>(observed - token) * workers * sizeof(uint32_t));
+                }
+                ready_until = observed;
+            }
+            if (valid) {
+                __gm__ uint32_t *rows = row_map +
+                    (static_cast<uint64_t>(token_prefix[source]) + token) * workers;
+                count = 0u;
+                uint32_t destination = (source + channel) % workers;
+                for (uint32_t local = 0u; local < workers; ++local) {
+                    const uint32_t row = rows[destination];
+                    if (row != kInvalidRow) {
+                        if (row < prefix[static_cast<uint64_t>(source) * workers + destination] ||
+                            row >= prefix[static_cast<uint64_t>(source + 1u) * workers + destination]) {
+                            *error = kStatusInvalidState;
+                            valid = false;
+                            break;
+                        }
+                        destinations[count] = destination;
+                        offsets[count++] = RelayRowOffset(row_bytes, row, row_shift);
+                    }
+                    if (++destination == workers) destination = 0u;
+                }
+                cached_token = token;
+            }
+        }
+        if (!valid) {
+            dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(error));
+            // The speculative next GET has an event which must be consumed
+            // even on a rejected descriptor before the UB can be released.
+            if (more) WaitHiddenPull(next_ping);
+            break;
+        }
+        for (uint32_t i = 0u; i < count; ++i)
+            aclshmemi_copy_ub2gm(
+                reinterpret_cast<__gm__ int8_t *>(mapped_destinations[destinations[i]] +
+                    offsets[i] + (coalesced ? source_offset : sub)),
+                reinterpret_cast<__ubuf__ int8_t *>(ub[ping]), bytes);
+        SetPutDone(ping);
+        busy[ping] = true;
+        if (!more) break;
+        token = next_token;
+        sub = next_sub;
+        source_offset = next_offset;
+        bytes = next_bytes;
+        ping = next_ping;
+    }
+    for (uint32_t i = 0u; i < slots; ++i)
+        if (busy[i]) WaitPutDone(i);
     aclshmemx_mte_quiet();
 }
 
@@ -722,8 +980,20 @@ __attribute__((noinline)) __aicore__ void RelaySourceRuns(
     __gm__ uint32_t *prefix, __gm__ SlotHeader *header,
     __gm__ uint8_t *destination_rows, uint64_t rows_stride,
     uint64_t row_bytes, uint32_t source, uint32_t workers,
-    uint32_t channel, uint32_t channels, __gm__ uint32_t *error)
+    uint32_t channel, uint32_t channels, __gm__ uint32_t *error,
+    __gm__ uint32_t *row_map, __gm__ uint32_t *token_prefix,
+    __gm__ uint32_t *block_status, uint64_t block_stride,
+    uint32_t parser_cohort, uint64_t spin_cap)
 {
+    if (row_bytes % kPullDispatchAlignment == 0u &&
+        (row_map != nullptr || (header->flags & kSlotFlagUniformDestinations) != 0u)) {
+        RelayMappedTasks(source_base, destination_hidden_base, prefix, header,
+            row_bytes, source, workers, channel, channels, error, row_map,
+            token_prefix, block_status, block_stride, parser_cohort, spin_cap);
+        return;
+    }
+    RelayBuffers buffers{};
+    uint32_t ready_until = 0u, parser_lane = 0u;
     __gm__ uint8_t *slot = reinterpret_cast<__gm__ uint8_t *>(header);
     __gm__ TokenRecord *tokens = reinterpret_cast<__gm__ TokenRecord *>(slot + header->tokens_offset);
     __gm__ AssignmentRecord *assignments =
@@ -731,10 +1001,51 @@ __attribute__((noinline)) __aicore__ void RelaySourceRuns(
     const bool coalesced = (header->flags & kSlotFlagUniformDestinations) != 0u;
     const bool aligned = row_bytes % kPullDispatchAlignment == 0u;
     for (uint32_t token = coalesced ? 0u : channel; token < header->token_count;) {
+        if (!coalesced && row_map != nullptr && token >= ready_until) {
+            while (parser_lane + 1u < parser_cohort &&
+                   token >= ParserTokenBoundary(header->token_count, parser_lane + 1u, parser_cohort))
+                ++parser_lane;
+            __gm__ uint32_t *progress = block_status +
+                static_cast<uint64_t>(source * parser_cohort + parser_lane) * block_stride + 4u;
+            uint32_t observed = 0u;
+            for (uint64_t spin = 0u; spin < spin_cap; ++spin) {
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(progress));
+                observed = *reinterpret_cast<__gm__ volatile uint32_t *>(progress);
+                if (observed > token) break;
+            }
+            if (observed <= token) {
+                *error = kStatusReadyTimeout;
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(error));
+                DrainRelay(&buffers);
+                return;
+            }
+            ready_until = observed;
+        }
         uint32_t destinations[kPullDispatchMaxWorkers];
         uint64_t offsets[kPullDispatchMaxWorkers];
         uint32_t bits[4]{0u, 0u, 0u, 0u};
         uint32_t count = 0u;
+        if (!coalesced && row_map != nullptr) {
+            __gm__ uint32_t *rows = row_map +
+                (static_cast<uint64_t>(token_prefix[source]) + token) * workers;
+            FlushRange(reinterpret_cast<__gm__ uint8_t *>(rows), workers * sizeof(uint32_t));
+            uint32_t destination = (source + channel) % workers;
+            for (uint32_t local = 0u; local < workers; ++local) {
+                const uint32_t row = rows[destination];
+                if (row != kInvalidRow) {
+                    if (row < prefix[static_cast<uint64_t>(source) * workers + destination] ||
+                        row >= prefix[static_cast<uint64_t>(source + 1u) * workers + destination]) {
+                        *error = kStatusInvalidState;
+                        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(error));
+                        DrainRelay(&buffers);
+                        return;
+                    }
+                    destinations[count] = destination;
+                    offsets[count++] = MulU64ByU32(row_bytes, row);
+                }
+                if (++destination == workers) destination = 0u;
+            }
+        } else {
         for (uint32_t i = 0u; i < tokens[token].assignment_count; ++i) {
             const uint32_t destination =
                 assignments[tokens[token].assignment_begin + i].destination_rank;
@@ -758,6 +1069,7 @@ __attribute__((noinline)) __aicore__ void RelaySourceRuns(
                     layout[lo].source_rank != source) {
                     *error = kStatusInvalidState;
                     dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(error));
+                    DrainRelay(&buffers);
                     return;
                 }
                 row = lo;
@@ -765,13 +1077,15 @@ __attribute__((noinline)) __aicore__ void RelaySourceRuns(
             destinations[count] = destination;
             offsets[count++] = MulU64ByU32(row_bytes, row);
         }
+        }
         const uint64_t begin = MulU64ByU32(row_bytes, token);
         const uint64_t bytes = MulU64ByU32(row_bytes, coalesced ? header->token_count : 1u);
         if (aligned && bytes >= kPullDispatchAlignment) {
             RelayRun(source_base + header->hidden_offset + begin,
                 destination_hidden_base, bytes, source,
                 coalesced ? channel : 0u, coalesced ? channels : 1u,
-                count, destinations, offsets);
+                count, destinations, offsets, &buffers,
+                coalesced ? 0u : kMaxHiddenTileBytes);
         } else if (count != 0u) {
             // Exact-width tail primitive. One AIV owns every destination on
             // unaligned launches, preventing concurrent cacheline writers.
@@ -795,6 +1109,7 @@ __attribute__((noinline)) __aicore__ void RelaySourceRuns(
         if (header->token_count - token <= channels) break;
         token += channels;
     }
+    DrainRelay(&buffers);
 }
 
 } // namespace
@@ -955,6 +1270,9 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     __gm__ uint32_t *scratch =
         reinterpret_cast<__gm__ uint32_t *>(parser_scratch);
     __gm__ uint32_t *source_state = scratch + scratch_layout.source_state;
+    __gm__ uint32_t *block_row_ends = scratch + scratch_layout.block_row_ends;
+    __gm__ uint32_t *block_assignment_ends = scratch + scratch_layout.block_assignment_ends;
+    __gm__ uint32_t *block_contributor_ends = scratch + scratch_layout.block_contributor_ends;
     __gm__ uint32_t *source_errors = scratch + scratch_layout.source_error;
     __gm__ uint32_t *source_assignment_prefix =
         scratch + scratch_layout.source_assignment_prefix;
@@ -999,6 +1317,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             *reinterpret_cast<__gm__ uint64_t *>(state + 4u) = 0u;
             state[6] = 0u;
             state[7] = 0u;
+            state[12] = 0u;
             for (uint32_t word = 8u; word < 12u; ++word) state[word] = 0u;
             source_errors[static_cast<uint64_t>(source) *
                           scratch_layout.source_stride] = 0u;
@@ -1011,6 +1330,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     scratch_layout.block_stride;
             parser_state[0] = kStatusOk;
             parser_state[1] = 0u;
+            parser_state[4] = 0u;
             *reinterpret_cast<__gm__ uint64_t *>(parser_state + 2u) = 0u;
         }
 
@@ -1064,6 +1384,13 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         const uint32_t source = block / parser_cohort;
         const uint32_t lane = block % parser_cohort;
         uint32_t local_status = kStatusOk;
+        __gm__ uint8_t *boundary = reinterpret_cast<__gm__ uint8_t *>(scratch +
+            scratch_layout.boundary_records + static_cast<uint64_t>(block) *
+            scratch_layout.boundary_block_stride);
+        for (uint32_t slot = 0u; slot < (2u + 2u * worker_count) * 8u; ++slot) {
+            *reinterpret_cast<__gm__ uint64_t *>(boundary + slot * 128u) = 0u;
+            dcci_cacheline(boundary + slot * 128u);
+        }
 
         __gm__ uint32_t *my_rows = block_rows +
             static_cast<uint64_t>(block) * scratch_layout.row_stride;
@@ -1558,6 +1885,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     *parser_contributors =
                         static_cast<uint32_t>(contributor_cursor);
                     contributor_cursor += contributor_count;
+                    block_contributor_ends[static_cast<uint64_t>(parser) *
+                        scratch_layout.block_stride] = static_cast<uint32_t>(contributor_cursor);
                     if (contributor_cursor > journal_contributor_capacity ||
                         contributor_cursor > 0xffffffffull) {
                         *status = kStatusCapacityExceeded;
@@ -1582,6 +1911,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                         }
                         row_cursor[destination] += rows;
                         assignment_cursor[destination] += assignments;
+                        block_row_ends[cell] = row_cursor[destination];
+                        block_assignment_ends[cell] = assignment_cursor[destination];
                         for (uint32_t expert = 0u; expert < expert_count;
                              ++expert) {
                             const uint64_t expert_cell =
@@ -1702,7 +2033,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         FlushRange(expert_counts,
                    required_expert_counts * sizeof(uint32_t));
         FlushRange(parser_scratch,
-                   scratch_layout.entries * sizeof(uint32_t));
+                   scratch_layout.boundary_records * sizeof(uint32_t));
         dcci_cacheline(status_line);
         dcci_cacheline(journal_header);
     }
@@ -1715,8 +2046,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     // publication paths).
     dcci_cacheline(journal_header);
 
-    // General layouts use all parser AIVs.  A qualified uniform launch has
-    // isolated two-producer/source target:
+    // Pass one uses all parser AIVs. Pass two separates metadata production
+    // from hidden relay, for both uniform and random routing:
     //   [0, W*channels)             hidden relay
     //   [W*channels, ...producer)    preferably two producers per source
     //   [active-W, active)          dedicated FNV/metadata sideband
@@ -1744,7 +2075,10 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         uniform_producer_begin + uniform_producer_count;
     const bool uniform_fast = uniform_layout &&
         uniform_producers_per_source != 0u;
-    bool parallel_uniform_phase2 = uniform_fast;
+    bool parallel_uniform_phase2 = uniform_producers_per_source != 0u;
+    if (row_map_capacity_entries != 0u &&
+        (8u * sizeof(uint32_t) * worker_count) % kPullDispatchAlignment != 0u)
+        parallel_uniform_phase2 = false;
     if (parallel_uniform_phase2)
         for (uint32_t source = 0u; source < worker_count; ++source) {
             __gm__ SlotHeader *source_header =
@@ -1755,17 +2089,18 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                 break;
             }
         }
-    // Parallel writers are cacheline-safe only for verified uniform sources
-    // whose eight-token parser boundaries align every final ABI stream:
-    // Contributor 16B, DestinationRow 40B, ExpertAssignment 32B and row_map.
-    // Tiny and arbitrary ragged layouts retain parallel pass1 but serialize
-    // final writes on block zero, eliminating scalar-cache lost updates.
+    // Eight-token boundaries align the token-indexed maps. Variable-length
+    // output streams stage their shared boundary cachelines privately; a
+    // single sideband writer repairs them before metadata publication.
+    // Unaligned/ragged partitions retain serial pass two on the last producer.
     const bool phase2_worker = parallel_uniform_phase2
         ? block >= uniform_producer_begin && block < uniform_producer_end
-        : block == 0u;
+        : block == uniform_sideband_begin - 1u;
     if (*status == kStatusOk && phase2_worker) {
-      for (uint32_t parser_index = 0u;
-           parser_index < active_parser_blocks; ++parser_index) {
+      for (uint32_t work = 0u; work < active_parser_blocks; ++work) {
+        // Round-robin sources so every relay gets its first descriptors early.
+        const uint32_t parser_index = parallel_uniform_phase2 ? work :
+            (work % worker_count) * parser_cohort + work / worker_count;
         if (parallel_uniform_phase2) {
             const uint32_t producer = block - uniform_producer_begin;
             const uint32_t producer_source =
@@ -1795,10 +2130,16 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             header->token_count, lane, parser_cohort);
         const uint32_t token_end = ParserTokenBoundary(
             header->token_count, lane + 1u, parser_cohort);
+        uint32_t row_map_published = token_begin;
         uint32_t contributor_cursor = block_contributors[
             static_cast<uint64_t>(parser_index) *
                 scratch_layout.block_stride];
         const uint32_t contributor_begin = contributor_cursor;
+        const uint32_t contributor_end = block_contributor_ends[
+            static_cast<uint64_t>(parser_index) * scratch_layout.block_stride];
+        __gm__ uint8_t *boundary = reinterpret_cast<__gm__ uint8_t *>(scratch +
+            scratch_layout.boundary_records + static_cast<uint64_t>(parser_index) *
+            scratch_layout.boundary_block_stride);
         __gm__ uint32_t *my_rows = block_rows +
             static_cast<uint64_t>(parser_index) * scratch_layout.row_stride;
         __gm__ uint32_t *my_assignments =
@@ -1848,6 +2189,14 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                         reinterpret_cast<__gm__ AssignmentRecord *>(
                             journal_assignments) +
                         jtoken->assignments_begin + local;
+                    if (parallel_uniform_phase2)
+                        output = reinterpret_cast<__gm__ AssignmentRecord *>(BoundaryRecord(
+                            reinterpret_cast<__gm__ uint8_t *>(output),
+                            journal_assignments + static_cast<uint64_t>(source_assignment_prefix[source] +
+                                tokens[token_begin].assignment_begin) * sizeof(AssignmentRecord),
+                            journal_assignments + static_cast<uint64_t>(source_assignment_prefix[source] +
+                                tokens[token_end - 1u].assignment_begin + tokens[token_end - 1u].assignment_count) * sizeof(AssignmentRecord),
+                            sizeof(AssignmentRecord), boundary + 8u * 128u));
                     output->destination_rank = input->destination_rank;
                     output->expert_id = input->expert_id;
                     output->ordinal = input->ordinal;
@@ -1882,11 +2231,12 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             }
 
             uint32_t contributor_count = 0u;
-            for (uint32_t word = 0u; word < 4u; ++word) {
-                for (uint32_t bit = 0u; bit < 32u; ++bit) {
+            {
+                for (uint32_t destination = 0u; destination < worker_count; ++destination) {
+                    const uint32_t word = destination >> 5u;
+                    const uint32_t bit = destination & 31u;
                     if ((destination_bits[word] & (1u << bit)) == 0u)
                         continue;
-                    const uint32_t destination = word * 32u + bit;
                     if (destination >= worker_count) continue;
                     const uint32_t destination_assignment_count =
                         token_assignment_counts[destination];
@@ -1903,6 +2253,16 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                             MulU64ByU32(
                                 inc_destination_rows_stride_bytes,
                                 destination)) + destination_row;
+                    if (parallel_uniform_phase2) {
+                        __gm__ uint8_t *base = inc_destination_rows +
+                            MulU64ByU32(inc_destination_rows_stride_bytes, destination);
+                        out_row = reinterpret_cast<__gm__ DestinationRow *>(BoundaryRecord(
+                            reinterpret_cast<__gm__ uint8_t *>(out_row),
+                            base + static_cast<uint64_t>(row_begin[destination]) * sizeof(DestinationRow),
+                            base + static_cast<uint64_t>(block_row_ends[
+                                static_cast<uint64_t>(parser_index) * scratch_layout.row_stride + destination]) * sizeof(DestinationRow),
+                            sizeof(DestinationRow), boundary + (2u + destination * 2u) * 8u * 128u));
+                    }
                     out_row->route_key = DeviceRouteKey(source, token);
                     out_row->token_id = record->token_id;
                     out_row->source_rank = source;
@@ -1917,6 +2277,12 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     __gm__ JournalContributor *contributor =
                         reinterpret_cast<__gm__ JournalContributor *>(
                             journal_contributors) + contributor_cursor++;
+                    if (parallel_uniform_phase2)
+                        contributor = reinterpret_cast<__gm__ JournalContributor *>(BoundaryRecord(
+                            reinterpret_cast<__gm__ uint8_t *>(contributor),
+                            journal_contributors + static_cast<uint64_t>(contributor_begin) * sizeof(JournalContributor),
+                            journal_contributors + static_cast<uint64_t>(contributor_end) * sizeof(JournalContributor),
+                            sizeof(JournalContributor), boundary));
                     contributor->worker_rank = destination;
                     contributor->destination_row = destination_row;
                     contributor->assignment_begin =
@@ -1944,6 +2310,16 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                         MulU64ByU32(
                             inc_destination_assignments_stride_bytes,
                             destination)) + my_assignments[destination]++;
+                if (parallel_uniform_phase2) {
+                    __gm__ uint8_t *base = inc_destination_assignments +
+                        MulU64ByU32(inc_destination_assignments_stride_bytes, destination);
+                    out = reinterpret_cast<__gm__ ExpertAssignment *>(BoundaryRecord(
+                        reinterpret_cast<__gm__ uint8_t *>(out),
+                        base + static_cast<uint64_t>(assignment_begin_by_destination[destination]) * sizeof(ExpertAssignment),
+                        base + static_cast<uint64_t>(block_assignment_ends[
+                            static_cast<uint64_t>(parser_index) * scratch_layout.row_stride + destination]) * sizeof(ExpertAssignment),
+                        sizeof(ExpertAssignment), boundary + (3u + destination * 2u) * 8u * 128u));
+                }
                 out->destination_row = token_destination_rows[destination];
                 out->expert_id = assignment->expert_id;
                 out->expert_row = my_experts[expert_index]++;
@@ -1954,6 +2330,20 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                 out->reserved[2] = 0u;
             }
             jtoken->contributors_count = contributor_count;
+            if (emit_row_map &&
+                (header->flags & kSlotFlagUniformDestinations) == 0u &&
+                (token + 1u == token_end || token + 1u - row_map_published >= 32u)) {
+                const uint64_t first = static_cast<uint64_t>(
+                    reinterpret_cast<__gm__ uint32_t *>(source_token_prefix)[source]) + row_map_published;
+                FlushRange(row_map + first * worker_count * sizeof(uint32_t),
+                    static_cast<uint64_t>(token + 1u - row_map_published) * worker_count * sizeof(uint32_t));
+                AscendC::PipeBarrier<PIPE_ALL>();
+                __gm__ uint32_t *progress = block_status +
+                    static_cast<uint64_t>(parser_index) * scratch_layout.block_stride + 4u;
+                *progress = token + 1u;
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(progress));
+                row_map_published = token + 1u;
+            }
         }
         if (token_begin < token_end) {
             const uint32_t assignment_begin =
@@ -2009,6 +2399,12 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     sizeof(ExpertAssignment));
         }
         AscendC::PipeBarrier<PIPE_ALL>();
+        for (uint32_t slot = 0u; slot < (2u + 2u * worker_count) * 8u; ++slot) {
+            __gm__ uint8_t *entry = boundary + slot * 128u;
+            if (*reinterpret_cast<__gm__ uint64_t *>(entry) != 0u)
+                FlushRange(entry, 128u);
+        }
+        AscendC::PipeBarrier<PIPE_ALL>();
         block_status[static_cast<uint64_t>(parser_index) *
                      scratch_layout.block_stride] = kParserPass2Ready;
         dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
@@ -2051,6 +2447,39 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     scratch_layout.source_stride));
         }
         if (plans_ready) {
+            __gm__ uint32_t *repaired = source_state + 12u;
+            if (side == 0u) {
+                for (uint32_t parser = 0u; parser < active_parser_blocks; ++parser) {
+                    __gm__ uint8_t *records = reinterpret_cast<__gm__ uint8_t *>(scratch +
+                        scratch_layout.boundary_records + static_cast<uint64_t>(parser) *
+                        scratch_layout.boundary_block_stride);
+                    for (uint32_t index = 0u; index < (2u + worker_count * 2u) * 8u; ++index) {
+                        __gm__ uint8_t *entry = records + index * 128u;
+                        dcci_cacheline(entry);
+                        const uint64_t target = *reinterpret_cast<__gm__ uint64_t *>(entry);
+                        if (target == 0u) continue;
+                        const uint32_t bytes = *reinterpret_cast<__gm__ uint32_t *>(entry + 8u);
+                        __gm__ uint32_t *destination = reinterpret_cast<__gm__ uint32_t *>(target);
+                        __gm__ uint32_t *values = reinterpret_cast<__gm__ uint32_t *>(entry + 64u);
+                        dcci_cacheline(entry + 64u);
+                        for (uint32_t word = 0u; word < bytes / 4u; ++word)
+                            destination[word] = values[word];
+                        FlushRange(reinterpret_cast<__gm__ uint8_t *>(destination), bytes);
+                    }
+                }
+                *repaired = 1u;
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(repaired));
+            } else {
+                uint32_t observed = 0u;
+                for (uint64_t spin = 0u; spin < spin_cap; ++spin) {
+                    dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(repaired));
+                    observed = *repaired;
+                    if (observed == 1u) break;
+                }
+                if (observed != 1u) plans_ready = false;
+            }
+        }
+        if (plans_ready) {
         __gm__ uint8_t *slot = inc_slots +
             MulU64ByU32(source_slot_stride, side);
         __gm__ SlotHeader *header =
@@ -2068,7 +2497,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         // while relay AIVs are still moving hidden bytes.  Completion remains
         // the sole remote visibility point, so even a later FNV failure cannot
         // expose these speculative writes as successful output.
-        if (uniform_fast) {
+        {
             dcci_cacheline(destination_row_counts +
                            static_cast<uint64_t>(side) * sizeof(uint32_t));
             dcci_cacheline(destination_assignment_counts +
@@ -2136,13 +2565,22 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     if (*status == kStatusOk &&
         (byte_aligned ? block < required_channels : block == 0u)) {
         bool rows_ready = true;
-        if (!uniform_fast)
+        if (!uniform_fast && row_map_capacity_entries == 0u)
             for (uint32_t parser = 0u; parser < active_parser_blocks; ++parser)
                 if (!WaitParserReady(block_status, scratch_layout.block_stride,
                                      parser, spin_cap)) {
                     rows_ready = false;
                     break;
                 }
+        if (rows_ready && !uniform_fast && row_map_capacity_entries == 0u) {
+            uint32_t observed = 0u;
+            for (uint64_t spin = 0u; spin < spin_cap; ++spin) {
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(source_state + 12u));
+                observed = source_state[12];
+                if (observed == 1u) break;
+            }
+            rows_ready = observed == 1u;
+        }
         if (!rows_ready) {
             *status = kStatusReadyTimeout;
             dcci_cacheline(status_line);
@@ -2157,7 +2595,10 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     header, inc_destination_rows, inc_destination_rows_stride_bytes,
                     row_bytes, source, worker_count,
                     byte_aligned ? block / worker_count : 0u,
-                    byte_aligned ? channels_per_source : 1u, status);
+                    byte_aligned ? channels_per_source : 1u, status,
+                    row_map_capacity_entries == 0u ? nullptr : reinterpret_cast<__gm__ uint32_t *>(row_map),
+                    reinterpret_cast<__gm__ uint32_t *>(source_token_prefix),
+                    block_status, scratch_layout.block_stride, parser_cohort, spin_cap);
             }
         }
         relay_done_cycle = AscendC::GetSystemCycle();
@@ -2216,58 +2657,6 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     AscendC::SyncAll<true>();
     dcci_cacheline(status_line);
 
-    if (*status == kStatusOk && !uniform_fast && block < worker_count) {
-        const uint32_t destination = block;
-        dcci_cacheline(destination_row_counts +
-                       static_cast<uint64_t>(destination) * sizeof(uint32_t));
-        dcci_cacheline(destination_assignment_counts +
-                       static_cast<uint64_t>(destination) * sizeof(uint32_t));
-        const uint32_t rows =
-            reinterpret_cast<__gm__ uint32_t *>(
-                destination_row_counts)[destination];
-        const uint32_t assignments =
-            reinterpret_cast<__gm__ uint32_t *>(
-                destination_assignment_counts)[destination];
-        __gm__ uint8_t *row_source = inc_destination_rows +
-            MulU64ByU32(inc_destination_rows_stride_bytes, destination);
-        __gm__ uint8_t *assignment_source = inc_destination_assignments +
-            MulU64ByU32(inc_destination_assignments_stride_bytes,
-                        destination);
-        __gm__ uint8_t *expert_source = expert_counts +
-            static_cast<uint64_t>(destination) * expert_count *
-            sizeof(uint32_t);
-        __gm__ uint8_t *tail = metadata_tails +
-            static_cast<uint64_t>(destination) * kPullDispatchAlignment;
-        FlushRange(row_source,
-                   static_cast<uint64_t>(rows) * sizeof(DestinationRow));
-        FlushRange(assignment_source,
-                   static_cast<uint64_t>(assignments) *
-                       sizeof(ExpertAssignment));
-        FlushRange(expert_source,
-                   static_cast<uint64_t>(expert_count) * sizeof(uint32_t));
-        if (rows != 0u)
-            PutGmRange(destination_rows_base, row_source,
-                (static_cast<uint64_t>(rows) * sizeof(DestinationRow) +
-                 kPullDispatchAlignment - 1u) &
-                    ~(static_cast<uint64_t>(kPullDispatchAlignment) - 1u),
-                static_cast<int32_t>(destination));
-        if (assignments != 0u)
-            PutGmRange(destination_assignments_base, assignment_source,
-                (static_cast<uint64_t>(assignments) *
-                     sizeof(ExpertAssignment) +
-                 kPullDispatchAlignment - 1u) &
-                    ~(static_cast<uint64_t>(kPullDispatchAlignment) - 1u),
-                static_cast<int32_t>(destination));
-        PutGmRangeAligned(destination_expert_counts_base, expert_source,
-            static_cast<uint64_t>(expert_count) * sizeof(uint32_t), tail,
-            static_cast<int32_t>(destination));
-        aclshmem_quiet();
-        __gm__ uint32_t *published = source_state +
-            static_cast<uint64_t>(destination) *
-                scratch_layout.source_stride + 6u;
-        *published = kDestinationMetadataPublished;
-        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(published));
-    }
     AscendC::SyncAll<true>();
     if (block == 0u) {
         if (*status == kStatusOk) {

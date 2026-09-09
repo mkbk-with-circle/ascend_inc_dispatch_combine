@@ -12,14 +12,14 @@ from pull_v2_k4_formal import HELPERS, wait_iteration, wait_selected_devices_idl
 
 
 def run(args, name, build, workers, hidden, payload, route, warmup, measure,
-        fault=0, token_skew=0, ready_skew=0):
+        fault=0, token_skew=0, ready_skew=0, seed=20260909):
     plane_start = args.first_npu // 8 * 8
     wait_selected_devices_idle(plane_start, 8, args.timeout)
     out = args.output / name
     endpoint = f'tcp://127.0.0.1:{HELPERS.free_port()}'
     commands = [[str(workers), str(pe), endpoint, str(args.first_npu), str(payload),
                  route, str(hidden), '64', '5' if workers == 2 else '3',
-                 str(warmup), str(measure), '20260909', str(fault)]
+                 str(warmup), str(measure), str(seed), str(fault)]
                 for pe in range(workers + 1)]
     if token_skew or ready_skew:
         for command in commands:
@@ -56,7 +56,7 @@ def run(args, name, build, workers, hidden, payload, route, warmup, measure,
         measured = [r['downlink_gb_s'] for r in samples if r['phase'] == 'measure']
         mean = statistics.mean(measured)
         result = dict(case=name, workers=workers, hidden=hidden, payload=payload,
-                      route=route, fault=fault, samples=measure, correct=True,
+                      route=route, seed=seed, fault=fault, samples=measure, correct=True,
                       token_skew=token_skew, ready_skew_us=ready_skew,
                       minimum=min(measured) if not fault else None,
                       mean=mean if not fault else None,
