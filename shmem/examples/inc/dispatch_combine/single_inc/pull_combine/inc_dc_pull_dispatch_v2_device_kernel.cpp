@@ -562,6 +562,7 @@ struct ParserScratchLayout {
     uint64_t block_contributor_ends;
     uint64_t boundary_records;
     uint64_t boundary_block_stride;
+    uint64_t staged_progress;
     uint64_t source_stride;
     uint64_t block_stride;
     uint64_t row_stride;
@@ -620,6 +621,9 @@ __aicore__ inline bool BuildParserScratchLayout(
     layout->boundary_records = cursor;
     layout->boundary_block_stride = (2u + static_cast<uint64_t>(workers) * 2u) * 8u * 32u;
     if (!CheckedMulU64ByU32(layout->boundary_block_stride, active_blocks, &extent) ||
+        !AddU64(cursor, extent, &cursor)) return false;
+    layout->staged_progress = cursor;
+    if (!CheckedMulU64ByU32(32u, workers, &extent) ||
         !AddU64(cursor, extent, &cursor)) return false;
     layout->entries = cursor;
     return cursor <= capacity;
@@ -790,58 +794,6 @@ __aicore__ inline uint64_t RelayRowOffset(uint64_t row_bytes, uint32_t row,
                        : MulU64ByU32(row_bytes, row);
 }
 
-struct RelayTileTask {
-    uint64_t offset;
-    uint64_t sub;
-    uint32_t token;
-    uint32_t bytes;
-    bool valid;
-};
-
-__aicore__ inline uint32_t RelayBatchBytes(uint64_t row_bytes, uint32_t token,
-    uint64_t sub, uint32_t tokens, uint32_t tile_bytes, uint32_t row_shift)
-{
-    const uint32_t block_left = 8u - token % 8u;
-    const uint32_t rows = tokens - token < block_left ? tokens - token : block_left;
-    const uint64_t remaining = RelayRowOffset(row_bytes, rows, row_shift) - sub;
-    return static_cast<uint32_t>(remaining < tile_bytes ? remaining : tile_bytes);
-}
-
-__aicore__ inline void AdvanceRelayTask(RelayTileTask &task, bool coalesced,
-    uint64_t row_bytes, uint64_t source_bytes, uint32_t tokens,
-    uint32_t channels, uint32_t tile_bytes, uint32_t row_shift)
-{
-    if (!task.valid) return;
-    if (coalesced) {
-        const uint64_t step = static_cast<uint64_t>(channels) * tile_bytes;
-        task.valid = step < source_bytes - task.offset;
-        if (task.valid) task.offset += step;
-    } else {
-        uint64_t remaining = task.bytes;
-        while (remaining >= row_bytes - task.sub) {
-            remaining -= row_bytes - task.sub;
-            task.sub = 0u;
-            ++task.token;
-        }
-        task.sub += remaining;
-        if (task.sub == 0u && task.token % 8u == 0u) {
-            const uint32_t skip = (channels - 1u) * 8u;
-            task.valid = task.token < tokens && tokens - task.token > skip;
-            if (task.valid) task.token += skip;
-        } else {
-            task.valid = task.token < tokens;
-        }
-        if (task.valid)
-            task.offset = RelayRowOffset(row_bytes, task.token, row_shift) + task.sub;
-    }
-    if (task.valid) {
-        const uint64_t remaining = source_bytes - task.offset;
-        task.bytes = coalesced
-            ? static_cast<uint32_t>(remaining < tile_bytes ? remaining : tile_bytes)
-            : RelayBatchBytes(row_bytes, task.token, task.sub, tokens, tile_bytes, row_shift);
-    }
-}
-
 // One tile loop crosses token boundaries. Source prefetch does not depend on
 // the next destination descriptor: READY/header validation already proves its
 // source range. Destination resolution is performed while that GET is live.
@@ -874,9 +826,6 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
     __gm__ AssignmentRecord *assignments = reinterpret_cast<__gm__ AssignmentRecord *>(slot + header->assignments_offset);
     uint32_t destinations[kPullDispatchMaxWorkers];
     uint64_t offsets[kPullDispatchMaxWorkers];
-    uint64_t run_remote[kPullDispatchMaxWorkers];
-    uint32_t run_local[kPullDispatchMaxWorkers];
-    uint32_t run_bytes[kPullDispatchMaxWorkers];
     uint32_t count = 0u;
     if (coalesced) {
         uint32_t bits[4]{0u, 0u, 0u, 0u};
@@ -890,12 +839,12 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
         }
         if (count == 0u) return;
     }
-    constexpr uint32_t kTokenTileBytes = 64u * 1024u;
-    static_assert(2u * kTokenTileBytes <= ub_limit,
+    constexpr uint32_t kTokenTileBytes = 16u * 1024u;
+    static_assert(3u * kTokenTileBytes <= ub_limit,
                   "streaming relay exceeds the SHMEM backend UB capacity");
     const uint32_t tile_bytes = coalesced ? RelayTileBytes(count, channels) : kTokenTileBytes;
     const uint32_t ub_stride = coalesced ? kUbSlotBytes : kTokenTileBytes;
-    const uint32_t slots = 2u;
+    const uint32_t slots = coalesced ? 2u : 3u;
     const uint64_t source_bytes = RelayRowOffset(row_bytes, header->token_count, row_shift);
     // Keep a short contiguous source block on one relay. Token-at-a-time
     // striping creates unnecessary source and destination address jumps.
@@ -908,43 +857,50 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
     uint32_t bytes = static_cast<uint32_t>(
         (coalesced ? source_bytes - source_offset : row_bytes) < tile_bytes
         ? (coalesced ? source_bytes - source_offset : row_bytes) : tile_bytes);
-    if (!coalesced)
-        bytes = RelayBatchBytes(row_bytes, token, sub, header->token_count, tile_bytes, row_shift);
     __ubuf__ uint8_t *ub[3]{reinterpret_cast<__ubuf__ uint8_t *>(0),
                            reinterpret_cast<__ubuf__ uint8_t *>(ub_stride),
                            reinterpret_cast<__ubuf__ uint8_t *>(ub_stride * 2u)};
     bool busy[3]{false, false, false};
-    bool queued[3]{false, false, false};
-    RelayTileTask tasks[3];
-    RelayTileTask pending{source_offset, sub, token, bytes, true};
     uint32_t ping = 0u, cached_token = kInvalidRow;
     uint32_t ready_until = 0u, lane = 0u;
-    // Populate the entire bounded GET window before the first fan-out.
-    // Recycling a slot is ordered after its own PUTs, not after every PUT.
-    for (uint32_t i = 0u; i < slots && pending.valid; ++i) {
-        tasks[i] = pending;
-        aclshmemi_copy_gm2ub(reinterpret_cast<__ubuf__ int8_t *>(ub[i]),
-            reinterpret_cast<__gm__ int8_t *>(mapped_source + pending.offset), pending.bytes);
-        SetGetReady(i);
-        queued[i] = true;
-        AdvanceRelayTask(pending, coalesced, row_bytes, source_bytes,
-            header->token_count, channels, tile_bytes, row_shift);
-    }
+    aclshmemi_copy_gm2ub(reinterpret_cast<__ubuf__ int8_t *>(ub[ping]),
+        reinterpret_cast<__gm__ int8_t *>(mapped_source + source_offset), bytes);
+    SetGetReady(ping);
     for (;;) {
-        source_offset = tasks[ping].offset;
-        sub = tasks[ping].sub;
-        token = tasks[ping].token;
-        bytes = tasks[ping].bytes;
         WaitHiddenPull(ping);
-        queued[ping] = false;
+        uint64_t next_offset = 0u, next_sub = 0u;
+        uint32_t next_token = token;
+        bool more = false;
+        if (coalesced) {
+            next_offset = source_offset + static_cast<uint64_t>(channels) * tile_bytes;
+            more = next_offset < source_bytes;
+        } else {
+            next_sub = sub + bytes;
+            if (next_sub >= row_bytes) {
+                next_sub = 0u;
+                const uint32_t step = (token + 1u) % kTokensPerRelayBlock == 0u
+                    ? (channels - 1u) * kTokensPerRelayBlock + 1u : 1u;
+                if (header->token_count - token > step) {
+                    next_token = token + step;
+                    more = true;
+                }
+            } else more = true;
+            if (more) next_offset = RelayRowOffset(row_bytes, next_token, row_shift) + next_sub;
+        }
+        const uint32_t next_ping = ping + 1u == slots ? 0u : ping + 1u;
+        uint32_t next_bytes = 0u;
+        if (more) {
+            if (busy[next_ping]) {
+                WaitPutDone(next_ping);
+                busy[next_ping] = false;
+            }
+            const uint64_t remaining = coalesced ? source_bytes - next_offset : row_bytes - next_sub;
+            next_bytes = static_cast<uint32_t>(remaining < tile_bytes ? remaining : tile_bytes);
+            aclshmemi_copy_gm2ub(reinterpret_cast<__ubuf__ int8_t *>(ub[next_ping]),
+                reinterpret_cast<__gm__ int8_t *>(mapped_source + next_offset), next_bytes);
+            SetGetReady(next_ping);
+        }
         bool valid = true;
-        uint32_t slice = 0u;
-        if (!coalesced)
-            for (uint32_t destination = 0u; destination < workers; ++destination)
-                run_bytes[destination] = 0u;
-        while (slice < bytes && valid) {
-        const uint32_t slice_bytes = coalesced ? bytes : static_cast<uint32_t>(
-            row_bytes - sub < bytes - slice ? row_bytes - sub : bytes - slice);
         if (!coalesced && cached_token != token) {
             if (token >= ready_until) {
                 while (lane + 1u < parser_cohort &&
@@ -994,73 +950,174 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
                 cached_token = token;
             }
         }
-        if (!valid) break;
-        for (uint32_t i = 0u; i < count; ++i) {
-            const uint32_t destination = destinations[i];
-            if (coalesced) {
-                aclshmemi_copy_ub2gm(
-                    reinterpret_cast<__gm__ int8_t *>(mapped_destinations[destination] + offsets[i] + source_offset),
-                    reinterpret_cast<__ubuf__ int8_t *>(ub[ping]), slice_bytes);
-                continue;
-            }
-            // Merge only if both local and remote byte ranges are adjacent.
-            // Different expert assignments do not prevent hidden coalescing;
-            // destination metadata still retains every assignment separately.
-            const uint64_t remote = offsets[i] + sub;
-            if (run_bytes[destination] != 0u &&
-                run_remote[destination] + run_bytes[destination] == remote &&
-                run_local[destination] + run_bytes[destination] == slice) {
-                run_bytes[destination] += slice_bytes;
-            } else {
-                if (run_bytes[destination] != 0u)
-                    aclshmemi_copy_ub2gm(
-                        reinterpret_cast<__gm__ int8_t *>(mapped_destinations[destination] + run_remote[destination]),
-                        reinterpret_cast<__ubuf__ int8_t *>(ub[ping] + run_local[destination]), run_bytes[destination]);
-                run_remote[destination] = remote;
-                run_local[destination] = slice;
-                run_bytes[destination] = slice_bytes;
-            }
-        }
-        slice += slice_bytes;
-        sub += slice_bytes;
-        if (!coalesced && sub == row_bytes) {
-            ++token;
-            sub = 0u;
-        }
-        }
         if (!valid) {
             dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(error));
-            // Consume every speculative event, including error paths.
-            for (uint32_t i = 0u; i < slots; ++i)
-                if (queued[i]) WaitHiddenPull(i);
+            // The speculative next GET has an event which must be consumed
+            // even on a rejected descriptor before the UB can be released.
+            if (more) WaitHiddenPull(next_ping);
             break;
         }
-        if (!coalesced)
-            for (uint32_t destination = 0u; destination < workers; ++destination)
-                if (run_bytes[destination] != 0u)
-                    aclshmemi_copy_ub2gm(
-                        reinterpret_cast<__gm__ int8_t *>(mapped_destinations[destination] + run_remote[destination]),
-                        reinterpret_cast<__ubuf__ int8_t *>(ub[ping] + run_local[destination]), run_bytes[destination]);
-        // Includes every token slice in this source GET batch.
+        for (uint32_t i = 0u; i < count; ++i)
+            aclshmemi_copy_ub2gm(
+                reinterpret_cast<__gm__ int8_t *>(mapped_destinations[destinations[i]] +
+                    offsets[i] + (coalesced ? source_offset : sub)),
+                reinterpret_cast<__ubuf__ int8_t *>(ub[ping]), bytes);
         SetPutDone(ping);
         busy[ping] = true;
-        if (pending.valid) {
-            WaitPutDone(ping);
-            busy[ping] = false;
-            tasks[ping] = pending;
-            aclshmemi_copy_gm2ub(reinterpret_cast<__ubuf__ int8_t *>(ub[ping]),
-                reinterpret_cast<__gm__ int8_t *>(mapped_source + pending.offset), pending.bytes);
-            SetGetReady(ping);
-            queued[ping] = true;
-            AdvanceRelayTask(pending, coalesced, row_bytes, source_bytes,
-                header->token_count, channels, tile_bytes, row_shift);
-        }
-        ping = ping + 1u == slots ? 0u : ping + 1u;
-        if (!queued[ping]) break;
+        if (!more) break;
+        token = next_token;
+        sub = next_sub;
+        source_offset = next_offset;
+        bytes = next_bytes;
+        ping = next_ping;
     }
     for (uint32_t i = 0u; i < slots; ++i)
         if (busy[i]) WaitPutDone(i);
     aclshmemx_mte_quiet();
+}
+
+// One ordinary AIV per source pulls each hidden byte exactly once into the
+// already allocated INC source slot. The progress cacheline has one writer.
+__aicore__ void StageSourceHidden(__gm__ uint8_t *source_base,
+    __gm__ SlotHeader *header, uint32_t source, uint32_t channel, uint64_t row_bytes,
+    __gm__ uint64_t *progress)
+{
+    constexpr uint32_t chunk = 64u * 1024u;
+    static_assert(chunk <= ub_limit, "staging exceeds backend UB capacity");
+    __ubuf__ uint8_t *ub = reinterpret_cast<__ubuf__ uint8_t *>(0);
+    const uint64_t total = MulU64ByU32(row_bytes, header->token_count);
+    __gm__ uint8_t *local = reinterpret_cast<__gm__ uint8_t *>(header) + header->hidden_offset;
+    const uint64_t split = ((total + chunk - 1u) / chunk / 2u) * chunk;
+    const uint64_t limit = channel == 0u ? split : total;
+    for (uint64_t offset = channel == 0u ? 0u : split; offset < limit;) {
+        const uint32_t bytes = static_cast<uint32_t>(limit - offset < chunk ? limit - offset : chunk);
+        PullHiddenToUb(ub, source_base + header->hidden_offset + offset, bytes,
+            static_cast<int32_t>(source), 0u);
+        WaitHiddenPull(0u);
+        aclshmemi_copy_ub2gm(reinterpret_cast<__gm__ int8_t *>(local + offset),
+            reinterpret_cast<__ubuf__ int8_t *>(ub), bytes);
+        AscendC::PipeBarrier<PIPE_ALL>();
+        offset += bytes;
+        *progress = offset;
+        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(progress));
+    }
+}
+
+__aicore__ inline void SendStagedPack(__gm__ uint8_t *destination,
+    __ubuf__ uint8_t *ub, uint64_t offset, uint32_t bytes, uint32_t ping)
+{
+    SetGetReady(ping);
+    WaitHiddenPull(ping);
+    aclshmemi_copy_ub2gm(reinterpret_cast<__gm__ int8_t *>(destination + offset),
+        reinterpret_cast<__ubuf__ int8_t *>(ub), bytes);
+    SetPutDone(ping);
+}
+
+// Destination-affine relays gather from INC-local staging into bounded UB
+// packs. No additional remote source GET, no host plan, no changed metadata.
+__aicore__ void FanoutStagedHidden(__gm__ uint8_t *inc_slots, uint64_t source_stride,
+    __gm__ uint8_t *destination_base, __gm__ uint32_t *prefix,
+    __gm__ uint32_t *token_prefix, __gm__ uint32_t *row_map,
+    __gm__ uint32_t *block_status, uint64_t block_stride, uint32_t parser_cohort,
+    __gm__ uint32_t *staged_progress, uint64_t row_bytes, uint32_t workers,
+    uint32_t destination, uint32_t channel, uint32_t channel_span, uint32_t channels,
+    uint64_t spin_cap, __gm__ uint32_t *error)
+{
+    constexpr uint32_t pack_bytes = 64u * 1024u;
+    static_assert(2u * pack_bytes <= ub_limit, "fanout exceeds backend UB capacity");
+    __ubuf__ uint8_t *ub[2]{reinterpret_cast<__ubuf__ uint8_t *>(0),
+                           reinterpret_cast<__ubuf__ uint8_t *>(pack_bytes)};
+    __gm__ uint8_t *remote = reinterpret_cast<__gm__ uint8_t *>(
+        aclshmem_ptr(destination_base, static_cast<int32_t>(destination)));
+    bool busy[2]{false, false};
+    uint32_t ping = 0u, filled = 0u;
+    uint64_t output_begin = 0u;
+    bool valid = true;
+    for (uint32_t source = 0u; source < workers && valid; ++source) {
+        __gm__ SlotHeader *header = reinterpret_cast<__gm__ SlotHeader *>(
+            inc_slots + MulU64ByU32(source_stride, source));
+        __gm__ uint8_t *hidden = reinterpret_cast<__gm__ uint8_t *>(header) + header->hidden_offset;
+        const uint64_t total = MulU64ByU32(row_bytes, header->token_count);
+        const uint64_t split = ((total + pack_bytes - 1u) / pack_bytes / 2u) * pack_bytes;
+        uint64_t staged[2]{0u, 0u};
+        uint32_t ready_until = 0u, lane = 0u;
+        for (uint32_t token = channel * 8u; token < header->token_count && valid;) {
+            if (token >= ready_until) {
+                while (lane + 1u < parser_cohort &&
+                    token >= ParserTokenBoundary(header->token_count, lane + 1u, parser_cohort)) ++lane;
+                __gm__ uint32_t *progress = block_status +
+                    static_cast<uint64_t>(source * parser_cohort + lane) * block_stride + 4u;
+                for (uint64_t spin = 0u; spin < spin_cap; ++spin) {
+                    dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(progress));
+                    ready_until = *reinterpret_cast<__gm__ volatile uint32_t *>(progress);
+                    if (ready_until > token) break;
+                }
+                valid = ready_until > token;
+                if (!valid) { *error = kStatusReadyTimeout; break; }
+                FlushRange(reinterpret_cast<__gm__ uint8_t *>(row_map +
+                    (static_cast<uint64_t>(token_prefix[source]) + token) * workers),
+                    static_cast<uint64_t>(ready_until - token) * workers * sizeof(uint32_t));
+            }
+            const uint32_t row = row_map[
+                (static_cast<uint64_t>(token_prefix[source]) + token) * workers + destination];
+            if (row != kInvalidRow) {
+                if (row < prefix[static_cast<uint64_t>(source) * workers + destination] ||
+                    row >= prefix[static_cast<uint64_t>(source + 1u) * workers + destination]) {
+                    *error = kStatusInvalidState; valid = false; break;
+                }
+                const uint64_t input_offset = MulU64ByU32(row_bytes, token);
+                const uint64_t output_offset = MulU64ByU32(row_bytes, row);
+                for (uint64_t sub = 0u; sub < row_bytes && valid;) {
+                    const uint32_t bytes = static_cast<uint32_t>(
+                        row_bytes - sub < pack_bytes - filled ? row_bytes - sub : pack_bytes - filled);
+                    const uint64_t end = input_offset + sub + bytes;
+                    for (uint32_t stage_lane = input_offset + sub < split ? 0u : 1u;
+                         stage_lane <= (end <= split ? 0u : 1u); ++stage_lane) {
+                        const uint64_t needed = stage_lane == 0u && end > split ? split : end;
+                        __gm__ uint64_t *available = reinterpret_cast<__gm__ uint64_t *>(
+                            staged_progress + source * 32u + stage_lane * 16u);
+                        if (staged[stage_lane] < needed) {
+                            for (uint64_t spin = 0u; spin < spin_cap; ++spin) {
+                                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(available));
+                                staged[stage_lane] = *reinterpret_cast<__gm__ volatile uint64_t *>(available);
+                                if (staged[stage_lane] >= needed) break;
+                            }
+                        }
+                        valid = staged[stage_lane] >= needed;
+                        if (!valid) { *error = kStatusReadyTimeout; break; }
+                    }
+                    if (!valid) break;
+                    if (filled != 0u && output_begin + filled != output_offset + sub) {
+                        SendStagedPack(remote, ub[ping], output_begin, filled, ping);
+                        busy[ping] = true; ping ^= 1u; filled = 0u;
+                    }
+                    if (filled == 0u) {
+                        if (busy[ping]) { WaitPutDone(ping); busy[ping] = false; }
+                        output_begin = output_offset + sub;
+                    }
+                    aclshmemi_copy_gm2ub(reinterpret_cast<__ubuf__ int8_t *>(ub[ping] + filled),
+                        reinterpret_cast<__gm__ int8_t *>(hidden + input_offset + sub), bytes);
+                    filled += bytes; sub += bytes;
+                    if (filled == pack_bytes) {
+                        SendStagedPack(remote, ub[ping], output_begin, filled, ping);
+                        busy[ping] = true; ping ^= 1u; filled = 0u;
+                    }
+                }
+            }
+            const bool group_end = (token + 1u) % 8u == 0u &&
+                ((token + 1u) / 8u) % channels == (channel + channel_span) % channels;
+            const uint32_t step = group_end ? (channels - channel_span) * 8u + 1u : 1u;
+            if (header->token_count - token <= step) break;
+            token += step;
+        }
+    }
+    if (valid && filled != 0u) {
+        SendStagedPack(remote, ub[ping], output_begin, filled, ping);
+        busy[ping] = true;
+    }
+    for (uint32_t i = 0u; i < 2u; ++i) if (busy[i]) WaitPutDone(i);
+    aclshmemx_mte_quiet();
+    if (!valid) dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(error));
 }
 
 // A run is contiguous source hidden plus one contiguous interval per unique
@@ -1361,6 +1418,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     __gm__ uint32_t *scratch =
         reinterpret_cast<__gm__ uint32_t *>(parser_scratch);
     __gm__ uint32_t *source_state = scratch + scratch_layout.source_state;
+    __gm__ uint32_t *staged_progress = scratch + scratch_layout.staged_progress;
     __gm__ uint32_t *block_row_ends = scratch + scratch_layout.block_row_ends;
     __gm__ uint32_t *block_assignment_ends = scratch + scratch_layout.block_assignment_ends;
     __gm__ uint32_t *block_contributor_ends = scratch + scratch_layout.block_contributor_ends;
@@ -1400,6 +1458,10 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         timeline->kernel_done = 0u;
         timeline->reserved[0] = 0u;
         for (uint32_t source = 0u; source < worker_count; ++source) {
+            for (uint32_t lane = 0u; lane < 2u; ++lane) {
+                *reinterpret_cast<__gm__ uint64_t *>(staged_progress + source * 32u + lane * 16u) = 0u;
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(staged_progress + source * 32u + lane * 16u));
+            }
             __gm__ uint32_t *state = source_state +
                 static_cast<uint64_t>(source) *
                     scratch_layout.source_stride;
@@ -2150,8 +2212,11 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         (phase2_header->flags & kJournalFlagUniformDestinations) != 0u;
     const uint32_t uniform_sideband_begin =
         active_parser_blocks - worker_count;
+    const bool staging_possible = !uniform_layout && row_map_capacity_entries != 0u &&
+        row_bytes % kPullDispatchAlignment == 0u && channels_per_source >= 2u &&
+        required_channels + 3u * worker_count <= active_parser_blocks;
     const uint32_t uniform_producer_begin =
-        static_cast<uint32_t>(required_channels);
+        static_cast<uint32_t>(required_channels) + (staging_possible ? worker_count : 0u);
     const uint32_t uniform_available_producers =
         uniform_producer_begin <= uniform_sideband_begin
         ? uniform_sideband_begin - uniform_producer_begin : 0u;
@@ -2166,6 +2231,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         uniform_producer_begin + uniform_producer_count;
     const bool uniform_fast = uniform_layout &&
         uniform_producers_per_source != 0u;
+    const bool staged_random = staging_possible && uniform_producers_per_source != 0u;
     bool parallel_uniform_phase2 = uniform_producers_per_source != 0u;
     if (row_map_capacity_entries != 0u &&
         (8u * sizeof(uint32_t) * worker_count) % kPullDispatchAlignment != 0u)
@@ -2422,7 +2488,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             }
             jtoken->contributors_count = contributor_count;
             if (emit_row_map &&
-                (header->flags & kSlotFlagUniformDestinations) == 0u &&
+                ((header->flags & kSlotFlagUniformDestinations) == 0u || staged_random) &&
                 (token + 1u == token_end || token + 1u - row_map_published >= 32u)) {
                 const uint64_t first = static_cast<uint64_t>(
                     reinterpret_cast<__gm__ uint32_t *>(source_token_prefix)[source]) + row_map_published;
@@ -2653,7 +2719,39 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     // All routes use source runs. Nonuniform runs need completed row
     // descriptors; uniform runs use the already validated prefix immediately.
     const bool byte_aligned = row_bytes % kPullDispatchAlignment == 0u;
-    if (*status == kStatusOk &&
+    if (*status == kStatusOk && staged_random && block < uniform_producer_begin) {
+        const uint32_t fanout_channels = channels_per_source - 1u;
+        // Dedicated relays own 3/4 of the W4 work; producers join for the
+        // remaining quarter after their source GETs finish. Static disjoint
+        // token blocks avoid atomics and reuse otherwise idle producer AIVs.
+        const uint32_t weighted_channels = 3u * fanout_channels + 2u;
+        if (block < 2u * worker_count) {
+            const uint32_t source = block % worker_count;
+            const uint32_t lane = block / worker_count;
+            __gm__ SlotHeader *header = reinterpret_cast<__gm__ SlotHeader *>(
+                inc_slots + MulU64ByU32(source_slot_stride, source));
+            StageSourceHidden(source_base, header, source, lane, row_bytes,
+                reinterpret_cast<__gm__ uint64_t *>(staged_progress + source * 32u + lane * 16u));
+            FanoutStagedHidden(inc_slots, source_slot_stride, destination_hidden_base,
+                reinterpret_cast<__gm__ uint32_t *>(source_destination_prefix),
+                reinterpret_cast<__gm__ uint32_t *>(source_token_prefix),
+                reinterpret_cast<__gm__ uint32_t *>(row_map), block_status,
+                scratch_layout.block_stride, parser_cohort, staged_progress, row_bytes,
+                worker_count, source, 3u * fanout_channels + lane, 1u,
+                weighted_channels, spin_cap, status);
+        } else {
+            const uint32_t relay = block - 2u * worker_count;
+            FanoutStagedHidden(inc_slots, source_slot_stride, destination_hidden_base,
+                reinterpret_cast<__gm__ uint32_t *>(source_destination_prefix),
+                reinterpret_cast<__gm__ uint32_t *>(source_token_prefix),
+                reinterpret_cast<__gm__ uint32_t *>(row_map), block_status,
+                scratch_layout.block_stride, parser_cohort, staged_progress, row_bytes,
+                worker_count, relay % worker_count, 3u * (relay / worker_count),
+                3u, weighted_channels, spin_cap, status);
+        }
+        relay_done_cycle = AscendC::GetSystemCycle();
+    }
+    if (*status == kStatusOk && !staged_random &&
         (byte_aligned ? block < required_channels : block == 0u)) {
         bool rows_ready = true;
         if (!uniform_fast && row_map_capacity_entries == 0u)
@@ -2711,7 +2809,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
 
     if (block == 0u && *status == kStatusOk) {
         uint64_t relay_done = 0u;
-        for (uint32_t relay = 0u; relay < required_channels; ++relay) {
+        for (uint32_t relay = 0u; relay < uniform_producer_begin; ++relay) {
             __gm__ uint32_t *relay_state = block_status +
                 static_cast<uint64_t>(relay) *
                     scratch_layout.block_stride;

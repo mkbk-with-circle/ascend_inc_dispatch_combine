@@ -621,16 +621,6 @@ __aicore__ inline bool ReduceContributorTaskRange(
     uint32_t count = 0u, owner = 0u, output_ping = 0u, rotation = 0u;
     __gm__ float *owner_output = nullptr;
     bool ok = true;
-    // row_bytes is fixed for the whole launch. Hoist its overflow bound and
-    // power-of-two classification out of the per-token address validation.
-    const uint64_t max_row_index = ~0ull / row_bytes;
-    uint32_t row_shift = 0u;
-    uint64_t stride_bits = row_bytes;
-    while (stride_bits > 1u && (stride_bits & 1u) == 0u) {
-        stride_bits >>= 1u;
-        ++row_shift;
-    }
-    if (stride_bits != 1u) row_shift = 64u;
 
     for (uint64_t task = task_begin; task < task_end; ++task) {
         if (((task - task_begin) & 63u) == 0u) {
@@ -656,12 +646,9 @@ __aicore__ inline bool ReduceContributorTaskRange(
                 SetFailure(status, kStatusInvalidJournal); ok = false; break;
             }
             uint64_t owner_row_offset = 0u;
-            if (result->owner_row > max_row_index) {
+            if (!CheckedMulU64ByU32(row_bytes, result->owner_row, &owner_row_offset)) {
                 SetFailure(status, kStatusSizeOverflow); ok = false; break;
             }
-            owner_row_offset = row_shift < 64u
-                ? static_cast<uint64_t>(result->owner_row) << row_shift
-                : MulU64ByU32(row_bytes, result->owner_row);
             owner_output = reinterpret_cast<__gm__ float *>(
                 owner_output_base + output_slot_offset + owner_row_offset);
             uint32_t current = heads[accumulator];
@@ -681,12 +668,10 @@ __aicore__ inline bool ReduceContributorTaskRange(
                 }
                 sources[i] = source;
                 MarkSource(&seen_low, &seen_high, source);
-                if (pulls[current].source_row > max_row_index) {
+                if (!CheckedMulU64ByU32(row_bytes, pulls[current].source_row,
+                                        &row_offsets[i])) {
                     SetFailure(status, kStatusSizeOverflow); ok = false; break;
                 }
-                row_offsets[i] = row_shift < 64u
-                    ? static_cast<uint64_t>(pulls[current].source_row) << row_shift
-                    : MulU64ByU32(row_bytes, pulls[current].source_row);
                 const uint32_t next = pull_next[current];
                 if (next != kInvalidIndex && (next <= current || next >= pull_count)) {
                     SetFailure(status, kStatusInvalidJournal); ok = false; break;
