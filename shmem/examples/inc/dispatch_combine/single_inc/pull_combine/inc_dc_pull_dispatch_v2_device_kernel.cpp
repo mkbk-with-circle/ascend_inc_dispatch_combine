@@ -800,7 +800,7 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
     uint32_t channel, uint32_t channels, __gm__ uint32_t *error,
     __gm__ uint32_t *row_map, __gm__ uint32_t *token_prefix,
     __gm__ uint32_t *block_status, uint64_t block_stride,
-    uint32_t parser_cohort, uint64_t spin_cap, __gm__ uint64_t *address_map)
+    uint32_t parser_cohort, uint64_t spin_cap)
 {
     if (header->token_count == 0u) return;
     const bool coalesced = (header->flags & kSlotFlagUniformDestinations) != 0u;
@@ -817,13 +817,6 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
     for (uint32_t destination = 0u; destination < workers; ++destination)
         mapped_destinations[destination] = reinterpret_cast<__gm__ uint8_t *>(
             aclshmem_ptr(destination_base, static_cast<int32_t>(destination)));
-    uint64_t lower[kPullDispatchMaxWorkers], upper[kPullDispatchMaxWorkers];
-    if (address_map != nullptr && !coalesced)
-        for (uint32_t d = 0u; d < workers; ++d) {
-            const uint64_t base = reinterpret_cast<uint64_t>(mapped_destinations[d]);
-            lower[d] = base + RelayRowOffset(row_bytes, prefix[static_cast<uint64_t>(source) * workers + d], row_shift);
-            upper[d] = base + RelayRowOffset(row_bytes, prefix[static_cast<uint64_t>(source + 1u) * workers + d], row_shift);
-        }
     __gm__ uint8_t *slot = reinterpret_cast<__gm__ uint8_t *>(header);
     __gm__ TokenRecord *tokens = reinterpret_cast<__gm__ TokenRecord *>(slot + header->tokens_offset);
     __gm__ AssignmentRecord *assignments = reinterpret_cast<__gm__ AssignmentRecord *>(slot + header->assignments_offset);
@@ -924,13 +917,10 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
                     // Invalidate it once, not once per token (several tokens
                     // share each scalar cacheline). Never touch unpublished
                     // rows, which their producer may still be modifying.
-                    const uint64_t first = (static_cast<uint64_t>(token_prefix[source]) + token) * workers;
-                    if (address_map != nullptr)
-                        FlushRange(reinterpret_cast<__gm__ uint8_t *>(address_map + first),
-                            static_cast<uint64_t>(observed - token) * workers * sizeof(uint64_t));
-                    else
-                        FlushRange(reinterpret_cast<__gm__ uint8_t *>(row_map + first),
-                            static_cast<uint64_t>(observed - token) * workers * sizeof(uint32_t));
+                    __gm__ uint32_t *published = row_map +
+                        (static_cast<uint64_t>(token_prefix[source]) + token) * workers;
+                    FlushRange(reinterpret_cast<__gm__ uint8_t *>(published),
+                        static_cast<uint64_t>(observed - token) * workers * sizeof(uint32_t));
                 }
                 ready_until = observed;
             }
@@ -940,19 +930,6 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
                 count = 0u;
                 uint32_t destination = (source + channel) % workers;
                 for (uint32_t local = 0u; local < workers; ++local) {
-                    if (address_map != nullptr) {
-                        const uint64_t address = address_map[
-                            (static_cast<uint64_t>(token_prefix[source]) + token) * workers + destination];
-                        if (address != 0u) {
-                            if (address < lower[destination] || address >= upper[destination] ||
-                                upper[destination] - address < row_bytes || (address & 63u) != 0u) {
-                                *error = kStatusInvalidState; valid = false; break;
-                            }
-                            offsets[count++] = address;
-                        }
-                        if (++destination == workers) destination = 0u;
-                        continue;
-                    }
                     const uint32_t row = rows[destination];
                     if (row != kInvalidRow) {
                         if (row < prefix[static_cast<uint64_t>(source) * workers + destination] ||
@@ -978,10 +955,8 @@ __attribute__((noinline)) __aicore__ void RelayMappedTasks(
         }
         for (uint32_t i = 0u; i < count; ++i)
             aclshmemi_copy_ub2gm(
-                address_map != nullptr && !coalesced
-                    ? reinterpret_cast<__gm__ int8_t *>(offsets[i] + sub)
-                    : reinterpret_cast<__gm__ int8_t *>(mapped_destinations[destinations[i]] +
-                        offsets[i] + (coalesced ? source_offset : sub)),
+                reinterpret_cast<__gm__ int8_t *>(mapped_destinations[destinations[i]] +
+                    offsets[i] + (coalesced ? source_offset : sub)),
                 reinterpret_cast<__ubuf__ int8_t *>(ub[ping]), bytes);
         SetPutDone(ping);
         busy[ping] = true;
@@ -1008,13 +983,13 @@ __attribute__((noinline)) __aicore__ void RelaySourceRuns(
     uint32_t channel, uint32_t channels, __gm__ uint32_t *error,
     __gm__ uint32_t *row_map, __gm__ uint32_t *token_prefix,
     __gm__ uint32_t *block_status, uint64_t block_stride,
-    uint32_t parser_cohort, uint64_t spin_cap, __gm__ uint64_t *address_map)
+    uint32_t parser_cohort, uint64_t spin_cap)
 {
     if (row_bytes % kPullDispatchAlignment == 0u &&
         (row_map != nullptr || (header->flags & kSlotFlagUniformDestinations) != 0u)) {
         RelayMappedTasks(source_base, destination_hidden_base, prefix, header,
             row_bytes, source, workers, channel, channels, error, row_map,
-            token_prefix, block_status, block_stride, parser_cohort, spin_cap, address_map);
+            token_prefix, block_status, block_stride, parser_cohort, spin_cap);
         return;
     }
     RelayBuffers buffers{};
@@ -2100,14 +2075,6 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         uniform_producer_begin + uniform_producer_count;
     const bool uniform_fast = uniform_layout &&
         uniform_producers_per_source != 0u;
-    // Optional INC-only address descriptors follow the public row-map prefix.
-    // Capacity, not a host routing plan, enables this internal cache.
-    const uint64_t map_rows = static_cast<uint64_t>(
-        reinterpret_cast<__gm__ uint32_t *>(source_token_prefix)[worker_count]) * worker_count;
-    const uint64_t address_offset = (map_rows + 15u) & ~15ull;
-    __gm__ uint64_t *address_map = row_map_capacity_entries >= address_offset &&
-        (row_map_capacity_entries - address_offset) / 2u >= map_rows
-        ? reinterpret_cast<__gm__ uint64_t *>(row_map + address_offset * sizeof(uint32_t)) : nullptr;
     bool parallel_uniform_phase2 = uniform_producers_per_source != 0u;
     if (row_map_capacity_entries != 0u &&
         (8u * sizeof(uint32_t) * worker_count) % kPullDispatchAlignment != 0u)
@@ -2164,12 +2131,6 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         const uint32_t token_end = ParserTokenBoundary(
             header->token_count, lane + 1u, parser_cohort);
         uint32_t row_map_published = token_begin;
-        const bool emit_addresses = address_map != nullptr &&
-            (header->flags & kSlotFlagUniformDestinations) == 0u;
-        uint64_t mapped_bases[kPullDispatchMaxWorkers];
-        if (emit_addresses)
-            for (uint32_t d = 0u; d < worker_count; ++d)
-                mapped_bases[d] = reinterpret_cast<uint64_t>(aclshmem_ptr(destination_hidden_base, static_cast<int32_t>(d)));
         uint32_t contributor_cursor = block_contributors[
             static_cast<uint64_t>(parser_index) *
                 scratch_layout.block_stride];
@@ -2253,9 +2214,6 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                 for (uint32_t destination = 0u;
                      destination < worker_count; ++destination)
                     token_row_map[destination] = kInvalidRow;
-            if (emit_addresses)
-                for (uint32_t d = 0u; d < worker_count; ++d)
-                    address_map[static_cast<uint64_t>(global_token) * worker_count + d] = 0u;
             for (uint32_t local = 0u; local < record->assignment_count;
                  ++local) {
                 __gm__ AssignmentRecord *assignment = assignments +
@@ -2288,9 +2246,6 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     token_destination_rows[destination] = destination_row;
                     if (emit_row_map)
                         token_row_map[destination] = destination_row;
-                    if (emit_addresses)
-                        address_map[static_cast<uint64_t>(global_token) * worker_count + destination] =
-                            mapped_bases[destination] + MulU64ByU32(row_bytes, destination_row);
 
                     __gm__ DestinationRow *out_row =
                         reinterpret_cast<__gm__ DestinationRow *>(
@@ -2382,9 +2337,6 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     reinterpret_cast<__gm__ uint32_t *>(source_token_prefix)[source]) + row_map_published;
                 FlushRange(row_map + first * worker_count * sizeof(uint32_t),
                     static_cast<uint64_t>(token + 1u - row_map_published) * worker_count * sizeof(uint32_t));
-                if (emit_addresses)
-                    FlushRange(reinterpret_cast<__gm__ uint8_t *>(address_map + first * worker_count),
-                        static_cast<uint64_t>(token + 1u - row_map_published) * worker_count * sizeof(uint64_t));
                 AscendC::PipeBarrier<PIPE_ALL>();
                 __gm__ uint32_t *progress = block_status +
                     static_cast<uint64_t>(parser_index) * scratch_layout.block_stride + 4u;
@@ -2646,7 +2598,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     byte_aligned ? channels_per_source : 1u, status,
                     row_map_capacity_entries == 0u ? nullptr : reinterpret_cast<__gm__ uint32_t *>(row_map),
                     reinterpret_cast<__gm__ uint32_t *>(source_token_prefix),
-                    block_status, scratch_layout.block_stride, parser_cohort, spin_cap, address_map);
+                    block_status, scratch_layout.block_stride, parser_cohort, spin_cap);
             }
         }
         relay_done_cycle = AscendC::GetSystemCycle();

@@ -1331,8 +1331,7 @@ int main(int argc, char **argv)
     // Canonical V2 relay and Combine consume compact contributors directly.
     // A zero capacity disables the legacy dense W x token row map.
     // INC-generated destination rows; never upload a host routing plan.
-    const uint64_t row_map_rows = total_tokens * o.workers;
-    const uint64_t row_map_entries = ((row_map_rows + 15u) & ~15ull) + 2u * row_map_rows;
+    const uint64_t row_map_entries = total_tokens * o.workers;
     const uint64_t prefix_entries =
         static_cast<uint64_t>(o.workers + 1u) * o.workers;
     const uint64_t expert_entries =
