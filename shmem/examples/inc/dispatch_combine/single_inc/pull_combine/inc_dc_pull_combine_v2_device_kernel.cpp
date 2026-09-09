@@ -773,7 +773,10 @@ __aicore__ inline bool ReduceTwoContributorTaskRange(
     __gm__ const uint32_t *accumulator_heads,
     __gm__ const uint32_t *accumulator_result_index,
     __gm__ const CombineResultOp *results, __gm__ uint8_t *source_ready,
-    __gm__ uint8_t *source_payload_offsets, uint64_t task_begin,
+    __gm__ uint8_t *source_payload_offsets,
+    __gm__ const uint64_t *source_offsets,
+    __gm__ const uint64_t *owner_offsets, uint64_t pull_count,
+    uint64_t result_count, uint64_t task_begin,
     uint64_t task_end, uint64_t tiles_per_row, uint32_t hidden,
     uint64_t row_bytes, uint64_t output_slot_offset, uint32_t worker_count,
     uint64_t spin_cap,
@@ -817,12 +820,35 @@ __aicore__ inline bool ReduceTwoContributorTaskRange(
 
         if (accumulator != cached_accumulator) {
             const uint32_t first = accumulator_heads[accumulator];
+            if (first >= pull_count) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
             const uint32_t second = pull_next[first];
+            if (second == kInvalidIndex || second >= pull_count ||
+                second <= first || pull_next[second] != kInvalidIndex) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
             cached_first_source = pulls[first].source_rank;
             cached_second_source = pulls[second].source_rank;
             if (worker_count > 8u ||
                 cached_first_source >= worker_count ||
-                cached_second_source >= worker_count) {
+                cached_second_source >= worker_count ||
+                cached_first_source == cached_second_source ||
+                pulls[first].accumulator_index != accumulator ||
+                pulls[second].accumulator_index != accumulator ||
+                pulls[first].journal_token != pulls[second].journal_token ||
+                first < source_offsets[cached_first_source] ||
+                first >= source_offsets[cached_first_source + 1u] ||
+                pulls[first].source_row !=
+                    first - source_offsets[cached_first_source] ||
+                second < source_offsets[cached_second_source] ||
+                second >= source_offsets[cached_second_source + 1u] ||
+                pulls[second].source_row !=
+                    second - source_offsets[cached_second_source]) {
                 SetFailure(status, kStatusInvalidJournal);
                 ok = false;
                 break;
@@ -862,10 +888,30 @@ __aicore__ inline bool ReduceTwoContributorTaskRange(
                 second_row_offset);
             const uint32_t result_index =
                 accumulator_result_index[accumulator];
-            cached_owner = results[result_index].owner_rank;
+            if (result_index >= result_count) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
+            __gm__ const CombineResultOp *result = results + result_index;
+            cached_owner = result->owner_rank;
+            if (result->accumulator_index != accumulator ||
+                result->journal_token != pulls[first].journal_token ||
+                result->expected_contributors != 2u ||
+                cached_owner >= worker_count ||
+                result_index < owner_offsets[cached_owner] ||
+                result_index >= owner_offsets[cached_owner + 1u] ||
+                result->owner_row !=
+                    result_index - owner_offsets[cached_owner] ||
+                result->reserved[0] != 0u || result->reserved[1] != 0u ||
+                result->reserved[2] != 0u) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
             uint64_t result_row_offset = 0u;
             if (!CheckedMulU64ByU32(row_bytes,
-                                    results[result_index].owner_row,
+                                    result->owner_row,
                                     &result_row_offset)) {
                 SetFailure(status, kStatusSizeOverflow);
                 ok = false;
@@ -933,7 +979,10 @@ __aicore__ inline bool ReduceFourContributorTaskRange(
     __gm__ const uint32_t *accumulator_heads,
     __gm__ const uint32_t *accumulator_result_index,
     __gm__ const CombineResultOp *results, __gm__ uint8_t *source_ready,
-    __gm__ uint8_t *source_payload_offsets, uint64_t task_begin,
+    __gm__ uint8_t *source_payload_offsets,
+    __gm__ const uint64_t *source_offsets,
+    __gm__ const uint64_t *owner_offsets, uint64_t pull_count,
+    uint64_t result_count, uint64_t task_begin,
     uint64_t task_end, uint64_t tiles_per_row, uint32_t hidden,
     uint64_t row_bytes, uint64_t output_slot_offset, uint64_t spin_cap,
     __gm__ uint32_t *status)
@@ -983,20 +1032,53 @@ __aicore__ inline bool ReduceFourContributorTaskRange(
                 ? hidden - element_begin : kFourTileElements);
         if (accumulator != cached_accumulator) {
             op[0] = accumulator_heads[accumulator];
+            if (op[0] >= pull_count) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
             op[1] = pull_next[op[0]];
+            if (op[1] == kInvalidIndex || op[1] >= pull_count ||
+                op[1] <= op[0]) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
             op[2] = pull_next[op[1]];
+            if (op[2] == kInvalidIndex || op[2] >= pull_count ||
+                op[2] <= op[1]) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
             op[3] = pull_next[op[2]];
+            if (op[3] == kInvalidIndex || op[3] >= pull_count ||
+                op[3] <= op[2] || pull_next[op[3]] != kInvalidIndex) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
+            uint32_t seen_sources = 0u;
+            const uint32_t journal_token = pulls[op[0]].journal_token;
             for (uint32_t i = 0u; i < 4u; ++i) {
                 op_source[i] = pulls[op[i]].source_rank;
                 uint64_t row_offset = 0u;
                 if (op_source[i] >= 4u ||
+                    (seen_sources & (1u << op_source[i])) != 0u ||
+                    pulls[op[i]].accumulator_index != accumulator ||
+                    pulls[op[i]].journal_token != journal_token ||
+                    op[i] < source_offsets[op_source[i]] ||
+                    op[i] >= source_offsets[op_source[i] + 1u] ||
+                    pulls[op[i]].source_row !=
+                        op[i] - source_offsets[op_source[i]] ||
                     !CheckedMulU64ByU32(row_bytes,
                                         pulls[op[i]].source_row,
                                         &row_offset)) {
-                    SetFailure(status, kStatusSizeOverflow);
+                    SetFailure(status, kStatusInvalidJournal);
                     ok = false;
                     break;
                 }
+                seen_sources |= 1u << op_source[i];
                 remote_base[i] = reinterpret_cast<__gm__ float *>(
                     symmetric_partials + payload_offsets[op_source[i]] +
                     row_offset);
@@ -1004,10 +1086,28 @@ __aicore__ inline bool ReduceFourContributorTaskRange(
             if (!ok) break;
             const uint32_t result_index =
                 accumulator_result_index[accumulator];
-            const uint32_t owner = results[result_index].owner_rank;
+            if (result_index >= result_count) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
+            __gm__ const CombineResultOp *result = results + result_index;
+            const uint32_t owner = result->owner_rank;
+            if (result->accumulator_index != accumulator ||
+                result->journal_token != journal_token ||
+                result->expected_contributors != 4u || owner >= 4u ||
+                result_index < owner_offsets[owner] ||
+                result_index >= owner_offsets[owner + 1u] ||
+                result->owner_row != result_index - owner_offsets[owner] ||
+                result->reserved[0] != 0u || result->reserved[1] != 0u ||
+                result->reserved[2] != 0u) {
+                SetFailure(status, kStatusInvalidJournal);
+                ok = false;
+                break;
+            }
             uint64_t result_row_offset = 0u;
             if (!CheckedMulU64ByU32(row_bytes,
-                                    results[result_index].owner_row,
+                                    result->owner_row,
                                     &result_row_offset)) {
                 SetFailure(status, kStatusSizeOverflow);
                 ok = false;
@@ -1098,6 +1198,7 @@ void inc_dc_pull_combine_v2_device_kernel(
     uint64_t row_bytes = 0u;
     uint64_t output_slot_offset = 0u;
     uint64_t total_tasks = 0u;
+    bool fused_fixed_validation = false;
     const uint64_t tiles_per_row =
         hidden == 0u ? 0u :
         (static_cast<uint64_t>(hidden) + kTileElements - 1u) /
@@ -1284,10 +1385,24 @@ void inc_dc_pull_combine_v2_device_kernel(
     dcci_cacheline(status_line);
     if (*status != kStatusOk) goto finalize;
 
+    dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
+        WaveAllTwoContributorsAddress(source_ready_state)));
+    dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
+        WaveAllFourContributorsAddress(source_ready_state)));
+    fused_fixed_validation =
+        (worker_count <= 8u &&
+         *reinterpret_cast<__gm__ volatile uint32_t *>(
+             WaveAllTwoContributorsAddress(source_ready_state)) == 1u) ||
+        (worker_count == 4u &&
+         *reinterpret_cast<__gm__ volatile uint32_t *>(
+             WaveAllFourContributorsAddress(source_ready_state)) == 1u);
+
     // Strong, read-only validation of the sealed deterministic index. Pull
     // records and accumulator chains are partitioned across ordinary AIVs;
-    // no atomics or scheduling-dependent link construction is required.
-    {
+    // no atomics or scheduling-dependent link construction is required. The
+    // fixed2/fixed4 paths perform the same checks once per accumulator while
+    // caching their data addresses, avoiding a second full plan traversal.
+    if (!fused_fixed_validation) {
         __gm__ const uint64_t *by_source =
             reinterpret_cast<__gm__ const uint64_t *>(source_offsets);
         __gm__ const uint64_t *by_owner =
@@ -1509,7 +1624,10 @@ void inc_dc_pull_combine_v2_device_kernel(
                 reinterpret_cast<__gm__ uint32_t *>(
                     accumulator_result_index),
                 reinterpret_cast<__gm__ CombineResultOp *>(results),
-                source_ready_state, source_payload_offsets, task_begin,
+                source_ready_state, source_payload_offsets,
+                reinterpret_cast<__gm__ uint64_t *>(source_offsets),
+                reinterpret_cast<__gm__ uint64_t *>(owner_offsets),
+                pull_count, result_count, task_begin,
                 task_end, tiles_per_row, hidden, row_bytes,
                 output_slot_offset, worker_count, spin_cap, status);
         } else if (use_four_contributor_pipeline) {
@@ -1535,7 +1653,10 @@ void inc_dc_pull_combine_v2_device_kernel(
                 reinterpret_cast<__gm__ uint32_t *>(
                     accumulator_result_index),
                 reinterpret_cast<__gm__ CombineResultOp *>(results),
-                source_ready_state, source_payload_offsets, four_task_begin,
+                source_ready_state, source_payload_offsets,
+                reinterpret_cast<__gm__ uint64_t *>(source_offsets),
+                reinterpret_cast<__gm__ uint64_t *>(owner_offsets),
+                pull_count, result_count, four_task_begin,
                 four_task_end, four_tiles_per_row, hidden, row_bytes,
                 output_slot_offset, spin_cap, status);
         } else {
