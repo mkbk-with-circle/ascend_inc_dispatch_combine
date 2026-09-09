@@ -57,6 +57,8 @@ sync_config.jsonc
 install/
 oat_reports/
 log/
+!/src/host/utils/log/
+!/src/host/utils/log/**
 
 # compile temp file
 ci/
