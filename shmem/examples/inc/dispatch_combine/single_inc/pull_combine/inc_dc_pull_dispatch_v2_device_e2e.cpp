@@ -206,8 +206,7 @@ bool ParserScratchEntries(uint32_t blocks, uint32_t workers,
         Add(entries, row_extent, &entries) &&
         Add(entries, row_extent, &entries) &&
         Add(entries, block_extent, &entries) &&
-        Add(entries, static_cast<uint64_t>(active) * (2u + 2u * workers) * 8u * 32u, &entries) &&
-        Add(entries, source_extent * 2u, out);
+        Add(entries, static_cast<uint64_t>(active) * (2u + 2u * workers) * 8u * 32u, out);
 }
 
 void DumpParserState(const GuardedBuffer &buffer, uint32_t blocks,
@@ -237,9 +236,7 @@ void DumpParserState(const GuardedBuffer &buffer, uint32_t blocks,
     for (uint32_t parser = 0u; parser < active; ++parser)
         std::cerr << "[DEBUG] parser_state[" << parser << "] pass2="
                   << words[parser * 16u] << " metadata="
-                  << words[parser * 16u + 1u] << " relay_done_cycle="
-                  << (static_cast<uint64_t>(words[parser * 16u + 3u]) << 32u |
-                      words[parser * 16u + 2u]) << '\n';
+                  << words[parser * 16u + 1u] << '\n';
 }
 
 uint64_t Mix(uint64_t value)
@@ -971,8 +968,6 @@ bool ValidateInc(const Options &o, const WaveOracle &oracle,
         return false;
     }
     *timeline_out = timeline;
-    if (std::getenv("INC_DC_PULL_DISPATCH_TRACE_RELAYS") != nullptr)
-        DumpParserState(parser_scratch, dispatch_blocks, o.workers);
     if (expected_status != 0u) return true;
     JournalSlotHeader header{};
     const uint8_t *header_device = journal_header.data +
@@ -1336,7 +1331,8 @@ int main(int argc, char **argv)
     // Canonical V2 relay and Combine consume compact contributors directly.
     // A zero capacity disables the legacy dense W x token row map.
     // INC-generated destination rows; never upload a host routing plan.
-    const uint64_t row_map_entries = total_tokens * o.workers;
+    const uint64_t row_map_rows = total_tokens * o.workers;
+    const uint64_t row_map_entries = ((row_map_rows + 15u) & ~15ull) + 2u * row_map_rows;
     const uint64_t prefix_entries =
         static_cast<uint64_t>(o.workers + 1u) * o.workers;
     const uint64_t expert_entries =
