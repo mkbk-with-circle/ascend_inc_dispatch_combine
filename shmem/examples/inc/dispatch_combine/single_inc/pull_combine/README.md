@@ -143,6 +143,20 @@ cmake --build /tmp/shmem-pull-v2-build -j8 --target \
 
 ## 结果
 
+### Combine 统一流水候选
+
+当前开发分支将 K2、K4 和一般贡献数合并为同一个设备执行函数。
+每个 token 从 Journal 读取贡献数（0..worker_count），校验贡献链和输出地址，
+然后复用缓存按 hidden tile 拉取、累加、回传。同批 token 可有不同 K；
+同 GPU 多专家仍先在端侧合并为一份 partial。
+
+所有情况使用两块输入和两块交替输出缓冲，每块 6 KiB。奇数 K 的最后一份
+贡献单独累加，零贡献输出零。当前仍保留 ABI 的 128 worker 上限；真机测试
+范围仅为 nb 的 W2/W4，不能把 Host 的较大规模校验视为真机扩展验证。
+
+候选版尚未达到 raw gate，K2 对照存在小幅性能回退；尚未替换远程发布版本。
+见 [统一流水实验](../../../../../docs/inc/report/nb-borrow/combine_unified_candidate/README.md)。
+
 - 当前单方向有效带宽、拓扑与稳健性：
   [`pull_v2_directional_20260909`](../../../../../docs/inc/report/nb-borrow/pull_v2_directional_20260909/README.md)
 

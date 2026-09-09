@@ -81,12 +81,14 @@ def main():
         parser.error('nb safety qualification requires five NPUs in one HCCS plane')
     args.output.mkdir(parents=True, exist_ok=False)
     for route in ('sym_k2_balanced', 'sym_k4_gpu4'):
-        for fault in range(1, 5):
+        for fault in range(1, 6):
             run_case(args, (f'{route}_fault{fault}', route, 2049, 32, 3, fault, 0))
         run_case(args, (f'{route}_reuse', route, 2049, 32, 100, 0, 0))
         run_case(args, (f'{route}_one_aiv', route, 8192, 32, 3, 0, 1))
     run_case(args, ('empty', 'asymmetric', 3, 0, 3, 0, 0))
     run_case(args, ('short_tail', 'sym_k4_gpu4', 3, 7, 3, 0, 0))
+    for route in ('fixed_k1', 'fixed_k3', 'mixed_k', 'asymmetric'):
+        run_case(args, (route + '_tail', route, 2049, 257, 5, 0, 0))
 
 
 if __name__ == '__main__':

@@ -140,6 +140,9 @@ enum class Workload {
     SYM_K4_GPU2,
     SYM_K8_GPU4,
     ASYMMETRIC,
+    MIXED_K,
+    FIXED_K1,
+    FIXED_K3,
     READY_SKEW
 };
 
@@ -219,8 +222,16 @@ uint64_t Publication(const void *record, size_t bytes)
     return hash == 0u ? 1u : hash;
 }
 
-float PartialValue(uint32_t source, uint32_t row, uint32_t element)
+float PartialValue(uint32_t source, uint32_t row, uint32_t element,
+                   bool random_values = false)
 {
+    if (random_values) {
+        const uint64_t bits = Mix((static_cast<uint64_t>(source) << 48u) ^
+                                  (static_cast<uint64_t>(row) << 24u) ^ element);
+        const float fraction = static_cast<float>(bits & 0x7fffffu) / 8388608.0f;
+        const int exponent = static_cast<int>((bits >> 24u) % 21u) - 10;
+        return std::ldexp((bits >> 63u) ? -fraction : fraction, exponent);
+    }
     const int32_t value = static_cast<int32_t>(
         (source * 131u + row * 17u + element * 7u) % 1021u) - 510;
     return static_cast<float>(value) / 64.0f;
@@ -241,6 +252,12 @@ bool ParseWorkload(const char *text, Workload *workload)
         *workload = Workload::SYM_K8_GPU4;
     else if (std::strcmp(text, "asymmetric") == 0)
         *workload = Workload::ASYMMETRIC;
+    else if (std::strcmp(text, "mixed_k") == 0)
+        *workload = Workload::MIXED_K;
+    else if (std::strcmp(text, "fixed_k1") == 0)
+        *workload = Workload::FIXED_K1;
+    else if (std::strcmp(text, "fixed_k3") == 0)
+        *workload = Workload::FIXED_K3;
     else if (std::strcmp(text, "ready_skew") == 0)
         *workload = Workload::READY_SKEW;
     else
@@ -372,7 +389,17 @@ ParsedSource MakeSource(const Options &o, uint32_t owner,
         for (uint32_t destination = 0u; destination < o.workers;
              ++destination) {
             bool selected = true;
-            if (o.workload == Workload::SYM_K2_BALANCED ||
+            if (o.workload == Workload::MIXED_K) {
+                // Stable per-row random subset, including no contributors.
+                // Keeping it stable across ring reuse also keeps sizing fixed.
+                selected = (Mix(global_row ^ 0x636f6d62696e65ull) &
+                            (1ull << destination)) != 0u;
+            } else if (o.workload == Workload::FIXED_K1 ||
+                       o.workload == Workload::FIXED_K3) {
+                const uint32_t k = o.workload == Workload::FIXED_K1 ? 1u :
+                    std::min<uint32_t>(3u, o.workers);
+                selected = (destination + o.workers - owner) % o.workers < k;
+            } else if (o.workload == Workload::SYM_K2_BALANCED ||
                 o.workload == Workload::SYM_K4_GPU2) {
                 selected = destination == owner ||
                     destination == (owner + 1u) % o.workers;
@@ -616,18 +643,26 @@ bool ValidateWorker(const Options &o, const Wave &wave_data,
         if (token.owner_rank != rank || token.owner_row != owner_row ||
             token.route_key != RouteKey(rank, owner_row)) return false;
         for (uint32_t element = 0u; element < o.hidden; ++element) {
-            float expected = 0.0f;
+            const bool random_values = o.workload == Workload::MIXED_K;
+            double expected = 0.0;
+            double sum_abs = 0.0;
             for (uint32_t local = 0u; local < token.contributors_count;
                  ++local) {
                 const auto &contributor = wave_data.layout.contributors[
                     token.contributors_begin + local];
-                expected += PartialValue(contributor.worker_rank,
-                                         contributor.destination_row,
-                                         element);
+                const float partial = PartialValue(contributor.worker_rank,
+                    contributor.destination_row, element, random_values);
+                expected += partial;
+                sum_abs += std::abs(static_cast<double>(partial));
             }
             const float value = actual[
                 static_cast<size_t>(owner_row) * o.hidden + element];
-            if (value != expected) {
+            // Mixed routes use cancellation-prone FP32 values and a FP64
+            // oracle. Bound rounding by contributor count and sum of magnitudes.
+            const double tolerance = random_values ?
+                2.0 * std::numeric_limits<float>::epsilon() *
+                    token.contributors_count * sum_abs : 0.0;
+            if (!std::isfinite(value) || std::abs(value - expected) > tolerance) {
                 if (mismatches < 8u)
                     std::cerr << "[FAIL] PE" << rank << " row=" << owner_row
                               << " element=" << element << " actual="
@@ -733,9 +768,9 @@ int main(int argc, char **argv)
                   << " <workers:2|4> <pe> <ipport> <first_npu> <hidden>"
                      " <rows> <sym_k2_balanced|sym_k4_gpu4|sym_k4_gpu2|sym_k8_gpu4|"
                      "sym_topk_all|asymmetric|"
-                     "ready_skew>"
+                     "ready_skew|mixed_k|fixed_k1|fixed_k3>"
                      " <warmup> <measure> [fault:0=none,1=head,2=cycle,"
-                     "3=token,4=owner]\n"
+                     "3=token,4=owner,5=last-owner]\n"
                   << "rows is the total A-token count. sym_k2_balanced is "
                      "the W2/W4 gate workload; sym_topk_all (legacy alias "
                      "symmetric) is the topk=W expansion stress case. "
@@ -761,7 +796,7 @@ int main(int argc, char **argv)
     uint32_t requested_active_aiv = 0u;
     if ((o.workers != 2u && o.workers != 4u) || o.pe < 0 ||
         o.pe >= static_cast<int>(pes) || o.first_npu < 0 ||
-        o.hidden == 0u || o.measure == 0u || o.fault > 4u ||
+        o.hidden == 0u || o.measure == 0u || o.fault > 5u ||
         (o.fault != 0u && o.rows == 0u) ||
         !ParseWorkload(o.workload_name, &o.workload) ||
         !ParseDiagnosticActiveAiv(&requested_active_aiv))
@@ -898,7 +933,8 @@ int main(int argc, char **argv)
             for (uint32_t row = 0u; row < rows; ++row)
                 for (uint32_t element = 0u; element < o.hidden; ++element)
                     host[static_cast<size_t>(row) * o.hidden + element] =
-                        PartialValue(source, row, element);
+                        PartialValue(source, row, element,
+                                     o.workload == Workload::MIXED_K);
             const uint64_t offset = static_cast<uint64_t>(ring_slot) *
                 sizing.partial_slot_stride;
             if (!host.empty())
@@ -969,7 +1005,8 @@ int main(int argc, char **argv)
                     value = wave_data.plan.accumulator_count;
                 } else {
                     const uint32_t result =
-                        wave_data.plan.accumulator_result_index[0];
+                        wave_data.plan.accumulator_result_index[
+                            o.fault == 5u ? wave_data.plan.accumulator_count - 1u : 0u];
                     target = results.data + result * sizeof(CombineResultOp) +
                         offsetof(CombineResultOp, owner_rank);
                     value = o.workers;
