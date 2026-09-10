@@ -5,6 +5,19 @@ set(INC_DC_PULL_V2_DIR ${CMAKE_CURRENT_LIST_DIR})
 set(INC_DC_PULL_V2_TEST_DIR
     ${CMAKE_CURRENT_LIST_DIR}/../../tests/single_inc)
 
+add_library(inc_dc_source_partition_layout STATIC inc_dc_source_partition_layout.cpp)
+inc_host_target(inc_dc_source_partition_layout)
+target_include_directories(inc_dc_source_partition_layout PUBLIC ${INC_DC_PULL_V2_DIR})
+add_executable(inc_dc_source_partition_layout_tests tests/test_inc_dc_source_partition_layout.cpp)
+inc_host_target(inc_dc_source_partition_layout_tests)
+target_compile_options(inc_dc_source_partition_layout_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_link_libraries(inc_dc_source_partition_layout_tests PRIVATE inc_dc_source_partition_layout)
+
+add_library(inc_dc_partitioned_combine SHARED inc_dc_partitioned_combine.cpp)
+inc_device_target(inc_dc_partitioned_combine)
+target_include_directories(inc_dc_partitioned_combine PRIVATE ${INC_DC_PULL_V2_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}/../../common/platform)
+
 add_library(inc_dc_pull_dispatch_v2_protocol STATIC
     inc_dc_pull_dispatch_v2.cpp)
 inc_host_target(inc_dc_pull_dispatch_v2_protocol)
@@ -92,6 +105,16 @@ target_link_libraries(inc_dc_pull_combine_v2_npu_e2e PRIVATE
     inc_dc_pull_combine_v2_protocol inc_dc_pull_combine_v2_device_kernel)
 add_dependencies(inc_dc_pull_combine_v2_npu_e2e
     aclshmem_bootstrap_config_store)
+
+add_executable(inc_dc_source_partition_device_e2e inc_dc_source_partition_device_e2e.cpp)
+inc_host_target(inc_dc_source_partition_device_e2e)
+target_include_directories(inc_dc_source_partition_device_e2e PRIVATE ${INC_DC_PULL_V2_DIR})
+target_compile_options(inc_dc_source_partition_device_e2e PRIVATE
+    -Wall -Wextra -Werror -Wno-missing-field-initializers)
+target_link_libraries(inc_dc_source_partition_device_e2e PRIVATE shmem
+    inc_dc_source_partition_layout inc_dc_pull_dispatch_v2_protocol inc_dc_pull_combine_v2_protocol
+    inc_dc_pull_dispatch_v2_device_kernel inc_dc_partitioned_combine)
+add_dependencies(inc_dc_source_partition_device_e2e aclshmem_bootstrap_config_store)
 
 add_executable(inc_dc_pull_v2_same_session_probe
     inc_dc_pull_v2_same_session_probe.cpp)
