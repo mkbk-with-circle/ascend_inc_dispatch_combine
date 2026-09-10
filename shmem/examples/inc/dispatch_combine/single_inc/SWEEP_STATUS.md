@@ -1,44 +1,20 @@
-# Single-INC Pull V2 Sweep 状态
+# 源分区版本测试状态（2026-09-10）
 
-当前实现只在 **nb-borrow / 910B2C / CANN 9.1.0-beta.3** 上完成资格测试。
-仓库不保留其他集群的旧 sweep 数值，也不得把旧实现的结果用于当前 Pull V2 判定。
+当前开发协议为按源rank独立预留分区，环境为nb-borrow/910B2C。
+[最新测量与来源](../../../../docs/inc/report/nb-borrow/source_partitions_20260910/README.md)
+是本分区版本的状态入口。
 
-## 环境与范围
+- 已通过W2/W4真实D→C基本数值检查；包含空源、H=33尾部及3轮ring复用。
+- 已通过rank 0 READY延迟100ms、其他非空源提前完成D分区的检查。
+- 最近W4/K2：D平均73.921、C平均71.4827 GB/s，1次预热+2次测量。
+- 同卡组旧对照：D平均69.596、C平均77.303 GB/s，3次预热+10次测量。
+- C仍回退，正式无回退、全随机和全故障矩阵尚未完成。
+- Combine并行校验的开发改动暂停，未补做新设备验证。
+- 本机只能同平面测试W2+1INC/W4+1INC，W8+1INC无法放进8卡平面。
 
-| 项 | 当前状态 |
-|---|---|
-| Hardware profile | `910b2c-nb` |
-| 拓扑 | 两个独立 8-card HCCS 平面 |
-| 正式规模 | 同一平面内 W2+1INC、W4+1INC |
-| W8 | N/A：8 worker + 1 INC 无法放入同一 8-card 平面 |
-| 正式消息 | 128 MiB/worker，top-k2 balanced |
-| 稳定性 | 3 warmup + 10 measure，CV ≤ 5% |
+当前文档撤去旧raw百分比gate，以已有多打一峰值定标作为链路参照：
+W2约42.7、W4约85.5 GB/s（put-only均值）。完整D/C计时仍包括通信、处理和同步，
+D只计下行fan-out有效字节，C只计上行归约有效字节。
 
-## 正式 Gate 与结果
-
-本机 W2/W4 目标为 51.52/103.04 GB/s，当前尚未达到。
-Dispatch 计 fan-out 下行字节，Combine 计归约上行字节，均除以完整算子时间。
-最新数值统一见下方单方向报告。
-
-## 交叠与稳健性
-
-- 当前 Combine 优化版本的交叠性能需要重新测定。
-- 62 个 size/skew/hotspot/ragged/READY-skew case：62/62 PASS。
-- Dispatch/Combine W2/W4 各连续 100 device waves：全部正确，无 timeout、guard
-  损坏或状态泄漏。
-- 覆盖 0 token、1 byte、4 KiB–256 MiB、top-k1/top-k2/top-k=all、重复目的、
-  ragged、token skew 0%–100% 和 READY skew 0–1000 us。
-
-## 当前开放项
-
-1. Ragged/non-uniform 安全重整路径仍需性能优化与新口径复测。
-2. 独立 API 的真实框架热路径仍需部署环境对应的 `BackendOps` device adapter。
-3. W8 与其他硬件/拓扑均未验证；移植后必须重新测 roofline、正确性和 gate。
-
-## 证据
-
-- [当前单方向带宽与稳健性报告](../../../../docs/inc/report/nb-borrow/pull_v2_directional_20260909/README.md)
-- [协议、API 与构建](pull_combine/README.md)
-- [Dispatch/Combine 流程图](pull_combine/FLOW.md)
-
-逐 PE JSONL 和原始日志仅保存在实验机本地，不进入协作仓库。
+旧紧凑布局报告按日期保留为历史对照，其“62 case”“100 wave”“287/262 wave”等
+压力结果不构成本分区协议已经完成相同资格矩阵的证明。

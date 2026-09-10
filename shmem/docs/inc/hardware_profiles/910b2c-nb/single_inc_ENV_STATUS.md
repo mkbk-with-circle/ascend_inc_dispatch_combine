@@ -1,6 +1,7 @@
 # Single-INC Pull V2 — 910b2c-nb 环境状态
 
-本页只记录当前 Pull V2 在 nb-borrow 上的环境事实和资格结果。
+本页记录nb-borrow硬件事实及已有链路定标。当前源分区协议的资格范围以
+[分区报告](../../report/nb-borrow/source_partitions_20260910/README.md)为准；下方旧压力数据仅作历史对照。
 
 ## 环境
 
@@ -33,9 +34,9 @@
 
 ## 链路 Roofline
 
-每条 worker↔INC HCCS peer raw 约 28 GB/s；W2/W4 同方向 raw 聚合口径分别为
-`2×28=56`、`4×28=112 GB/s`，完整算子正式 gate 为其 92%，即
-51.52/103.04 GB/s。
+每条worker↔INC HCCS peer标称224 Gbit/s（约28 GB/s raw）。
+当前讲解已撤去旧raw百分比gate，使用以下已有put-only链路峰值定标作为实测参照。
+表中Mean是峰值测试均值，Min是最低样本，并非新测单样本最大值。
 
 | 规模 | 方向 | Min | Mean | CV |
 |---|---|---:|---:|---:|
@@ -44,17 +45,17 @@
 | W4 | all→INC | 85.445 | 85.478 | 0.0244% |
 | W4 | INC→all | 83.258 | 84.038 | 1.2484% |
 
-这些单向实测值是调优参照。正式 Dispatch 使用下行 hidden 字节，Combine 使用
-上行 partial 字节，均除以完整算子时间；目标仍固定为 raw 聚合的 92%。
+这些单向值是本机链路实测参照，本轮未重跑定标。它们不构成严格物理理论上限。
+Dispatch使用下行hidden字节、Combine使用上行partial字节，均除以完整算子时间。
 
-## Pull V2 正式结果
+## 旧紧凑布局结果（历史）
 
 128 MiB/worker、top-k2 balanced、3 warmup + 10 measure：
 
 当前性能统一使用单方向有效带宽：Dispatch 统计 fan-out 下行，Combine 统计归约
 上行，并除以完整算子时间。最新 W2/W4、K2/K4/K8 结果见下方唯一权威报告。
 
-## 稳健性
+## 旧紧凑布局稳健性（不作为新分区资格）
 
 - W2/W4 Dispatch 与 Combine 各 100 个连续 device waves，全正确；
 - 256 MiB/worker 扩展 case 正确；
@@ -62,8 +63,9 @@
 - 覆盖 0 token、1 byte、4 KiB–256 MiB、top-k1/top-k2/top-k=all、重复目的、
   token skew 0%–100% 和两个 ring slot 复用。
 
-## 权威报告
+## 报告入口
 
-- `docs/inc/report/nb-borrow/pull_v2_directional_20260909/README.md`
+- 当前源分区：`docs/inc/report/nb-borrow/source_partitions_20260910/README.md`
+- 历史紧凑布局：`docs/inc/report/nb-borrow/pull_v2_directional_20260909/README.md`
 
 原始 JSONL、PE 日志和 build 产物保存在实验机本地，不进入 Git。

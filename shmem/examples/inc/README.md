@@ -1,6 +1,7 @@
 # INC Examples
 
-本目录只保留当前 Single-INC Pull V2。
+当前开发重点是Single-INC源rank独立分区；旧紧凑布局入口保留作回归对照。
+新协议与已完成验证见[源分区说明](dispatch_combine/single_inc/pull_combine/SOURCE_PARTITIONS.md)。
 
 ```text
 dispatch_combine/

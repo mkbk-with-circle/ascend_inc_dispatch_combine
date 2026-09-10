@@ -1,27 +1,22 @@
-# Single INC
+# Single INC：源rank独立分区
 
-当前独立 Dispatch/Combine 的唯一主路径位于
-[`pull_combine/`](pull_combine/README.md)，协议版本为 Pull V2。
+当前开发入口位于[pull_combine/](pull_combine/README.md)。
+Dispatch按源origin预留独立目标空间，Combine直接读取本源真实设备Journal。
+旧紧凑布局入口与旧报告保留作回归对照。
 
-```text
-Dispatch: Worker READY → INC GET token+route → parse/reorder → INC PUT B
-Compute : B expert compute + same-GPU local weighted reduce
-Combine : B Notice → INC GET partials → FP32 reduce → INC PUT original A
-```
+- [源分区协议与内存布局](pull_combine/SOURCE_PARTITIONS.md)
+- [详细流程图](pull_combine/FLOW.md)
+- [新设备入口与真机示例](pull_combine/README.md)
+- [框架前端适配说明](QUICKSTART.md)
+- [测试状态](SWEEP_STATUS.md)
 
-- 最短接入：[`QUICKSTART.md`](QUICKSTART.md)
-- 公共头文件：[`pull_combine/inc_dc_pull_v2_api.h`](pull_combine/inc_dc_pull_v2_api.h)
-- 完整示例：[`pull_combine/inc_dc_pull_v2_api_example.cpp`](pull_combine/inc_dc_pull_v2_api_example.cpp)
-- 两张详细流程图：[`pull_combine/FLOW.md`](pull_combine/FLOW.md)
-- 设计与门禁：[`pull_combine/PULL_DISPATCH_V2_DESIGN.md`](pull_combine/PULL_DISPATCH_V2_DESIGN.md)
-
-历史 V1/Fusion 完整树从 `archive/pre-minimal-v1-fusion-20260904` 标签读取，
-不应与当前 Pull V2 混用。
+历史V1/Fusion从archive/pre-minimal-v1-fusion-20260904恢复。
+源分区之前的代码从archive/pre-source-partitions-a230a1b恢复。
 
 ## English
 
-The sole maintained standalone Dispatch/Combine path is `pull_combine/` (Pull
-V2). Use `QUICKSTART.md` for the shortest integration path and `FLOW.md` for
-the protocol diagrams. Recover legacy implementations from
-`archive/pre-minimal-v1-fusion-20260904`, rather than mixing them into the
-current build.
+The development path uses fixed per-origin destination partitions and a
+Combine kernel that consumes the actual device Dispatch Journal.
+See the linked protocol and device example. Legacy compact-layout entries
+are retained for regression comparisons; frontend backend binding remains
+separate from the qualified device test path.

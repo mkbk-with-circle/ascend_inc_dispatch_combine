@@ -1,110 +1,31 @@
-# 单 INC Pull-Dispatch V2
+# Dispatch当前设计入口：源rank独立分区
 
-## 冻结语义
+当前开发采用源rank固定预留分区，详细约定见[SOURCE_PARTITIONS.md](SOURCE_PARTITIONS.md)，
+图示见[FLOW.md](FLOW.md)。本页保留旧文件名，供已有链接继续使用。
 
-- 每个 worker、每个 token wave 只发布一个 `Ready`。
-- `Ready` 只携带 epoch 与注册区域标识；不携带 token-plan、地址或 counts。
-- INC GET 固定 header 后，按 tile GET metadata/hidden、在线解析并 fan-out。
-- 每个 token 从源 worker 到 INC 只传一份 hidden；对每个唯一目标 GPU 只 PUT
-  一份 hidden，同 GPU 多 expert 仅增加 assignment。
-- 目标端采用动态 expert-major 布局；兼容重整按 tile 与网络接收交叠。
-- INC 保存 generation-scoped journal，Combine 完成后回收。
+## 地址与独立性
 
-## 注册内存
+目标B的接收区域为[ring][origin][R][H]，metadata和计数同样按origin隔离。
+R来自初始化容量约定；其他rank的实际数量不参与本源分区基址计算。
+每个origin独立拉取、校验、局部布局、fan-out、封存Journal和发布Completion/ACK。
 
-```text
-Worker source region
-└── ring slot
-    ├── SlotHeader                 128 B
-    ├── TokenRecord[token_count]   32 B/row
-    ├── AssignmentRecord[count]    16 B/assignment
-    └── Hidden[token_count][H]
-```
+worker准备本wave整个Source Slot后发布一次READY；INC仍需要处理本源metadata，
+但不等待无关origin的READY或计数。分区内部的局部行r不等于整个B的全局行号。
 
-wire 中只出现 `(session_id, placement_epoch, source_rank, region_id,
-ring_slot)`。SHMEM 对称地址、RDMA MR 或真实 INC 物理窗口由 transport registration
-解析，不进入协议。
+## 搬运与Combine衔接
 
-## 生命周期
+INC验证当前源的uniform提示；满足时连续分tile，否则逐token查询本源row map。
+双缓冲/三缓冲允许GET下一块与PUT当前块交叠；非对齐尾部保留精确宽度处理。
 
-```text
-source slot:
-FREE -> FILLING -> READY -> GET_ACTIVE -> SOURCE_CONSUMED -> FREE
+每个本源Journal记录原始owner/token与各B局部行的关系。
+新Combine直接读取真实设备Journal；B按源分区准备FP32 partial并发布Notice。
+不再通过Host预生成Pull Index实现这条新链路。
 
-journal slot:
-FREE -> DISPATCH_OPEN -> DISPATCH_SEALED -> COMBINE_ACTIVE
-     -> COMPLETE/ABORTED -> FREE
-```
+## 性能与测试
 
-`SOURCE_CONSUMED` 只表示源 slot 已完成全部 GET；destination completion 表示目标
-数据和必要重整可消费；journal 必须保留到 Combine completion。三种事件不能合并。
+D只计fan-out下行有效字节，C只计参与归约的上行有效字节，均除以完整算子时间。
+按用户最新要求移除旧raw百分比gate，当前采用已有多打一实测峰值参照：
+W2约42.7、W4约85.5 GB/s。峰值参照不替代完整算子同卡组无回退比较。
 
-## 数据流水
-
-```text
-INC Dispatch 动态半区（由运行时探测普通 AIV 总数）
-
-GET meta 0 -> parse/reserve 0 -> GET hidden 0 -> PUT destinations 0
-               GET meta 1 -> parse/reserve 1 -> GET hidden 1 -> PUT destinations 1
-                              ...
-```
-
-最终实现采用 per-peer channel 与 2–3 个有界 tile credit；禁止跨 AIV 轮询共享
-cache line 传递大数据所有权。控制 publication 独占 64 B cache line。未完整校验前
-允许预取或写入未提交的目标 slot，但只有成功 completion 才允许 worker 消费。
-
-## 动态布局与重整
-
-INC 为每个 `(destination, expert)` 动态分配 row。一个 `DestinationRow` 对应
-`(token, unique destination)`，多个 `ExpertAssignment` 可引用同一行。兼容路径在
-目标 worker 本地展开到 expert-major；融合路径让 grouped GEMM 直接消费 compact
-hidden 与 gather index。
-
-## Combine 协同
-
-Dispatch 在线生成：
-
-```text
-JournalTokenEntry(owner rank/row, contributor range)
-JournalContributor(B rank, destination row)
-```
-
-Combine 默认 canonical partial 布局：B 把同 GPU 多 expert 输出按 weight 本地归并回
-`partial[destination_row]`，发布一个 READY；INC 直接 GET、tile reduce、PUT owner。
-Combine 使用运行时/profile 选择的 FP32 tile、MTE2 ping/pong、UB Add 和直接 PUT；
-Reducer 数量由 launcher 从当前芯片的普通 AIV 数量推导，不编码某一 SKU 的固定值。
-
-## AIV 与并发
-
-```text
-INC ordinary AIV（运行时探测 N 个）:
-  前 floor(N/2) 个逻辑资源   Pull-Dispatch
-  后 N-floor(N/2) 个逻辑资源 Pull-Combine
-
-worker:
-  READY/completion 常驻控制最多 1–2 AIV
-  重整/local-reduce 按需或与计算融合
-  其余留给 grouped GEMM/SwiGLU
-```
-
-必须支持 `Combine(wave N, slot s)` 与 `Dispatch(wave N+1, slot 1-s)` 任意错峰并发，
-standalone benchmark 不得借用另一半 INC AIV。
-
-## Gate
-
-正式带宽 gate 只用于对称 workload：每个 worker 恰好 128 MiB hidden
-payload，worker 输入量与 destination 负载对称。完整 Dispatch 从 READY
-publication 计到 destination 重整完成、destination completion 和 source ACK
-均发布：
-
-```text
-bandwidth = hidden PUT bytes across unique destinations / complete operator time
-W2 min >= 51.52 GB/s   # 56 GB/s nominal raw x 92%
-W4 min >= 103.04 GB/s  # 112 GB/s nominal raw x 92%
-10 measures 全正确，CV <= 5%
-```
-
-另外记录 GET-only、PUT-only、匹配 fan-out 比例的 GET+PUT mixed roofline，以及
-重整带宽。小消息及不同程度
-的非对称 workload 在正式 gate 通过后测试，不套用上述固定 raw gate；它们必须
-正确、稳定、无死锁或越界，并报告带宽、延迟和相对对称基线的退化。
+最新已完成测量和待完成项见[源分区报告](../../../../../docs/inc/report/nb-borrow/source_partitions_20260910/README.md)。
+之前按全局紧凑前缀发号的实现/设计可由archive/pre-source-partitions-a230a1b恢复。

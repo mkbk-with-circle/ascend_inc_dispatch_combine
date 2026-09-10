@@ -1,4 +1,9 @@
-# Single-INC Pull V2 快速接入
+# Single-INC 快速接入
+
+当前开发的源rank独立分区设备入口与完整真机示例见
+[源分区README](pull_combine/README.md)和[协议说明](pull_combine/SOURCE_PARTITIONS.md)。
+它们已在基本NPU测试中直接衔接真实Dispatch Journal与Combine。
+下面的SingleIncSession前端示例仍需BackendOps适配新分区视图与launcher，不能自动切换协议。
 
 业务热路径只需要保留 `Dispatch → Expert → Combine`。所有数组均为设备指针，
 每个 token 的 Top-k GPU、Expert 与 Weight 和 Hidden 一起属于该 Wave 的 Source

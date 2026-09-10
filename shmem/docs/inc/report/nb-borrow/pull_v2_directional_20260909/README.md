@@ -1,5 +1,8 @@
 # nb-borrow Pull V2 单方向有效带宽（2026-09-09）
 
+> 本页是旧紧凑布局的历史记录，保留当时数据和门槛。当前源分区讲解已撤去旧raw百分比gate，
+> 改用多打一实测峰值参照；当前协议与资格范围见[源分区报告](../source_partitions_20260910/README.md)。
+
 本报告采用当前约定的唯一性能口径：
 
 - Dispatch：`fan-out 下行 hidden 总字节 / 完整 Dispatch 时间`；
