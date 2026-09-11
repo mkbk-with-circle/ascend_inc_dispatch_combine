@@ -34,8 +34,10 @@ B消费D已完成的源s分区                 INC等待本源真实Journal封�
   ↓ 专家计算、本地加权归约              ↓ 分段并行校验token及贡献，合并检查段间边界
 准备partial[ring][s][r]和128B READY
   ↓
-发布64B Notice到[s][ring][B] ───────→ 轮询本Journal实际需要的B
-                                      ↓ GET本B_s的128B READY
+PUT128B描述到INC，quiet确认可见 ────→ INC保存对应dst/src分区就绪描述
+  ↓
+发布64B Notice到[s][ring][B] ───────→ 轮询路由记录实际需要的dst
+                                      ↓ 读取INC本地128B描述
                                    校验cookie、行数、dtype、分区地址
                                       ↓ 标记该B_s可读
 B_s partial tile被GET ←──────────── 按token贡献记录，等所需B_s并GET
@@ -47,7 +49,7 @@ B_s partial可复用   ←────────────── 本分区So
 A_s结果可消费       ←────────────── Owner Completion
 ```
 
-Notice先触发GET READY，partial按归约任务拉取。真实贡献未到齐仍须等待。
+描述先PUT、Notice后发布；INC不再发起GET READY。partial按归约任务拉取，真实贡献未到齐仍须等待。
 Journal校验仅在本origin组内并行，全部检查通过后才接受所需Notice；摘要留在INC本地。
 每AIV为两输入/两输出各16 KiB，同token下一tile的GET可提前；复用和错误退出均排空事件。
 ACK与Owner Completion可交错到达。分区C直接消费设备D的Journal，Host不构造归约索引。

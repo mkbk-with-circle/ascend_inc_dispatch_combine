@@ -3,6 +3,7 @@
 当前源rank独立分区协议：
 
 - [当前状态](single_inc_LIVE_STATUS.md)
+- [2026-09-11就绪描述随Notice发布与带宽回归](nb-borrow/ready_push_20260911/README.md)
 - [当前源分区正式结果与CSV](nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md)
 - [活跃硬件环境](ACTIVE_HW_PROFILE.md)
 

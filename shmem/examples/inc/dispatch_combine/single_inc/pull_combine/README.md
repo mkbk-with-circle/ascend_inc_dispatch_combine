@@ -12,7 +12,8 @@
 
 - [分区协议与生命周期](SOURCE_PARTITIONS.md)
 - [Dispatch / Combine抽象流程](FLOW.md)
-- [最新已完成测量与版本说明](../../../../../docs/inc/report/nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md)
+- [就绪描述随Notice发布与带宽回归](../../../../../docs/inc/report/nb-borrow/ready_push_20260911/README.md)
+- [前轮数据面正式矩阵](../../../../../docs/inc/report/nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md)
 - [API接通状态](../../../../../docs/inc/API_COMPLETION_STATUS.md)
 
 ## 当前设备入口
@@ -38,15 +39,17 @@ D：A_s准备本wave所有token → 一次READY → INC校验本源metadata/局�
    → GET一份hidden → PUT到各B的[ring][s]分区 → 本源Completion/ACK
 
 B：消费已完成的s分区 → 专家计算、本地加权归约
-   → 写本分区FP32 partial和128B READY → 发布64B Notice到[s][ring][B]
+   → 写FP32 partial → PUT128B描述到INC → quiet → 发布64B Notice到[s][ring][B]
 
-C：等待本源真实Journal封存 → 校验 → 轮询所需B_s的Notice并GET READY
+C：等待真实Dispatch路由记录封存 → 校验 → 轮询Notice并读取INC本地就绪描述
    → 按token/tile GET partial、求和、PUT A_s → 本分区ACK/Owner Completion
 ```
 
 目标与partial为[ring][origin][R][H]。R由最大容量决定，局部行号r不依赖其他origin数量。
 D每个源/wave一次READY；C每个B/源分区/wave一次Notice，不再是所有分区一起准备才通知。
 没有该源贡献的B不会被拉取；真实归约贡献未到齐仍须等待。
+128B描述和64B Notice按顺序一起发布，省去GET READY往返；原结构、接口和数据面算法保持不变。
+发送端和INC须使用同一版本；历史带宽数据的版本说明及新控制路径回归见报告。
 
 本机每算子预算为live AIV数的一半，按origin执行组分配。规则/变化路由的对齐D路径
 分别采用双缓冲和三缓冲；C为两输入、两输出各16 KiB，共64 KiB，低于本机后端192 KiB UB上限。
@@ -85,5 +88,5 @@ python3 shmem/examples/inc/dispatch_combine/single_inc/pull_combine/tests/pull_v
 当前讲解已撤去旧raw百分比gate；不把峰值测试均值标成严格物理理论上限。
 
 完整算子D只计fan-out下行字节，C只计参与归约的上行字节，均除以完整调用时间。
-最新随机矩阵每配置30个测量样本，见上方正式结果报告。规则路由W4/K4仍有明显波动，
+未修改的D数据面保留30样本矩阵；新通知流程C另有同卡组A/B及平面A每配置10次复测。前轮规则W4/K4有明显波动，
 不宣称全workload性能目标满足。历史短测与旧版本压力测试数量不转作当前资格证明。

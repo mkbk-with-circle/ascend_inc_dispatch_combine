@@ -594,14 +594,11 @@ __aicore__ inline bool PollRequiredSources(
                 SetFailure(status, kStatusInvalidReady);
                 return false;
             }
-            __gm__ CombineReadyV2 *remote =
+            // dst pushed this descriptor before publishing Notice. Read the
+            // INC-local symmetric copy; no remote GET of control metadata.
+            __gm__ CombineReadyV2 *ready =
                 reinterpret_cast<__gm__ CombineReadyV2 *>(ready_records) +
                 source;
-            __gm__ CombineReadyV2 *ready =
-                reinterpret_cast<__gm__ CombineReadyV2 *>(ready_staging) +
-                source;
-            aclshmem_getmem(ready, remote, sizeof(*ready),
-                            static_cast<int32_t>(source));
             dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(ready));
             dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(ready) +
                            kPullCombineV2Alignment);
@@ -1095,6 +1092,10 @@ void inc_dc_partitioned_combine_kernel(
             dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(ready) +
                            kPullCombineV2Alignment);
             AscendC::PipeBarrier<PIPE_ALL>();
+            // Keep the wire records and payload path unchanged. Release the
+            // complete READY descriptor to INC before the 64B notification.
+            aclshmem_putmem(ready, ready, sizeof(*ready), inc_pe);
+            aclshmem_quiet();
             __gm__ CombineReadyNoticeV2 *notice =
                 reinterpret_cast<__gm__ CombineReadyNoticeV2 *>(
                     ready_notices) + pe;

@@ -94,9 +94,9 @@ static_assert(sizeof(PartitionedCombineTimeline) == 128u,
 // ring/origin offsets are checked and formed on device.
 struct PartitionedCombineLaunchArgs {
     uint8_t *symmetric_partials;
-    uint8_t *ready_records;       // CombineReadyV2[B]
+    uint8_t *ready_records;       // Symmetric CombineReadyV2[B]: dst pushes to INC before Notice
     uint8_t *ready_notices;       // CombineReadyNoticeV2[B]
-    uint8_t *ready_staging;       // INC-local CombineReadyV2[B]
+    uint8_t *ready_staging;       // Reserved for ABI compatibility; no control GET staging needed
     uint8_t *registrations;       // CombineRegionRegistration[B]
     uint8_t *source_acks;          // already [origin][ring], then [B]
     uint8_t *owner_output;         // symmetric [ring][row][hidden]

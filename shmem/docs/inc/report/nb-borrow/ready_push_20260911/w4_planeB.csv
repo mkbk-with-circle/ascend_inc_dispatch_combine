@@ -1,0 +1,7 @@
+case,workers,first_npu,rows,hidden,topk,mode,route,seed,warmup,measure,delay_ms,correct,minimum_gb_s,mean_gb_s,cv_percent,mean_us
+empty,4,8,"0,0,0,0",33,2,chain,random_gpu,17,0,3,0,True,,,,431.163
+ragged_delayed,4,8,"31,0,7,19",33,4,chain,random_expert,17,0,3,100,True,,,,35091.3
+baseline_k2,4,8,"8192,8192,8192,8192",8192,2,combine,random_expert,17,3,10,0,True,70.7686,71.0847,0.240241,26593.9
+push_ready_k2,4,8,"8192,8192,8192,8192",8192,2,combine,random_expert,17,3,10,0,True,70.9753,71.1104,0.173277,26584.2
+baseline_k4,4,8,"8192,8192,8192,8192",8192,4,combine,random_expert,17,3,10,0,True,72.2073,72.3397,0.128447,41195.7
+push_ready_k4,4,8,"8192,8192,8192,8192",8192,4,combine,random_expert,17,3,10,0,True,72.0875,72.2701,0.190872,41235.5

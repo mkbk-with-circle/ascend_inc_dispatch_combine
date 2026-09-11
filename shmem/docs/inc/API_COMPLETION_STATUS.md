@@ -31,4 +31,7 @@ slot复用检查；CPU参考示例验证去重、assignment、weight与归约语
 5. 真机验证当前仅W2/W4；其他规模和集群需重新验证资源预算与性能。
 
 最新正式测量、版本差异及本机链路参照见[当前结果](report/nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md)。
+
+2026-09-11：分区Combine改为dst先PUT128B描述到INC，再发布64B Notice；INC读取本地描述。
+LaunchArgs布局与调用参数不变，ready_staging保留兼容；同版库须用于所有rank。见[回归报告](report/nb-borrow/ready_push_20260911/README.md)。
 当前PPT保留8页详细流程，已去掉基础原理总览和独立“完成条件与当前边界”页。

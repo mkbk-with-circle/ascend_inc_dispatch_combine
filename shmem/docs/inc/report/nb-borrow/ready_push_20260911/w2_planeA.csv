@@ -1,0 +1,5 @@
+case,workers,first_npu,rows,hidden,topk,mode,route,seed,warmup,measure,delay_ms,correct,minimum_gb_s,mean_gb_s,cv_percent,mean_us
+empty,2,0,"0,0",33,2,chain,random_gpu,17,0,3,0,True,,,,425.138
+ragged_delayed,2,0,"17,9",33,2,chain,random_expert,17,0,3,100,True,,,,34932
+baseline_k2,2,0,"8192,8192",8192,2,combine,random_expert,17,3,10,0,True,38.4487,38.5954,0.182484,20943.3
+push_ready_k2,2,0,"8192,8192",8192,2,combine,random_expert,17,3,10,0,True,38.5014,38.5924,0.104873,20944.9

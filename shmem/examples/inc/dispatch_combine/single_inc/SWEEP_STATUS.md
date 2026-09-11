@@ -1,5 +1,7 @@
 # 源分区测试状态（2026-09-10）
 
+2026-09-11控制路径更新：128B描述先PUT到INC，随后64B Notice；12个设备case通过，三配置同卡组平均变化均小于0.1%。见[就绪发布回归](../../../../docs/inc/report/nb-borrow/ready_push_20260911/README.md)。
+
 环境为nb-borrow/910B2C，仅同HCCS平面W2+1INC/W4+1INC。
 [当前正式结果、计量口径与CSV](../../../../docs/inc/report/nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md) 是数据入口。
 

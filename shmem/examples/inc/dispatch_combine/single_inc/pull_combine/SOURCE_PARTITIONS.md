@@ -49,7 +49,8 @@ r只在s分区中有意义，不能直接当作B整个缓冲区的全局行号�
 ## Combine
 
 B完成某个源分区s的专家计算与本地加权归约后，准备本分区partial和128B READY，
-再向[s][ring][B]邮箱发布一次64B Notice，无需等待B的其他源分区一起算完。
+先将128B就绪描述PUT到INC的同名对称区域，quiet确认可见后，再向[s][ring][B]邮箱发布64B Notice。
+这是一次按序就绪发布，复用两个原有记录，并非新建192B报文；无需等待其他src分区一起算完。
 
 INC首先等待本源的真实Dispatch Journal封存并校验。
 本源组内各AIV校验连续token区间，再合并检查跨区间的目标行和assignment连续性；
@@ -60,8 +61,11 @@ INC首先等待本源的真实Dispatch Journal封存并校验。
 不依赖Host预生成PullPlan、heads、pull_next或results。
 dispatch_cookie=0可从身份匹配的sealed Journal取得cookie，之后READY必须匹配它。
 
-仅轮询Journal实际需要的B。Notice校验后GET 128B READY，再检查cookie、行数、dtype、
+仅轮询路由记录实际需要的B。Notice校验后读取INC本地的128B描述，再检查cookie、行数、dtype、
 分区偏移、容量和publication。partial在归约任务执行到相应token/tile时按需GET：
+
+Combine不再向dst发起GET READY。描述写入完成先于Notice发布；partial与描述在ACK前保持有效。
+`ready_records`复用原对称缓冲，`ready_staging`保留以兼容现有参数和布局，当前不再作为远端GET暂存区。
 
 ```text
 partial tile地址 = B.partials_base + READY.source_offset
@@ -109,4 +113,4 @@ W2约42.7、W4约85.5 GB/s，来自历史put-only峰值定标的均值。
 这是实测参照，不是严格物理理论上限；本轮未重跑定标，也未另设百分比门槛。
 算子仍按D下行/C上行有效字节除以完整算子时间，与同卡组旧算子比较回退。
 
-详细数据与来源见[当前正式结果](../../../../../docs/inc/report/nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md)。
+当前控制路径回归及新版本测量见[就绪发布报告](../../../../../docs/inc/report/nb-borrow/ready_push_20260911/README.md)；完整数据面矩阵见[前轮正式结果](../../../../../docs/inc/report/nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md)。
