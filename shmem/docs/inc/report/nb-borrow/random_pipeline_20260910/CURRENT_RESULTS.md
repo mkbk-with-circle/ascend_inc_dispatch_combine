@@ -53,7 +53,7 @@ H8192、64 experts、每源8192 tokens=128 MiB BF16 hidden。同GPU多expert去�
 D默认每源1 producer+1 publisher，其余搬运。C分段并行校验Journal，再合并检查段间row/assignment连续性。
 C两输入/两输出各16 KiB，总64 KiB；校验摘要每origin/ring为block_dim×W×64B，由planner分配，不增加网络消息。
 延迟READY、空源、非对齐H、K8和ring复用已有通过记录；错误owner注入返回InvalidJournal=2，随后合法D→C恢复通过。
-不等于穷尽故障或所有性能目标。进一步+10%目标未全部满足，见[过程记录](TEN_PERCENT.md)。
+不等于穷尽故障或所有性能目标。进一步+10%目标未全部满足，过程记录可从Git标签 `archive/pre-sync-cleanup-20260911` 恢复。
 
 平面A Combine库SHA256为 `7e82ff141daadd7a03eb64e333442847862a8b2d5ecaa644dd8773be090842c7`。
 开发树另有带溢出检查的行偏移优化，平面B库为 `c9bea135304df5e8b265a8a4d329e2ef81cc678714b3dacd7a4955571b6e2fee`，未混入平面A表。

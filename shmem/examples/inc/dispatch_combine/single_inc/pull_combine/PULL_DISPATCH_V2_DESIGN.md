@@ -27,5 +27,5 @@ D只计fan-out下行有效字节，C只计参与归约的上行有效字节，�
 按用户最新要求移除旧raw百分比gate，当前采用已有多打一实测峰值参照：
 W2约42.7、W4约85.5 GB/s。峰值参照不替代完整算子同卡组无回退比较。
 
-最新已完成测量和待完成项见[源分区报告](../../../../../docs/inc/report/nb-borrow/source_partitions_20260910/README.md)。
+最新已完成测量和待完成项见[源分区报告](../../../../../docs/inc/report/nb-borrow/ready_push_20260911/README.md)。
 之前按全局紧凑前缀发号的实现/设计可由archive/pre-source-partitions-a230a1b恢复。

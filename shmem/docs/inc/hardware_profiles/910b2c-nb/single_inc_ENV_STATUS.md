@@ -1,7 +1,7 @@
 # Single-INC Pull V2 — 910b2c-nb 环境状态
 
 本页记录nb-borrow硬件事实及已有链路定标。当前源分区协议的资格范围以
-[分区报告](../../report/nb-borrow/source_partitions_20260910/README.md)为准；下方旧压力数据仅作历史对照。
+[分区报告](../../report/nb-borrow/ready_push_20260911/README.md)为准；下方旧压力数据仅作历史对照。
 
 ## 环境
 
@@ -65,7 +65,7 @@ Dispatch使用下行hidden字节、Combine使用上行partial字节，均除以�
 
 ## 报告入口
 
-- 当前源分区：`docs/inc/report/nb-borrow/source_partitions_20260910/README.md`
+- 当前源分区：`docs/inc/report/nb-borrow/ready_push_20260911/README.md`
 - 历史紧凑布局：`docs/inc/report/nb-borrow/pull_v2_directional_20260909/README.md`
 
 原始 JSONL、PE 日志和 build 产物保存在实验机本地，不进入 Git。

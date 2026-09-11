@@ -1,7 +1,7 @@
 # 源分区Dispatch / Combine验收计划
 
 这是待执行矩阵与判定原则；不是全部测试已经完成的声明。
-当前已完成结果见[源分区报告](../../../../../../docs/inc/report/nb-borrow/source_partitions_20260910/README.md)。
+当前已完成结果见[源分区报告](../../../../../../docs/inc/report/nb-borrow/ready_push_20260911/README.md)。
 
 ## 性能口径
 
