@@ -3,7 +3,7 @@
 当前源rank独立分区协议：
 
 - [当前状态](single_inc_LIVE_STATUS.md)
-- [源分区测量与链路峰值参照](nb-borrow/source_partitions_20260910/README.md)
+- [当前源分区正式结果与CSV](nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md)
 - [活跃硬件环境](ACTIVE_HW_PROFILE.md)
 
 历史紧凑布局对照：

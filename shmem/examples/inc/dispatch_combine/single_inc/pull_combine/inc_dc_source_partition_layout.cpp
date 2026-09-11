@@ -383,7 +383,11 @@ SourcePartitionLayoutStatus BuildSourcePartitionLayout(
     // pull plan: it stages READY records and derives contributor traversal
     // from this origin's sealed Journal on device.
     cursor = 0u;
-    if (!AppendArray(config.worker_count, sizeof(CombineReadyV2), &cursor,
+    built.inc_combine.validation_scratch_bytes =
+        static_cast<uint64_t>(config.dispatch_aiv_per_origin) * config.worker_count * 64u;
+    if (!Append(built.inc_combine.validation_scratch_bytes, &cursor,
+                &built.inc_combine.validation_scratch_offset) ||
+        !AppendArray(config.worker_count, sizeof(CombineReadyV2), &cursor,
                      &built.inc_combine.ready_staging_offset) ||
         !AppendArray(config.worker_count,
                      kPartitionedCombineSourceScratchBytes, &cursor,

@@ -2873,8 +2873,10 @@ extern "C" void launch_inc_dc_partitioned_dispatch(uint32_t block_dim, void *str
     if (args == nullptr) return;
     uint32_t channels = args->channels_per_source;
     if (channels == 0u) {
-        const uint32_t available = block_dim > 3u ? block_dim - 3u : 1u;
-        channels = available < kDefaultChannelsPerSource ? available : kDefaultChannelsPerSource;
+        // Each origin owns its metadata and row-map partition. Reserve one
+        // producer and one publication lane; use the remaining AIVs for
+        // hidden relay rather than retaining the old multi-source lane cap.
+        channels = block_dim > 2u ? block_dim - 2u : 1u;
     }
     inc_dc_pull_dispatch_v2_device_kernel<true><<<block_dim, nullptr, stream>>>(
         args->source_region, args->ready_mailbox, args->inc_slots, args->source_acks,

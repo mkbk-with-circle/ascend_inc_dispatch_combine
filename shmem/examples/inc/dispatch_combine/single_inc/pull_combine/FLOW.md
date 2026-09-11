@@ -31,7 +31,7 @@ INC验证Worker提示。其他源可以尚未READY，先到源仍可完成自己
 
 ```text
 B消费D已完成的源s分区                 INC等待本源真实Journal封存
-  ↓ 专家计算、本地加权归约              ↓ 校验本源token及贡献记录
+  ↓ 专家计算、本地加权归约              ↓ 分段并行校验token及贡献，合并检查段间边界
 准备partial[ring][s][r]和128B READY
   ↓
 发布64B Notice到[s][ring][B] ───────→ 轮询本Journal实际需要的B
@@ -48,6 +48,8 @@ A_s结果可消费       ←────────────── Owner Com
 ```
 
 Notice先触发GET READY，partial按归约任务拉取。真实贡献未到齐仍须等待。
+Journal校验仅在本origin组内并行，全部检查通过后才接受所需Notice；摘要留在INC本地。
+每AIV为两输入/两输出各16 KiB，同token下一tile的GET可提前；复用和错误退出均排空事件。
 ACK与Owner Completion可交错到达。分区C直接消费设备D的Journal，Host不构造归约索引。
 
 不同origin或不同可用ring slot可使用独立stream；同一origin的C依赖其D Journal封存。

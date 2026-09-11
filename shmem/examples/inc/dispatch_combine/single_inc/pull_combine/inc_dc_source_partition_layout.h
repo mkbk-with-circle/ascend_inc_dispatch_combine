@@ -100,6 +100,8 @@ struct IncJournalLayout {
 };
 
 struct IncCombineWorkspaceLayout {
+    uint64_t validation_scratch_offset = 0u;
+    uint64_t validation_scratch_bytes = 0u;
     uint64_t ready_staging_offset = 0u;
     uint64_t source_state_offset = 0u;
     uint64_t source_payload_offsets_offset = 0u;

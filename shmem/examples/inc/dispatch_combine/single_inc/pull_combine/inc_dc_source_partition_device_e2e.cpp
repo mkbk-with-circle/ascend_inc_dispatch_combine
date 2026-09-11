@@ -970,6 +970,9 @@ PartitionedCombineLaunchArgs MakeCombineArgs(
     args.journal_token_capacity = layout.row_capacity;
     args.journal_contributor_capacity = layout.contributor_capacity;
     args.source_scratch_capacity = options.workers;
+    args.validation_scratch = inc_combine->data + combine_workspace +
+        layout.inc_combine.validation_scratch_offset;
+    args.validation_scratch_capacity_bytes = layout.inc_combine.validation_scratch_bytes;
     args.spin_cap = kSpinCap;
     args.worker_count = options.workers;
     args.hidden = options.hidden;
@@ -1574,6 +1577,24 @@ int main(int argc, char **argv)
         if (options.mode == Mode::COMBINE) {
             // D, actual metadata validation, and the local-FFN placeholder
             // are complete before the C-only communication timer starts.
+            // Opt-in negative qualification only; never used by performance suites.
+            const char *fault = std::getenv("INC_DC_PARTITION_TEST_BAD_OWNER");
+            if (status == ACL_SUCCESS && options.pe == inc_pe &&
+                iteration == 0u && fault != nullptr && std::strcmp(fault, "1") == 0 &&
+                RowsFor(options, 0u, iteration) != 0u) {
+                const auto probe_args = MakeCombineArgs(
+                    options, layout, 0u, ring, generation, sequence, wave, inc_pe,
+                    &combine_partials, &combine_ready, &combine_notices,
+                    &combine_registrations, &combine_acks, &owner_output,
+                    &owner_completions, &inc_dispatch, &inc_journal, &inc_combine);
+                auto *entry = probe_args.journal_tokens +
+                    (RowsFor(options, 0u, iteration) / 2u) * sizeof(JournalTokenEntry);
+                JournalTokenEntry token{};
+                if (!CopyFromDevice(&token, entry)) status = 1;
+                token.owner_rank = options.workers;
+                if (!CopyToDevice(entry, token)) status = 1;
+                std::cerr << "[INJECTED] invalid journal owner at middle token\n";
+            }
             if (status == ACL_SUCCESS) aclshmem_barrier_all();
             operation_begin = std::chrono::steady_clock::now();
             for (uint32_t origin : launch_order) {
@@ -1596,6 +1617,13 @@ int main(int argc, char **argv)
                 status = aclrtSynchronizeStream(streams[origin]);
         if (options.mode != Mode::DISPATCH)
             operation_end = std::chrono::steady_clock::now();
+        if (options.pe == inc_pe && options.mode == Mode::COMBINE &&
+            std::getenv("INC_DC_PARTITION_TEST_BAD_OWNER") != nullptr) {
+            PartitionedCombineTimeline fault_timeline{};
+            if (CopyFromDevice(&fault_timeline, inc_combine.data +
+                    IncCombineBase(layout, 0u, ring) + layout.inc_combine.timeline_offset))
+                std::cerr << "[FAULT_STATUS] " << fault_timeline.status << '\n';
+        }
         if (status == ACL_SUCCESS) aclshmem_barrier_all();
         bool wave_correct = status == ACL_SUCCESS;
         std::vector<uint64_t> dispatch_ready_cycles(options.workers, 0u);

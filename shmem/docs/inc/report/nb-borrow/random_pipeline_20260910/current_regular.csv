@@ -1,0 +1,7 @@
+case,workers,first_npu,rows,hidden,topk,mode,route,seed,warmup,measure,delay_ms,correct,minimum_gb_s,mean_gb_s,cv_percent,mean_us
+dispatch_w2_k2,2,8,"8192,8192",8192,2,dispatch,sym_k2_balanced,17,3,10,0,True,38.468,38.52,0.0877258,13937.5
+combine_w2_k2,2,8,"2048,2048",8192,2,combine,sym_k2_balanced,17,3,10,0,True,39.8274,39.8977,0.0699399,6728.09
+dispatch_w4_k2,4,8,"8192,8192,8192,8192",8192,2,dispatch,sym_k2_balanced,17,3,10,0,True,74.0536,74.336,0.24414,14444.5
+combine_w4_k2,4,8,"2048,2048,2048,2048",8192,2,combine,sym_k2_balanced,17,3,10,0,True,78.8749,78.9605,0.0763978,6799.24
+dispatch_w4_k4,4,8,"8192,8192,8192,8192",8192,4,dispatch,sym_k4_gpu4,17,3,10,0,True,54.3288,57.4265,5.06369,37484.6
+combine_w4_k4,4,8,"1024,1024,1024,1024",8192,4,combine,sym_k4_gpu4,17,3,10,0,True,66.3249,67.3938,0.850852,7966.76

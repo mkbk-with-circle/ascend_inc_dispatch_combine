@@ -57,6 +57,11 @@ SourcePartitionLayout MakeLayout(
 void TestConfiguredCapacitiesAndStrides()
 {
     const SourcePartitionLayout layout = MakeLayout();
+    CHECK(layout.inc_combine.validation_scratch_bytes == 6u * 3u * 64u);
+    CHECK(Aligned64(layout.inc_combine.validation_scratch_offset));
+    CHECK(layout.inc_combine.validation_scratch_offset +
+              layout.inc_combine.validation_scratch_bytes <=
+          layout.inc_combine.ready_staging_offset);
     CHECK(layout.dtype_bytes == 2u);
     CHECK(layout.row_capacity == 64u);
     CHECK(layout.assignment_capacity == 8u);
@@ -129,9 +134,12 @@ void TestConfiguredCapacitiesAndStrides()
           partitions * layout.inc_journal.partition_stride);
     CHECK(layout.inc_combine.arena_bytes ==
           partitions * layout.inc_combine.partition_stride);
-    CHECK(layout.inc_combine.ready_staging_offset == 0u);
+    CHECK(layout.inc_combine.validation_scratch_offset == 0u);
+    CHECK(layout.inc_combine.ready_staging_offset ==
+          layout.inc_combine.validation_scratch_bytes);
     CHECK(layout.inc_combine.source_state_offset ==
-          layout.config.worker_count * sizeof(CombineReadyV2));
+          layout.inc_combine.ready_staging_offset +
+              layout.config.worker_count * sizeof(CombineReadyV2));
     CHECK(layout.inc_combine.source_payload_offsets_offset ==
           layout.inc_combine.source_state_offset +
               layout.config.worker_count *

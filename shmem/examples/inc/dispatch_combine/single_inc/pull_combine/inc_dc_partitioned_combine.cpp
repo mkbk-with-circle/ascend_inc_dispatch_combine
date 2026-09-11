@@ -12,9 +12,11 @@ using namespace inc::dc::pull_v2;
 // derived from another origin's actual row count.
 namespace {
 
-// Two input buffers plus one output buffer: 3 x 8 KiB stays within the
-// ordinary 24-KiB AIV budget. Next-tile GET overlaps current output PUT.
-constexpr uint32_t kTileElements = 2048u;
+// Use one backend transport packet per input/output buffer. Four buffers
+// use 64 KiB on this backend, below its 192-KiB UB limit. The old 24-KiB budget is a software
+// tile budget, not this SHMEM backend's physical UB bound (ub_limit).
+// The launch still uses only its assigned ordinary AIVs.
+constexpr uint32_t kTileElements = inc::dc::kIncDcPrivateMtePacketBytes / sizeof(float);
 constexpr uint32_t kTileBytes = kTileElements * sizeof(float);
 constexpr uint64_t kHashOffset = 1469598103934665603ull;
 constexpr uint64_t kSourceScratchStride =
@@ -29,8 +31,6 @@ constexpr uint32_t kVecPongVMte2 = 3u;
 constexpr uint32_t kVecMte3V = 4u;
 constexpr uint32_t kVecVMte3 = 5u;
 
-static_assert(kTileBytes * 3u <= INC_VEC_UB_BUDGET_BYTES,
-              "partitioned Combine buffers exceed AIV UB");
 
 // Numeric values deliberately match CombineV2Status.
 constexpr uint32_t kStatusOk = 0u;
@@ -87,6 +87,19 @@ __attribute__((optnone)) __aicore__ inline bool CheckedMulU64ByU32(
 __aicore__ inline uint64_t DeviceRouteKey(uint32_t owner, uint32_t row)
 {
     return (static_cast<uint64_t>(owner) << 32u) | row;
+}
+
+// Keep overflow validation, but avoid optnone software 64-bit divide/multiply
+// for power-of-two row strides. Non-power-of-two H retains the exact fallback.
+__aicore__ inline bool CheckedRowOffset(uint64_t bytes, uint32_t row,
+                                      uint32_t shift, uint64_t *offset)
+{
+    if (shift < 64u) {
+        if (static_cast<uint64_t>(row) > (~0ull >> shift)) return false;
+        *offset = static_cast<uint64_t>(row) << shift;
+        return true;
+    }
+    return CheckedMulU64ByU32(bytes, row, offset);
 }
 
 __aicore__ inline uint64_t HashByte(uint64_t hash, uint8_t value)
@@ -655,8 +668,15 @@ __aicore__ inline bool ReduceJournalTaskRange(
     __gm__ uint32_t *status)
 {
     __ubuf__ uint8_t *input0_ub = reinterpret_cast<__ubuf__ uint8_t *>(0);
+    uint32_t row_shift = 0u;
+    uint64_t stride = row_bytes;
+    while (stride > 1u && (stride & 1u) == 0u) { ++row_shift; stride >>= 1u; }
+    if (stride != 1u) row_shift = 64u;
+    static_assert(kTileBytes * 4u <= ub_limit,
+                  "partitioned Combine buffers exceed backend AIV UB");
     __ubuf__ uint8_t *input1_ub = input0_ub + kTileBytes;
     __ubuf__ uint8_t *output0_ub = input1_ub + kTileBytes;
+    __ubuf__ uint8_t *output1_ub = output0_ub + kTileBytes;
     AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPingVMte2);
     AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(kVecPongVMte2);
     AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
@@ -666,7 +686,7 @@ __aicore__ inline bool ReduceJournalTaskRange(
     uint64_t registered_offsets[kPullDispatchMaxWorkers];
     uint64_t ready_low = 0u, ready_high = 0u;
     uint32_t cached_token = ~0u;
-    uint32_t count = 0u, rotation = 0u;
+    uint32_t count = 0u, rotation = 0u, output_ping = 0u;
     bool prefetched = false;
     bool prefetched_second = false;
     __gm__ float *owner_output = nullptr;
@@ -702,7 +722,7 @@ __aicore__ inline bool ReduceJournalTaskRange(
                 break;
             }
             uint64_t owner_row_offset = 0u;
-            if (!CheckedMulU64ByU32(row_bytes, token->owner_row,
+            if (!CheckedRowOffset(row_bytes, token->owner_row, row_shift,
                                     &owner_row_offset)) {
                 SetFailure(status, kStatusSizeOverflow);
                 ok = false;
@@ -733,8 +753,8 @@ __aicore__ inline bool ReduceJournalTaskRange(
                 }
                 sources[i] = source;
                 MarkSource(&seen_low, &seen_high, source);
-                if (!CheckedMulU64ByU32(row_bytes,
-                        contributor->destination_row, &row_offsets[i])) {
+                if (!CheckedRowOffset(row_bytes,
+                        contributor->destination_row, row_shift, &row_offsets[i])) {
                     SetFailure(status, kStatusSizeOverflow);
                     ok = false;
                     break;
@@ -764,11 +784,10 @@ __aicore__ inline bool ReduceJournalTaskRange(
         const uint32_t elements = static_cast<uint32_t>(
             hidden - element_begin < kTileElements ?
                 hidden - element_begin : kTileElements);
-        __ubuf__ uint8_t *output_ub = output0_ub;
+        __ubuf__ uint8_t *output_ub = output_ping == 0u ? output0_ub : output1_ub;
         AscendC::LocalTensor<float> output =
             IncVecBindFloatUb(output_ub, elements * sizeof(float));
         if (count == 0u) {
-            AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
             AscendC::Duplicate(output, 0.0f, elements);
             AscendC::PipeBarrier<PIPE_V>();
         }
@@ -801,8 +820,6 @@ __aicore__ inline bool ReduceJournalTaskRange(
                 AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(
                     kVecPongMte2V);
             if (use_prefetch) prefetched = false;
-            if (done == 0u)
-                AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
             AscendC::LocalTensor<float> input0 =
                 IncVecBindFloatUb(input0_ub, elements * sizeof(float));
             AscendC::LocalTensor<float> input1 =
@@ -852,9 +869,11 @@ __aicore__ inline bool ReduceJournalTaskRange(
             }
             prefetched = true;
         }
+        AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(kVecMte3V);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(kVecVMte3);
         PutFp32ToOwner(output_ub, owner_output + element_begin, elements,
                        static_cast<int32_t>(origin));
+        output_ping ^= 1u;
         if (++rotation >= count) rotation = 0u;
     }
     // An asynchronous error can stop the next iteration after its GET was
@@ -874,6 +893,139 @@ __aicore__ inline bool ReduceJournalTaskRange(
     return ok && *status == kStatusOk;
 }
 
+// Independent immutable token ranges; block-zero merges all row boundaries.
+__aicore__ inline void ValidateJournalRange(
+    __gm__ uint8_t *journal_tokens, __gm__ uint8_t *journal_contributors,
+    __gm__ uint8_t *destination_row_counts, __gm__ uint8_t *scratch,
+    uint32_t token_count, uint32_t contributor_count,
+    uint32_t workers, uint32_t origin, uint32_t block, uint32_t blocks)
+{
+        uint32_t local_status = kStatusOk;
+        FlushRange(destination_row_counts, MulU64ByU32(sizeof(uint32_t), workers));
+        uint32_t *status = &local_status;
+        const uint32_t token_begin = static_cast<uint32_t>(MulU64ByU32(token_count, block) / blocks);
+        const uint32_t token_end = static_cast<uint32_t>(MulU64ByU32(token_count, block + 1u) / blocks);
+        __gm__ uint32_t *summary = reinterpret_cast<__gm__ uint32_t *>(
+            scratch + MulU64ByU32(MulU64ByU32(64u, workers), block));
+        {
+            __gm__ JournalTokenEntry *tokens =
+                reinterpret_cast<__gm__ JournalTokenEntry *>(journal_tokens);
+            __gm__ JournalContributor *contributors =
+                reinterpret_cast<__gm__ JournalContributor *>(
+                    journal_contributors);
+            __gm__ uint32_t *row_counts =
+                reinterpret_cast<__gm__ uint32_t *>(destination_row_counts);
+            uint32_t next_row[kPullDispatchMaxWorkers];
+            uint32_t next_assignment[kPullDispatchMaxWorkers];
+            for (uint32_t source = 0u; source < workers; ++source) {
+                next_row[source] = 0xffffffffu;
+                next_assignment[source] = 0u;
+                for (uint32_t f = 0u; f < 16u; ++f) summary[source * 16u + f] = 0u;
+                summary[source * 16u + 1u] = 0xffffffffu;
+            }
+            uint64_t contributor_cursor = 0u;
+            uint64_t source_assignment_cursor = 0u;
+            if (token_begin != 0u) {
+                __gm__ JournalTokenEntry *previous = tokens + token_begin - 1u;
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(previous));
+                if (!AddU64(previous->contributors_begin, previous->contributors_count, &contributor_cursor) ||
+                    contributor_cursor > contributor_count ||
+                    !AddU64(previous->assignments_begin, previous->assignments_count, &source_assignment_cursor) ||
+                    source_assignment_cursor > 0xffffffffull)
+                    *status = kStatusInvalidJournal;
+            }
+            if (contributor_cursor < contributor_count)
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(contributors + contributor_cursor));
+            for (uint32_t t = token_begin;
+                 t < token_end && *status == kStatusOk; ++t) {
+                __gm__ JournalTokenEntry *token = tokens + t;
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(token));
+                uint64_t contributor_end = 0u;
+                uint64_t source_assignment_end = 0u;
+                if (token->route_key != DeviceRouteKey(origin, t) ||
+                    token->owner_rank != origin ||
+                    token->owner_row != t || token->accumulator_index != t ||
+                    token->contributors_begin != contributor_cursor ||
+                    token->contributors_count > workers ||
+                    !AddU64(contributor_cursor,
+                            token->contributors_count, &contributor_end) ||
+                    contributor_end > contributor_count ||
+                    token->assignments_begin != source_assignment_cursor ||
+                    !AddU64(source_assignment_cursor,
+                            token->assignments_count,
+                            &source_assignment_end) ||
+                    source_assignment_end > 0xffffffffull ||
+                    token->flags != 0u || token->reserved[0] != 0u ||
+                    token->reserved[1] != 0u) {
+                    *status = kStatusInvalidJournal;
+                    break;
+                }
+                uint64_t seen_low = 0u, seen_high = 0u;
+                uint64_t token_assignments = 0u;
+                for (uint32_t i = 0u; i < token->contributors_count; ++i) {
+                    __gm__ JournalContributor *contributor =
+                        contributors + contributor_cursor + i;
+                    if (((contributor_cursor + i) & 3u) == 0u)
+                        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
+                            contributor));
+                    const uint32_t source = contributor->worker_rank;
+                    uint64_t assignment_end = 0u;
+                    if (source >= workers ||
+                        SeenSource(seen_low, seen_high, source)) {
+                        *status = source < workers ?
+                            kStatusDuplicateSource : kStatusInvalidJournal;
+                        break;
+                    }
+                    if (next_row[source] == 0xffffffffu) {
+                        next_row[source] = contributor->destination_row;
+                        next_assignment[source] = contributor->assignment_begin;
+                        summary[source * 16u + 1u] = next_row[source];
+                        summary[source * 16u + 3u] = next_assignment[source];
+                    }
+                    if (contributor->destination_row != next_row[source] ||
+                        contributor->destination_row >= row_counts[source] ||
+                        contributor->assignment_count == 0u ||
+                        contributor->assignment_begin !=
+                            next_assignment[source] ||
+                        !AddU64(contributor->assignment_begin,
+                                contributor->assignment_count,
+                                &assignment_end) ||
+                        assignment_end > 0xffffffffull ||
+                        !AddU64(token_assignments,
+                                contributor->assignment_count,
+                                &token_assignments) ||
+                        token_assignments > token->assignments_count) {
+                        *status = kStatusInvalidJournal;
+                        break;
+                    }
+                    MarkSource(&seen_low, &seen_high, source);
+                    ++next_row[source];
+                    next_assignment[source] =
+                        static_cast<uint32_t>(assignment_end);
+
+                }
+                if (*status != kStatusOk) break;
+                if (token_assignments != token->assignments_count) {
+                    *status = kStatusInvalidJournal;
+                    break;
+                }
+                contributor_cursor = contributor_end;
+                source_assignment_cursor = source_assignment_end;
+            }
+            if (*status == kStatusOk && token_end == token_count &&
+                contributor_cursor != contributor_count)
+                *status = kStatusInvalidJournal;
+            for (uint32_t source = 0u; source < workers; ++source) {
+                summary[source * 16u + 2u] = next_row[source];
+                summary[source * 16u + 4u] = next_assignment[source];
+            }
+            summary[0] = local_status;
+            AscendC::PipeBarrier<PIPE_ALL>();
+            FlushRange(reinterpret_cast<__gm__ uint8_t *>(summary), MulU64ByU32(64u, workers));
+        }
+
+}
+
 } // namespace
 
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__
@@ -883,13 +1035,13 @@ void inc_dc_partitioned_combine_kernel(
     GM_ADDR source_acks, GM_ADDR owner_output, GM_ADDR owner_completions,
     GM_ADDR journal_header, GM_ADDR journal_tokens,
     GM_ADDR journal_contributors, GM_ADDR destination_row_counts,
-    GM_ADDR source_state, GM_ADDR source_payload_offsets,
+    GM_ADDR source_state, GM_ADDR source_payload_offsets, GM_ADDR validation_scratch,
     GM_ADDR status_line, uint64_t ffts_addr, uint64_t session_id,
     uint64_t placement_epoch, uint64_t generation, uint64_t sequence,
     uint64_t dispatch_cookie, uint64_t owner_output_slot_stride,
     uint64_t journal_token_capacity,
     uint64_t journal_contributor_capacity,
-    uint64_t source_scratch_capacity, uint64_t spin_cap,
+    uint64_t source_scratch_capacity, uint64_t validation_scratch_capacity_bytes, uint64_t spin_cap,
     uint32_t worker_count, uint32_t hidden, uint32_t origin_rank,
     uint32_t origin_row_capacity, int32_t inc_pe, uint32_t wave,
     uint32_t ring_slot, uint32_t slot_count)
@@ -919,6 +1071,8 @@ void inc_dc_partitioned_combine_kernel(
         slot_count != 0u && spin_cap != 0u &&
         owner_output_slot_stride != 0u &&
         source_scratch_capacity >= worker_count &&
+        validation_scratch != nullptr &&
+        validation_scratch_capacity_bytes >= MulU64ByU32(MulU64ByU32(64u, worker_count), blocks) &&
         journal_token_capacity <= 0xffffffffull &&
         journal_contributor_capacity <= 0xffffffffull &&
         CheckedMulU64ByU32(sizeof(float), hidden, &row_bytes) &&
@@ -1042,104 +1196,6 @@ void inc_dc_partitioned_combine_kernel(
             }
         }
 
-        // The old real journal is canonical per origin: token t belongs to
-        // (origin,t), contributor slices exactly cover M, and each B's local
-        // destination rows are the dense range [0,row_count[B]).
-        if (*status == kStatusOk) {
-            __gm__ JournalTokenEntry *tokens =
-                reinterpret_cast<__gm__ JournalTokenEntry *>(journal_tokens);
-            __gm__ JournalContributor *contributors =
-                reinterpret_cast<__gm__ JournalContributor *>(
-                    journal_contributors);
-            __gm__ uint32_t *row_counts =
-                reinterpret_cast<__gm__ uint32_t *>(destination_row_counts);
-            uint32_t next_row[kPullDispatchMaxWorkers];
-            uint32_t next_assignment[kPullDispatchMaxWorkers];
-            for (uint32_t source = 0u; source < worker_count; ++source) {
-                next_row[source] = 0u;
-                next_assignment[source] = 0u;
-            }
-            uint64_t contributor_cursor = 0u;
-            uint64_t source_assignment_cursor = 0u;
-            for (uint32_t t = 0u;
-                 t < token_count && *status == kStatusOk; ++t) {
-                __gm__ JournalTokenEntry *token = tokens + t;
-                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(token));
-                uint64_t contributor_end = 0u;
-                uint64_t source_assignment_end = 0u;
-                if (token->route_key != DeviceRouteKey(origin_rank, t) ||
-                    token->owner_rank != origin_rank ||
-                    token->owner_row != t || token->accumulator_index != t ||
-                    token->contributors_begin != contributor_cursor ||
-                    token->contributors_count > worker_count ||
-                    !AddU64(contributor_cursor,
-                            token->contributors_count, &contributor_end) ||
-                    contributor_end > contributor_count ||
-                    token->assignments_begin != source_assignment_cursor ||
-                    !AddU64(source_assignment_cursor,
-                            token->assignments_count,
-                            &source_assignment_end) ||
-                    source_assignment_end > 0xffffffffull ||
-                    token->flags != 0u || token->reserved[0] != 0u ||
-                    token->reserved[1] != 0u) {
-                    *status = kStatusInvalidJournal;
-                    break;
-                }
-                uint64_t seen_low = 0u, seen_high = 0u;
-                uint64_t token_assignments = 0u;
-                for (uint32_t i = 0u; i < token->contributors_count; ++i) {
-                    __gm__ JournalContributor *contributor =
-                        contributors + contributor_cursor + i;
-                    if (((contributor_cursor + i) & 3u) == 0u)
-                        dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(
-                            contributor));
-                    const uint32_t source = contributor->worker_rank;
-                    uint64_t assignment_end = 0u;
-                    if (source >= worker_count ||
-                        SeenSource(seen_low, seen_high, source)) {
-                        *status = source < worker_count ?
-                            kStatusDuplicateSource : kStatusInvalidJournal;
-                        break;
-                    }
-                    if (contributor->destination_row != next_row[source] ||
-                        contributor->destination_row >= row_counts[source] ||
-                        contributor->assignment_count == 0u ||
-                        contributor->assignment_begin !=
-                            next_assignment[source] ||
-                        !AddU64(contributor->assignment_begin,
-                                contributor->assignment_count,
-                                &assignment_end) ||
-                        assignment_end > 0xffffffffull ||
-                        !AddU64(token_assignments,
-                                contributor->assignment_count,
-                                &token_assignments) ||
-                        token_assignments > token->assignments_count) {
-                        *status = kStatusInvalidJournal;
-                        break;
-                    }
-                    MarkSource(&seen_low, &seen_high, source);
-                    ++next_row[source];
-                    next_assignment[source] =
-                        static_cast<uint32_t>(assignment_end);
-                    *SourceRequiredAddress(source_state, source) = 1u;
-                }
-                if (*status != kStatusOk) break;
-                if (token_assignments != token->assignments_count) {
-                    *status = kStatusInvalidJournal;
-                    break;
-                }
-                contributor_cursor = contributor_end;
-                source_assignment_cursor = source_assignment_end;
-            }
-            if (*status == kStatusOk &&
-                contributor_cursor != contributor_count)
-                *status = kStatusInvalidJournal;
-            for (uint32_t source = 0u;
-                 source < worker_count && *status == kStatusOk; ++source)
-                if (next_row[source] != row_counts[source])
-                    *status = kStatusInvalidJournal;
-        }
-
         AscendC::PipeBarrier<PIPE_ALL>();
         FlushRange(source_state,
                    MulU64ByU32(kSourceScratchStride, worker_count));
@@ -1153,7 +1209,45 @@ void inc_dc_partitioned_combine_kernel(
     dcci_cacheline(status_line);
     if (*status != kStatusOk) goto finalize;
 
-    // Reload sealed counts on every AIV after block zero's validation. They
+    // Each AIV validates its immutable token range; then merge dense row and
+    // assignment ranges before accepting any source Notice or pulling payload.
+    {
+        __gm__ JournalSlotHeader *header = reinterpret_cast<__gm__ JournalSlotHeader *>(journal_header);
+        dcci_cacheline(journal_header);
+        ValidateJournalRange(journal_tokens, journal_contributors,
+            destination_row_counts, validation_scratch, header->token_count,
+            header->contributor_count, worker_count, origin_rank, block, blocks);
+    }
+    AscendC::SyncAll<true>();
+    if (block == 0u) {
+        for (uint32_t source = 0u; source < worker_count; ++source) {
+            uint32_t next_row = 0u, next_assignment = 0u;
+            for (uint32_t lane = 0u; lane < blocks; ++lane) {
+                __gm__ uint32_t *summary = reinterpret_cast<__gm__ uint32_t *>(
+                    validation_scratch + MulU64ByU32(MulU64ByU32(64u, worker_count), lane) +
+                        MulU64ByU32(64u, source));
+                dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(summary));
+                if (source == 0u && summary[0] != kStatusOk) *status = summary[0];
+                if (summary[1] == 0xffffffffu) continue;
+                if (summary[1] != next_row || summary[3] != next_assignment ||
+                    summary[2] < summary[1] || summary[4] < summary[3])
+                    *status = kStatusInvalidJournal;
+                next_row = summary[2];
+                next_assignment = summary[4];
+            }
+            if (next_row != reinterpret_cast<__gm__ uint32_t *>(destination_row_counts)[source])
+                *status = kStatusInvalidJournal;
+            *SourceRequiredAddress(source_state, source) = next_row != 0u ? 1u : 0u;
+        }
+        FlushRange(source_state, MulU64ByU32(kSourceScratchStride, worker_count));
+        timeline->journal_validated = AscendC::GetSystemCycle();
+        dcci_cacheline(status_line);
+    }
+    AscendC::SyncAll<true>();
+    dcci_cacheline(status_line);
+    if (*status != kStatusOk) goto finalize;
+
+    // Reload sealed counts on every AIV after validation. They
     // are immutable until this origin journal reaches a terminal state.
     {
         __gm__ JournalSlotHeader *header =
@@ -1329,11 +1423,11 @@ extern "C" void launch_inc_dc_partitioned_combine(
         args->source_acks, args->owner_output, args->owner_completions,
         args->journal_header, args->journal_tokens,
         args->journal_contributors, args->destination_row_counts,
-        args->source_state, args->source_payload_offsets, args->status_line,
+        args->source_state, args->source_payload_offsets, args->validation_scratch, args->status_line,
         args->ffts_addr, args->session_id, args->placement_epoch,
         args->generation, args->sequence, args->dispatch_cookie,
         args->owner_output_slot_stride, args->journal_token_capacity,
-        args->journal_contributor_capacity, args->source_scratch_capacity,
+        args->journal_contributor_capacity, args->source_scratch_capacity, args->validation_scratch_capacity_bytes,
         args->spin_cap, args->worker_count, args->hidden, args->origin_rank,
         args->origin_row_capacity, args->inc_pe, args->wave,
         args->ring_slot, args->slot_count);

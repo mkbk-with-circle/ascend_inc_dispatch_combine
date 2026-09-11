@@ -1,37 +1,23 @@
-# Single-INC当前状态：源rank独立分区
+# 当前Single-INC：源rank独立分区
 
-当前开发分支codex/source-partitioned-protocol，回退点archive/pre-source-partitions-a230a1b。
-当前按用户要求先更新PPT与文档，内核优化暂停。
+开发分支 `codex/source-partitioned-protocol`，本轮优化前回退点 `feca99b`。
+D布局与通知按origin隔离；C直接消费真实D Journal，并行校验及段间检查通过后拉取所需贡献。
 
-## 当前协议
+[协议与内存](../../../examples/inc/dispatch_combine/single_inc/pull_combine/SOURCE_PARTITIONS.md) · [抽象流程](../../../examples/inc/dispatch_combine/single_inc/pull_combine/FLOW.md) · [API状态](../API_COMPLETION_STATUS.md) · [最新正式结果及CSV](nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md)
 
-D的目标buffer、metadata、Journal和完成通知按原始源origin隔离。
-固定容量决定各源位置，本源局部布局不等待其他源的READY或实际行数。
-B可逐源分区进行专家计算、本地归约并发布Notice。
-新C直接消费该源的真实设备D Journal，等待实际贡献后归约并回传原始owner。
+平面A随机expert路由，H8192、64 experts、每源128 MiB BF16 hidden，每配置3种子/30测量样本：
 
-[协议及内存布局](../../../examples/inc/dispatch_combine/single_inc/pull_combine/SOURCE_PARTITIONS.md) |
-[抽象流程](../../../examples/inc/dispatch_combine/single_inc/pull_combine/FLOW.md) |
-[API接通状态](../API_COMPLETION_STATUS.md)
-
-## 最近已完成结果
-
-W4、H=8192、K2对称，同卡组平面A：
-
-| 算子 | 旧平均 GB/s（3+10） | 分区最低 GB/s（1+2） | 分区平均 GB/s（1+2） |
+| 算子 | W2/K2平均 GB/s | W4/K2平均 GB/s | W4/K4平均 GB/s |
 |---|---:|---:|---:|
-| Dispatch | 69.596 | 73.872 | 73.921 |
-| Combine | 77.303 | 71.376 | 71.483 |
+| Dispatch | 34.227 | 63.285 | 66.628 |
+| Combine | 38.607 | 71.305 | 72.286 |
 
-D短测提高，C仍回退，尚未通过完整无回退验收。
-W2/W4基本真实D→C、空源、尾部、3轮ring复用和延迟READY独立性检查已通过。
-后续Combine并行Journal校验改动尚未完成设备复测。
+19个case全部PASS。C按实际FP32 partial字节计量，不固定为128 MiB/worker。
+空源、尾部、K8、延迟READY及错误Journal拒绝/恢复已有验证。
+全workload性能目标与无回退尚未全部满足；平面B规则W4/K4有明显带宽波动。
 
-## 链路参照
+D默认每源1 producer+1 publisher，其余搬运。C两输入/两输出各16 KiB，另有本地校验摘要。
+旧24 KiB是软件预算，本机后端UB上限192 KiB。Frontend仍需绑定分区入口，不表示框架接入已完成。
 
-当前讲解不再使用旧raw百分比gate。已有多打一put-only定标均值：
-W2=42.734、W4=85.478 GB/s。它们是链路实测峰值参照，完整算子有额外处理与同步开销。
-D按fan-out下行字节、C按归约上行字节除以完整算子时间，不相加上下行伪造带宽。
-
-[最新分区测量、链路定标来源与验证范围](nb-borrow/source_partitions_20260910/README.md)。
-其他日期报告为历史对照，不作为当前分区版本的全部资格证明。
+历史多打一put-only均值W2=42.734、W4=85.478 GB/s仅作链路实测参照。
+D只计fan-out下行、C只计归约上行，均除以完整方向调用时间。

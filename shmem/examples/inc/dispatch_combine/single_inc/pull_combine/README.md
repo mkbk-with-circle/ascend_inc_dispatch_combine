@@ -12,7 +12,7 @@
 
 - [分区协议与生命周期](SOURCE_PARTITIONS.md)
 - [Dispatch / Combine抽象流程](FLOW.md)
-- [最新已完成测量与链路峰值](../../../../../docs/inc/report/nb-borrow/source_partitions_20260910/README.md)
+- [最新已完成测量与版本说明](../../../../../docs/inc/report/nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md)
 - [API接通状态](../../../../../docs/inc/API_COMPLETION_STATUS.md)
 
 ## 当前设备入口
@@ -49,7 +49,9 @@ D每个源/wave一次READY；C每个B/源分区/wave一次Notice，不再是所�
 没有该源贡献的B不会被拉取；真实归约贡献未到齐仍须等待。
 
 本机每算子预算为live AIV数的一半，按origin执行组分配。规则/变化路由的对齐D路径
-分别采用双缓冲和三缓冲；C为两输入、两输出各6 KiB。非对齐尾部及身份、容量、cookie检查保留。
+分别采用双缓冲和三缓冲；C为两输入、两输出各16 KiB，共64 KiB，低于本机后端192 KiB UB上限。
+D默认每源留1个producer和1个publisher，其余搬运；C分段并行校验Journal，合并检查边界后再GET。
+C的本地校验摘要区由planner分配，须传入validation_scratch及容量。非对齐尾部及身份、容量、cookie检查保留。
 
 ## 构建与运行
 
@@ -67,8 +69,8 @@ python3 shmem/examples/inc/dispatch_combine/single_inc/pull_combine/tests/pull_v
   --first-npu 0 --suite early
 ```
 
-也可选择smoke/performance套件。输出目录须不存在，runner检查整张目标HCCS平面空闲。
-当前正在暂停的Combine并行校验草稿还需接通/重建与复测；最近已经通过的结果范围见报告。
+也可选择smoke/performance/random-stress/combine-regression套件。输出目录须不存在，runner检查整张目标HCCS平面空闲。
+并行校验已有设备验证，包括错误Journal拒绝及合法输入恢复；完整性能目标仍未全部满足。
 
 ## 框架前端适配状态
 
@@ -83,5 +85,5 @@ python3 shmem/examples/inc/dispatch_combine/single_inc/pull_combine/tests/pull_v
 当前讲解已撤去旧raw百分比gate；不把峰值测试均值标成严格物理理论上限。
 
 完整算子D只计fan-out下行字节，C只计参与归约的上行字节，均除以完整调用时间。
-最近W4/K2分区短测平均D=73.921、C=71.4827 GB/s；旧同卡组均值为69.596/77.303。
-D短测提高，C仍回退。旧版本的正式sweep/压力测试数量不能转用为新协议资格证明。
+最新随机矩阵每配置30个测量样本，见上方正式结果报告。规则路由W4/K4仍有明显波动，
+不宣称全workload性能目标满足。历史短测与旧版本压力测试数量不转作当前资格证明。

@@ -30,5 +30,5 @@ slot复用检查；CPU参考示例验证去重、assignment、weight与归约语
 4. 任意token-ID输出顺序的框架适配，以及FP32以外partial精度的设备资格。
 5. 真机验证当前仅W2/W4；其他规模和集群需重新验证资源预算与性能。
 
-最新已完成短测及本机链路峰值见[分区报告](report/nb-borrow/source_partitions_20260910/README.md)。
+最新正式测量、版本差异及本机链路参照见[当前结果](report/nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md)。
 当前PPT保留8页详细流程，已去掉基础原理总览和独立“完成条件与当前边界”页。

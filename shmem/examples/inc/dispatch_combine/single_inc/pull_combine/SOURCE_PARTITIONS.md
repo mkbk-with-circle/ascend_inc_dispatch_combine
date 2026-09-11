@@ -1,8 +1,8 @@
 # 按源 rank 独立分区的 Dispatch / Combine
 
 对应开发分支`codex/source-partitioned-protocol`。回退点为`archive/pre-source-partitions-a230a1b`。
-源分区D→C链路已通过基本真机检查；最近完成的带宽仍是1次预热、2次测量的短测，
-尚未完成无回退验收。当前按用户要求暂停优化，先同步讲解和文档。
+源分区D→C、并行Journal校验和随机路由正式矩阵已有真机验证，
+但尚未完成全workload的无回退与性能目标验收。当前更新讲解与文档，不新增性能改动。
 
 ## 固定容量决定位置，实际数量决定使用范围
 
@@ -41,6 +41,8 @@ r只在s分区中有意义，不能直接当作B整个缓冲区的全局行号�
 非对齐行保留精确宽度搬运，同一源组内仍有必要同步。
 当前通过每origin独立kernel执行组和stream隔离；本机D总预算24 AIV，W4每组6、W2每组12，
 由live核心数计算。当前并非长期驻留的交换机服务。
+默认每源保留一个metadata producer和一个publisher，其余AIV搬运；
+本机W2为10+1+1、W4为4+1+1。显式channels配置仍保留。
 资格程序仍为初始化、计时对齐和轮次复用使用整组Host barrier。延迟READY测试在输入准备
 和barrier之后注入延迟，证明分区/kernel内部无跨源布局等待；业务调用层还需按分区驱动消费。
 
@@ -50,6 +52,10 @@ B完成某个源分区s的专家计算与本地加权归约后，准备本分区
 再向[s][ring][B]邮箱发布一次64B Notice，无需等待B的其他源分区一起算完。
 
 INC首先等待本源的真实Dispatch Journal封存并校验。
+本源组内各AIV校验连续token区间，再合并检查跨区间的目标行和assignment连续性；
+身份、贡献集合、计数、行号和容量检查均保留。每origin/ring额外分配
+`block_dim × worker_count × 64B`的INC私有摘要区，由planner计算并传入
+`validation_scratch`及其容量。所有校验通过后才开始接受所需B的Notice，不增加网络消息。
 新设备入口直接读取JournalTokenEntry和JournalContributor，
 不依赖Host预生成PullPlan、heads、pull_next或results。
 dispatch_cookie=0可从身份匹配的sealed Journal取得cookie，之后READY必须匹配它。
@@ -66,7 +72,10 @@ READY.source_offset = ring * registered_slot_stride
 ```
 
 同token的各B贡献逐tile累加，收齐本tile即PUT到原始A_s的对应行。
-输入ping/pong和交替输出共4×6 KiB/AIV；奇数尾贡献单独处理，零贡献输出零。
+输入ping/pong和交替输出共4×16 KiB/AIV，即64 KiB；奇数尾贡献单独处理，零贡献输出零。
+只预取同一token、当前AIV任务范围内的下一tile，与当前PUT交叠；复用及错误退出时排空相应事件。
+本机CANN的910B2C配置与SHMEM后端UB上限均为192 KiB；旧24 KiB为软件tile预算，
+不是硬件容量。当前缓冲布局有后端容量静态断言。行偏移快速计算保留溢出检查及非二次幂回退。
 本组完成后更新本源Journal，发布B分区ACK和A_s的Owner Completion；
 两类通知可以交错到达，不保证所有B的ACK先于Owner Completion。
 
@@ -90,15 +99,14 @@ D Source ACK只释放A的输入slot。目标分区、partial和Journal继续按�
 - 原SingleIncSession/BackendOps前端仍需适配新分区布局与launcher；原CPU参考示例尚未绑定
   新NPU入口。旧紧凑布局入口保留用于回归对照。
 
-已完成W2/W4基本链路、W4空源/H=33尾部/3轮ring复用。
-自然rank顺序提交、rank 0 READY延迟100ms时，其余非空源的D Completion先于rank 0 READY。
-最近W4/K2短测：D平均73.921 GB/s、C平均71.4827 GB/s；C低于旧均值77.303 GB/s。
-Combine并行Journal校验的接口/工作区改动尚待设备数据面及新一轮验证。
-大规模、全故障矩阵与性能无回退仍待完成。
+最新平面A随机路由矩阵19个case全部PASS；每个方向配置3种子、各3次预热+10次测量。
+另已通过延迟READY、空源/空输入、非对齐H、K8及错误Journal拒绝后恢复检查。
+这些检查不等于全故障或任意集群验证；规则路由W4/K4在平面B出现明显带宽波动，
+不能宣布全workload无回退。准确数据、构建版本差异见最新结果报告。
 
 当前讲解撤去旧raw百分比gate，改列已有“多打一”链路峰值参照：
 W2约42.7、W4约85.5 GB/s，来自历史put-only峰值定标的均值。
 这是实测参照，不是严格物理理论上限；本轮未重跑定标，也未另设百分比门槛。
 算子仍按D下行/C上行有效字节除以完整算子时间，与同卡组旧算子比较回退。
 
-详细数据与来源见[分区报告](../../../../../docs/inc/report/nb-borrow/source_partitions_20260910/README.md)。
+详细数据与来源见[当前正式结果](../../../../../docs/inc/report/nb-borrow/random_pipeline_20260910/CURRENT_RESULTS.md)。

@@ -11,7 +11,8 @@ constexpr uint32_t INC_VEC_EVT_MTE2V = 0;
 constexpr uint32_t INC_VEC_EVT_VMTE2 = 1;
 constexpr uint32_t INC_VEC_EVT_MTE3V = 2;
 constexpr uint32_t INC_VEC_EVT_VMTE3 = 3;
-// Ascend910 AIV UB is 24 KiB; vector reduce uses 3x fp16 rows + 2x fp32 rows per tile.
+// Legacy software tile budget (not physical UB capacity); this helper's
+// reduction layout uses 3x fp16 rows + 2x fp32 rows per tile.
 constexpr int INC_VEC_UB_BUDGET_BYTES = INC_AIV_UB_BUDGET_BYTES_AICORE;
 constexpr int INC_VEC_MAX_REPEAT = 512;
 
