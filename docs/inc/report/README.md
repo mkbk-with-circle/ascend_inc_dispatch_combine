@@ -5,7 +5,8 @@
 ## Single-INC
 
 - `single_inc_LIVE_STATUS.md`：硬 gate、当前状态和开放项。
-- `single_inc_native_api_closure_cann91_20260804.md`：真实 Dispatch/Combine Framework/Easy provider、registered view、复用与同口径带宽证据。
+- [`../../../examples/inc/dispatch_combine/common/api/README.md`](../../../examples/inc/dispatch_combine/common/api/README.md)：当前唯一公开 SingleInc API 和最短示例入口。
+- `single_inc_native_api_closure_cann91_20260804.md`：内部 Framework/Easy provider 的历史资格化快照、registered view、复用与同口径带宽证据；不是当前调用说明。
 - `single_inc_overlap_theory_cann91_20260804.md`：CANN 9.1 双向理论与 overlap 结论。
 - [`nb-borrow/`](nb-borrow/README.md)：nb-borrow 专属结果；与 yuanmingyu 历史 sweep 分目录保存。
 - [Fusion Kernel 当前实验总入口](nb-borrow/FUSION_KERNEL_RESULTS.md)：当前 ABI 13 端到端、算子资格化和发布验证的直接链接。
@@ -15,7 +16,7 @@
 - `single_inc_nonpow2_sweep_cann91_20260805.md`：native D/C 非 2 次幂 token、128/256 MiB sweep，含启动失败复测。
 - `single_inc_final_regular_sweep_cann91_20260804.json`：最新可机读正则 sweep。
 - `single_inc_topk_rank_stress_cann91_20260804.{md,json}`：K>W/K>8、按 rank 去重、热点/ragged 与 100 epoch 压测。
-- `single_inc_megatron_vllm_integration_contract_20260802.md`：当前框架集成契约。
+- `single_inc_megatron_vllm_integration_contract_20260802.md`：框架语义契约；2026-08-14 已按最短 SingleInc API 更新公开接口部分。
 - `ACTIVE_HW_PROFILE.md` 与 `env/ENV_STATUS_TEMPLATE.md`：环境指针/模板。
 - 仓库只保留结构化结果、资格化摘要和复现入口；launcher 日志、PID/READY 文件、
   profiler trace 与已失效的中间调参结果不进入当前交付。

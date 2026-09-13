@@ -74,3 +74,90 @@ Python records。运行测试：
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
   -s examples/inc/fusion_kernel/tools/tests -p 'test_*.py' -v
 ```
+
+---
+
+## English
+
+# Fusion timeline parser
+
+`parse_fusion_timeline.py` parses Fusion / vLLM-Ascend traces and recomputes
+Dispatch/Combine aggregate-window gains. It depends only on the Python 3
+standard library.
+
+## Supported logs
+
+- `FUSION_INC_TRACE`
+- `FUSION_WORKER_TRACE`
+- `FUSION_INC_DISPATCH_CHECKPOINTS`
+- `FUSION_INC_COMBINE_CHECKPOINTS`
+- vLLM `INC_FUSION_DEVICE_TRACE ... records=[{...}]`
+
+> Current traces only have whole-kernel/role aggregate spans and relative
+> checkpoints. They cannot reconstruct a per-wave absolute timeline; the
+> script will not invent those events.
+
+## Quick start
+
+Parse one case; Markdown is the default:
+
+```bash
+python3 examples/inc/fusion_kernel/tools/parse_fusion_timeline.py \
+  /path/to/case/pe*.log --strict -o timeline.md
+```
+
+A directory also works, as do JSON/CSV outputs:
+
+```bash
+python3 examples/inc/fusion_kernel/tools/parse_fusion_timeline.py /path/to/case -o timeline.md
+python3 examples/inc/fusion_kernel/tools/parse_fusion_timeline.py /path/to/case --format json -o timeline.json
+python3 examples/inc/fusion_kernel/tools/parse_fusion_timeline.py /path/to/case --format csv -o timeline.csv
+```
+
+`--clock-mhz` enables cycle→µs conversion explicitly; the script will not
+guess frequency. `--strict` returns non-zero on missing fields, contradictions,
+or a corrupt trace. All flags:
+
+```bash
+python3 examples/inc/fusion_kernel/tools/parse_fusion_timeline.py --help
+```
+
+## Metric definitions
+
+Let `D` and `C` be the INC Dispatch/Combine aggregate spans, and `O` their
+intersection:
+
+```text
+serial D+C window        = D + C
+actual concurrent window = D + C - O
+overlap realization      = O / min(D, C)
+theoretical window cap   = (D + C) / max(D, C)
+actual window speedup    = (D + C) / (D + C - O)
+vs theoretical           = actual window speedup / theoretical window cap
+```
+
+`actual_vs_theoretical_pct` is **D/C window efficiency**, not operator or
+vLLM end-to-end gain.
+
+`FUSION_WORKER_TRACE` role ids:
+
+| role | Meaning |
+|---:|---|
+| 3 | Worker Dispatch upload |
+| 4 | Worker Dispatch receive/pack |
+| 5 | Worker FFN compute |
+| 6 | Worker Combine |
+
+Roles only have relative checkpoints and cannot be aligned across ranks by
+default. Markdown shows at most 200 rows per class; `--detail-limit 0` removes
+the cap. JSON/CSV always keep every row.
+
+## Sample and tests
+
+`tests/fixtures/sample_case.log` covers both standalone E2E traces and vLLM
+Python records concatenated on one line. Run tests with:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s examples/inc/fusion_kernel/tools/tests -p 'test_*.py' -v
+```

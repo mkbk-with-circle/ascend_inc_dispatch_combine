@@ -367,12 +367,11 @@ static IncDcStatus ReassignPackedOwnerBlocks(
 {
     if (exec == nullptr || rank_offsets.size() !=
                                static_cast<size_t>(plan.worker_world_size) + 1u ||
-        exec->topology.inc_count != 1u ||
-        exec->topology.owner_count_per_inc == 0u) {
+        exec->topology.owner_count == 0u) {
         return IncDcStatus::INVALID_ARGUMENT;
     }
     const uint32_t R = plan.result_count;
-    const uint32_t O = exec->topology.owner_count_per_inc;
+    const uint32_t O = exec->topology.owner_count;
     std::vector<std::vector<uint32_t>> owner_entries(O);
     std::vector<std::vector<uint32_t>> owner_results(O);
     for (uint32_t r = 0u; r < R; ++r) {
@@ -382,12 +381,10 @@ static IncDcStatus ReassignPackedOwnerBlocks(
         if (storage_row >= R) return IncDcStatus::INVALID_ARGUMENT;
         const uint32_t owner = static_cast<uint32_t>(
             static_cast<uint64_t>(storage_row) * O / R);
-        exec->result_home_inc[r] = 0u;
         exec->result_home_owner[r] = std::min(owner, O - 1u);
         owner_results[exec->result_home_owner[r]].push_back(r);
         for (uint32_t si = exec->result_offsets[r];
              si < exec->result_offsets[r + 1u]; ++si) {
-            exec->schedule[si].inc_index = 0u;
             exec->schedule[si].owner_index = exec->result_home_owner[r];
             owner_entries[exec->result_home_owner[r]].push_back(si);
         }
@@ -426,13 +423,12 @@ int main(int argc, char **argv)
     g_npus = std::atoi(argv[4]);
     first_npu = std::atoi(argv[5]);
     const uint32_t W = static_cast<uint32_t>(std::atoi(argv[6]));
-    constexpr uint32_t I = 1u;
     const uint32_t K = static_cast<uint32_t>(std::atoi(argv[7]));
     const uint32_t results = static_cast<uint32_t>(std::atoi(argv[8]));
     const uint32_t hidden = static_cast<uint32_t>(std::atoi(argv[9]));
     const uint32_t mode = static_cast<uint32_t>(std::atoi(argv[10]));
     if (n_pes <= 0 || pe < 0 || pe >= n_pes || W < 1u ||
-        n_pes != static_cast<int>(W + I) || g_npus <= 0 ||
+        n_pes != static_cast<int>(W + 1u) || g_npus <= 0 ||
         first_npu < 0) {
         return 2;
     }
@@ -501,8 +497,8 @@ int main(int argc, char **argv)
     }
 
     std::cout.setf(std::ios::unitbuf);
-    if (n_pes != static_cast<int>(W + I) || pe < 0 || pe >= n_pes || W < 1 ||
-        I < 1 || K < 1 || results < 1 || hidden < 1 ||
+    if (n_pes != static_cast<int>(W + 1u) || pe < 0 || pe >= n_pes ||
+        W < 1 || K < 1 || results < 1 || hidden < 1 ||
         static_cast<uint64_t>(hidden) * 2ull > UINT32_MAX - 63ull) {
         return 2;
     }
@@ -653,7 +649,7 @@ int main(int argc, char **argv)
     }
     // Map PE ids to actual ranks: workers 0..W-1, single INC W.
     for (uint32_t w = 0; w < W; ++w) topo.worker_pe_ids[w] = w;
-    topo.inc_pe_ids[0] = W;
+    topo.inc_pe = W;
     topo.topology_digest = ComputeTopologyDigest(topo);
 
     IncDcCompiledExecutionPlan exec{};
@@ -677,9 +673,7 @@ int main(int argc, char **argv)
         max_slot = std::max(max_slot, c.ingress_slot);
     }
     const uint32_t slot_count = max_slot + 1u;
-    const uint32_t owner_total = I * owner_count;
-    const uint32_t group_count = owner_total * W;
-    const uint32_t inc_group_count = I * W;
+    const uint32_t group_count = owner_count * W;
     const uint32_t source_bitmap_words = (W + 31u) / 32u;
     const uint32_t payload_bytes = hidden * 2u;
     const uint32_t tile_bytes =
@@ -714,8 +708,6 @@ int main(int argc, char **argv)
     uint64_t off = Align64(kDynCsrCtrlBytes);
     const uint64_t result_offsets_off = off;
     off = Align64(off + (plan.result_count + 1u) * sizeof(uint32_t));
-    const uint64_t home_inc_off = off;
-    off = Align64(off + plan.result_count * sizeof(uint32_t));
     const uint64_t home_owner_off = off;
     off = Align64(off + plan.result_count * sizeof(uint32_t));
     const uint64_t result_dst_rank_off = off;
@@ -742,9 +734,7 @@ int main(int argc, char **argv)
     off = Align64(off + plan.contribution_count * sizeof(uint64_t));
     const uint64_t source_rank_off = off;
     off = Align64(off + plan.contribution_count * sizeof(uint32_t));
-    const uint64_t home_pe_off = off;
-    off = Align64(off + plan.contribution_count * sizeof(uint32_t));
-    const uint64_t contrib_owner_flat_off = off;
+    const uint64_t contrib_owner_off = off;
     off = Align64(off + plan.contribution_count * sizeof(uint32_t));
     const uint64_t contrib_result_off = off;
     off = Align64(off + plan.contribution_count * sizeof(uint32_t));
@@ -753,10 +743,10 @@ int main(int argc, char **argv)
                             sizeof(uint32_t));
     const uint64_t group_entries_off = off;
     off = Align64(off + plan.contribution_count * sizeof(uint32_t));
-    const uint64_t inc_group_offsets_off = off;
-    off = Align64(off + (static_cast<uint64_t>(inc_group_count) + 1u) *
+    const uint64_t source_contribution_offsets_off = off;
+    off = Align64(off + (static_cast<uint64_t>(W) + 1u) *
                             sizeof(uint32_t));
-    const uint64_t inc_group_entries_off = off;
+    const uint64_t source_contribution_entries_off = off;
     off = Align64(off + plan.contribution_count * sizeof(uint32_t));
     const uint64_t source_group_offsets_off = off;
     off = Align64(off + (static_cast<uint64_t>(W) + 1u) *
@@ -765,26 +755,22 @@ int main(int argc, char **argv)
     off = Align64(off + static_cast<uint64_t>(group_count) *
                             sizeof(uint32_t));
     const uint64_t owner_source_bitmap_off = off;
-    off = Align64(off + static_cast<uint64_t>(owner_total) *
+    off = Align64(off + static_cast<uint64_t>(owner_count) *
                             source_bitmap_words * sizeof(uint32_t));
     const uint64_t waited_source_bitmap_off = off;
-    off = Align64(off + static_cast<uint64_t>(owner_total) *
+    off = Align64(off + static_cast<uint64_t>(owner_count) *
                             source_bitmap_words * sizeof(uint32_t));
-    const uint64_t owner_home_pe_off = off;
-    off = Align64(off + static_cast<uint64_t>(owner_total) *
-                            sizeof(uint32_t));
     const uint64_t worker_pe_off = off;
     off = Align64(off + static_cast<uint64_t>(W) * sizeof(uint32_t));
     constexpr uint32_t kReadyStrideBytes = 64u;
     const uint64_t start_gate_off = off;
-    // One writer-owned arrival cacheline per worker/INC plus one release
+    // One writer-owned arrival cacheline per worker and the INC, plus one release
     // cacheline.  This is capacity-derived from runtime topology, never a
     // fixed 16-rank protocol assumption.
-    off = Align64(off + (static_cast<uint64_t>(W) + I + 1u) *
+    off = Align64(off + (static_cast<uint64_t>(W) + 2u) *
                             kReadyStrideBytes);
     const uint64_t ready_generation_off = off;
-    const uint64_t completion_record_count =
-        static_cast<uint64_t>(I) * static_cast<uint64_t>(W);
+    const uint64_t completion_record_count = static_cast<uint64_t>(W);
     const uint64_t direct_completion_record_count =
         static_cast<uint64_t>(W) * static_cast<uint64_t>(W);
     const uint64_t batched_record_count =
@@ -863,11 +849,9 @@ int main(int argc, char **argv)
     }
 
     const bool is_worker = pe < static_cast<int>(W);
-    const int my_inc_index =
-        is_worker ? -1 : (pe - static_cast<int>(W));
     std::cout << "DYNCSR_REGISTER pe=" << pe
               << " role=" << (is_worker ? "worker" : "inc")
-              << " worker_world_size=" << W << " inc_count=" << I
+              << " worker_world_size=" << W
               << " declared_max_topk=" << plan.declared_max_topk
               << " owner_count=" << owner_count
               << " split_tx_lanes=" << tx_lane_count
@@ -952,13 +936,11 @@ int main(int argc, char **argv)
     ctrl.hidden = hidden;
     ctrl.tile_bytes = tile_bytes;
     ctrl.element_bytes = 2;
-    ctrl.owner_count = topo.owner_count_per_inc;
-    ctrl.this_inc_index =
-        my_inc_index >= 0 ? static_cast<uint32_t>(my_inc_index) : 0u;
+    ctrl.owner_count = topo.owner_count;
+    ctrl.inc_pe = topo.inc_pe;
     ctrl.generation = 1;
     ctrl.fail_closed_on_dup = 1;
     ctrl.result_offsets_off = result_offsets_off;
-    ctrl.result_home_inc_off = home_inc_off;
     ctrl.result_home_owner_off = home_owner_off;
     ctrl.result_dst_rank_off = result_dst_rank_off;
     ctrl.result_dst_row_off = result_dst_row_off;
@@ -979,9 +961,8 @@ int main(int argc, char **argv)
     ctrl.stats_off = stats_off;
     ctrl.owner_stats_off = owner_stats_off;
     ctrl.contrib_source_rank_off = source_rank_off;
-    ctrl.contrib_home_pe_off = home_pe_off;
     ctrl.ready_generation_off = ready_generation_off;
-    ctrl.contrib_owner_flat_off = contrib_owner_flat_off;
+    ctrl.contrib_owner_off = contrib_owner_off;
     ctrl.contrib_result_off = contrib_result_off;
     ctrl.result_arrival_counter_off = result_arrival_counter_off;
     ctrl.logical_input_off = logical_input_off;
@@ -992,19 +973,15 @@ int main(int argc, char **argv)
     ctrl.local_rank_prereduce = rank_dedup_active ? 1u : 0u;
     ctrl.group_offsets_off = group_offsets_off;
     ctrl.group_entries_off = group_entries_off;
-    ctrl.inc_group_offsets_off = inc_group_offsets_off;
-    ctrl.inc_group_entries_off = inc_group_entries_off;
-    ctrl.inc_group_count = inc_group_count;
+    ctrl.source_contribution_offsets_off = source_contribution_offsets_off;
+    ctrl.source_contribution_entries_off = source_contribution_entries_off;
     ctrl.source_group_offsets_off = source_group_offsets_off;
     ctrl.source_group_entries_off = source_group_entries_off;
     ctrl.owner_source_bitmap_off = owner_source_bitmap_off;
     ctrl.waited_source_bitmap_off = waited_source_bitmap_off;
-    ctrl.owner_home_pe_off = owner_home_pe_off;
     ctrl.worker_pe_off = worker_pe_off;
     ctrl.max_ingress_slots = slot_count;
     ctrl.worker_count = W;
-    ctrl.inc_count = I;
-    ctrl.owner_total = owner_total;
     ctrl.group_count = group_count;
     ctrl.source_bitmap_words = source_bitmap_words;
     ctrl.this_worker_rank =
@@ -1151,10 +1128,9 @@ int main(int argc, char **argv)
     if (packed_result_tx) {
         ctrl.optimization_flags |= kDynCsrOptRankPackedResultTx;
     }
-    bool cyclic_owner_results = I == 1u;
+    bool cyclic_owner_results = true;
     for (uint32_t r = 0u; r < plan.result_count; ++r) {
-        if (exec.result_home_inc[r] != 0u ||
-            exec.result_home_owner[r] != r % owner_count) {
+        if (exec.result_home_owner[r] != r % owner_count) {
             cyclic_owner_results = false;
             break;
         }
@@ -1312,7 +1288,7 @@ int main(int argc, char **argv)
     // is the qualified latency/bandwidth point for owner streaming; mode 6
     // retains a coarse train for its distinct INC-global protocol.
     const uint32_t owners_per_producer =
-        std::max(1u, (ctrl.owner_total + ctrl.producer_lane_count - 1u) /
+        std::max(1u, (ctrl.owner_count + ctrl.producer_lane_count - 1u) /
                          ctrl.producer_lane_count);
     const uint32_t stream_chunk_tiles = 8u;
     // Rank pre-reduce needs enough granularity to overlap vector work with
@@ -1331,7 +1307,7 @@ int main(int argc, char **argv)
             : tile_bytes >= 64ull * 1024ull
             ? 1ull
             :
-                static_cast<uint64_t>(W) * 3u >= ctrl.owner_total ||
+                static_cast<uint64_t>(W) * 3u >= ctrl.owner_count ||
                 owners_per_producer <= 2u
             ? 4ull
             : 64ull;
@@ -1430,7 +1406,7 @@ int main(int argc, char **argv)
         // owner cohort, never W/K/route/device-id tables.
         bool enable = tile_bytes > kIncDcPrivateMtePacketBytes &&
                       static_cast<uint64_t>(plan.result_count) >=
-                          2ull * ctrl.owner_total;
+                          2ull * ctrl.owner_count;
         if (const char *raw = std::getenv("INC_DYNCSR_BATCH_RESULT_TX")) {
             enable = raw[0] == '1' && raw[1] == '\0';
         }
@@ -1474,8 +1450,6 @@ int main(int argc, char **argv)
     std::memcpy(host.data() + ctrl_off, &ctrl, sizeof(ctrl));
     std::memcpy(host.data() + result_offsets_off, exec.result_offsets.data(),
                 exec.result_offsets.size() * sizeof(uint32_t));
-    std::memcpy(host.data() + home_inc_off, exec.result_home_inc.data(),
-                exec.result_home_inc.size() * sizeof(uint32_t));
     std::memcpy(host.data() + home_owner_off, exec.result_home_owner.data(),
                 exec.result_home_owner.size() * sizeof(uint32_t));
     std::vector<uint32_t> result_dst_rank(plan.result_count, 0u);
@@ -1504,7 +1478,7 @@ int main(int argc, char **argv)
                     packed_result_ids.size() * sizeof(uint32_t));
     }
 
-    std::vector<uint32_t> contrib_owner_flat(plan.contribution_count, 0u);
+    std::vector<uint32_t> contrib_owner(plan.contribution_count, 0u);
     std::vector<uint32_t> contrib_result(plan.contribution_count, 0u);
     for (uint32_t r = 0u; r < plan.result_count; ++r) {
         for (uint32_t si = exec.result_offsets[r];
@@ -1513,29 +1487,22 @@ int main(int argc, char **argv)
         }
     }
     std::vector<std::vector<uint32_t>> grouped(group_count);
-    std::vector<std::vector<uint32_t>> inc_grouped(inc_group_count);
+    std::vector<std::vector<uint32_t>> source_contributions(W);
     std::vector<uint32_t> owner_source_bitmap(
-        static_cast<size_t>(owner_total) * source_bitmap_words, 0u);
-    std::vector<uint32_t> owner_home_pe(owner_total, 0u);
-    for (uint32_t inc = 0; inc < I; ++inc) {
-        for (uint32_t owner = 0; owner < owner_count; ++owner) {
-            owner_home_pe[inc * owner_count + owner] = topo.inc_pe_ids[inc];
-        }
-    }
+        static_cast<size_t>(owner_count) * source_bitmap_words, 0u);
     for (uint32_t si = 0; si < exec.schedule.size(); ++si) {
         const auto &cc = exec.schedule[si];
         const auto &lc = plan.contributions[cc.logical_contribution_index];
-        const uint32_t flat = cc.inc_index * owner_count + cc.owner_index;
+        const uint32_t flat = cc.owner_index;
         const uint32_t group = flat * W + lc.contributor_rank;
-        if (flat >= owner_total || lc.contributor_rank >= W ||
+        if (flat >= owner_count || lc.contributor_rank >= W ||
             group >= group_count) {
             std::cerr << "DYNCSR_GROUP_BUILD_FAIL pe=" << pe << std::endl;
             return 1;
         }
-        contrib_owner_flat[si] = flat;
+        contrib_owner[si] = flat;
         grouped[group].push_back(si);
-        const uint32_t inc_group = cc.inc_index * W + lc.contributor_rank;
-        inc_grouped[inc_group].push_back(si);
+        source_contributions[lc.contributor_rank].push_back(si);
         owner_source_bitmap[static_cast<size_t>(flat) * source_bitmap_words +
                             (lc.contributor_rank >> 5u)] |=
             1u << (lc.contributor_rank & 31u);
@@ -1582,62 +1549,55 @@ int main(int argc, char **argv)
     for (uint32_t source = 0u; source < W; ++source) {
         source_group_offsets[source] =
             static_cast<uint32_t>(source_group_entries.size());
-        // Spread every producer wave across destination INCs.  Natural flat
-        // order is INC-major and makes all lanes target one INC at a time,
-        // creating bursts under a hot source.  This permutation changes only
-        // legal batch order; group identity and ready semantics are intact.
-        for (uint32_t order = 0u; order < owner_total; ++order) {
-            const uint32_t inc = order % I;
-            const uint32_t owner = order / I;
-            const uint32_t flat = inc * owner_count + owner;
-            const uint32_t group = flat * W + source;
+        for (uint32_t owner = 0u; owner < owner_count; ++owner) {
+            const uint32_t group = owner * W + source;
             if (!grouped[group].empty()) {
-                source_group_entries.push_back(flat);
+                source_group_entries.push_back(owner);
             }
         }
     }
     source_group_offsets[W] =
         static_cast<uint32_t>(source_group_entries.size());
-    std::vector<uint32_t> inc_group_offsets(inc_group_count + 1u, 0u);
-    std::vector<uint32_t> inc_group_entries;
-    inc_group_entries.reserve(plan.contribution_count);
-    uint32_t active_inc_group_count = 0u;
-    for (uint32_t group = 0; group < inc_group_count; ++group) {
-        inc_group_offsets[group] =
-            static_cast<uint32_t>(inc_group_entries.size());
-        if (!inc_grouped[group].empty()) {
-            ++active_inc_group_count;
+    std::vector<uint32_t> source_contribution_offsets(W + 1u, 0u);
+    std::vector<uint32_t> source_contribution_entries;
+    source_contribution_entries.reserve(plan.contribution_count);
+    uint32_t active_source_count = 0u;
+    for (uint32_t source = 0; source < W; ++source) {
+        source_contribution_offsets[source] =
+            static_cast<uint32_t>(source_contribution_entries.size());
+        if (!source_contributions[source].empty()) {
+            ++active_source_count;
         }
-        // INC-scoped readiness publishes one generation after all owners for
-        // this (INC, source) are visible.  Pack that exact batch contiguously
+        // Source-scoped readiness publishes one generation after all owners
+        // for this source are visible.  Pack that exact batch contiguously
         // so the producer can issue one RMA instead of one RMA per tile.
         if (coalesced_group_put &&
             (ctrl.ready_mode == 3u || ctrl.ready_mode == 6u)) {
-            for (const uint32_t si : inc_grouped[group]) {
+            for (const uint32_t si : source_contributions[source]) {
                 exec.schedule[si].ingress_slot = packed_slot++;
             }
         }
-        inc_group_entries.insert(inc_group_entries.end(),
-                                 inc_grouped[group].begin(),
-                                 inc_grouped[group].end());
+        source_contribution_entries.insert(source_contribution_entries.end(),
+            source_contributions[source].begin(),
+            source_contributions[source].end());
     }
-    inc_group_offsets[inc_group_count] =
-        static_cast<uint32_t>(inc_group_entries.size());
-    if (inc_group_entries.size() != plan.contribution_count) {
-        std::cerr << "DYNCSR_INC_GROUP_CSR_FAIL pe=" << pe << std::endl;
+    source_contribution_offsets[W] =
+        static_cast<uint32_t>(source_contribution_entries.size());
+    if (source_contribution_entries.size() != plan.contribution_count) {
+        std::cerr << "DYNCSR_SOURCE_CONTRIBUTION_CSR_FAIL pe=" << pe
+                  << std::endl;
         return 1;
     }
     if (coalesced_group_put &&
         (ctrl.ready_mode == 3u || ctrl.ready_mode == 6u) &&
         packed_slot > slot_count) {
-        std::cerr << "DYNCSR_INC_PACKED_SLOT_CAPACITY_FAIL pe=" << pe
+        std::cerr << "DYNCSR_SOURCE_PACKED_SLOT_CAPACITY_FAIL pe=" << pe
                   << " packed=" << packed_slot << " capacity=" << slot_count
                   << std::endl;
         return 1;
     }
-    std::memcpy(host.data() + contrib_owner_flat_off,
-                contrib_owner_flat.data(),
-                contrib_owner_flat.size() * sizeof(uint32_t));
+    std::memcpy(host.data() + contrib_owner_off, contrib_owner.data(),
+                contrib_owner.size() * sizeof(uint32_t));
     std::memcpy(host.data() + contrib_result_off, contrib_result.data(),
                 contrib_result.size() * sizeof(uint32_t));
     std::memcpy(host.data() + group_offsets_off, group_offsets.data(),
@@ -1650,17 +1610,15 @@ int main(int argc, char **argv)
     std::memcpy(host.data() + source_group_entries_off,
                 source_group_entries.data(),
                 source_group_entries.size() * sizeof(uint32_t));
-    std::memcpy(host.data() + inc_group_offsets_off,
-                inc_group_offsets.data(),
-                inc_group_offsets.size() * sizeof(uint32_t));
-    std::memcpy(host.data() + inc_group_entries_off,
-                inc_group_entries.data(),
-                inc_group_entries.size() * sizeof(uint32_t));
+    std::memcpy(host.data() + source_contribution_offsets_off,
+                source_contribution_offsets.data(),
+                source_contribution_offsets.size() * sizeof(uint32_t));
+    std::memcpy(host.data() + source_contribution_entries_off,
+                source_contribution_entries.data(),
+                source_contribution_entries.size() * sizeof(uint32_t));
     std::memcpy(host.data() + owner_source_bitmap_off,
                 owner_source_bitmap.data(),
                 owner_source_bitmap.size() * sizeof(uint32_t));
-    std::memcpy(host.data() + owner_home_pe_off, owner_home_pe.data(),
-                owner_home_pe.size() * sizeof(uint32_t));
     std::memcpy(host.data() + worker_pe_off, topo.worker_pe_ids.data(),
                 topo.worker_pe_ids.size() * sizeof(uint32_t));
     if (rank_dedup_active) {
@@ -1727,11 +1685,8 @@ int main(int argc, char **argv)
         std::memcpy(host.data() + gen_off + si * sizeof(uint64_t), &gen,
                     sizeof(uint64_t));
         const uint32_t source_rank = lc.contributor_rank;
-        const uint32_t home_pe = topo.inc_pe_ids[cc.inc_index];
         std::memcpy(host.data() + source_rank_off + si * sizeof(uint32_t),
                     &source_rank, sizeof(uint32_t));
-        std::memcpy(host.data() + home_pe_off + si * sizeof(uint32_t),
-                    &home_pe, sizeof(uint32_t));
         // A malformed external descriptor must reach the device validator
         // without first turning into a host-side write outside the ingress
         // region.  The producer kernel publishes a negative generation for
@@ -1783,7 +1738,7 @@ int main(int argc, char **argv)
             } else if (!k1_direct_tx) {
                 launch_inc_dc_sv2_dyn_csr_combine_kernel(
                     sym, ctrl_off,
-                    static_cast<int>(topo.owner_count_per_inc +
+                    static_cast<int>(topo.owner_count +
                                      ctrl.tx_lane_count), stream);
             }
             if (persistent_epoch_barrier &&
@@ -1868,7 +1823,7 @@ int main(int argc, char **argv)
         }
         persistent_trigger_off =
             start_gate_off +
-            (static_cast<uint64_t>(W) + I) * kReadyStrideBytes;
+            (static_cast<uint64_t>(W) + 1u) * kReadyStrideBytes;
         auto host_now_ns = []() -> uint64_t {
             return static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1987,7 +1942,7 @@ int main(int argc, char **argv)
             } else if (!k1_direct_tx) {
                 launch_inc_dc_sv2_dyn_csr_combine_kernel(
                     sym, ctrl_off,
-                    static_cast<int>(topo.owner_count_per_inc +
+                    static_cast<int>(topo.owner_count +
                                      ctrl.tx_lane_count), stream);
             }
         }
@@ -2010,7 +1965,7 @@ int main(int argc, char **argv)
             aclshmemx_barrier_all_on_stream(stream);
             const uint32_t participant =
                 is_worker ? ctrl.this_worker_rank
-                          : ctrl.worker_count + ctrl.this_inc_index;
+                          : ctrl.worker_count;
             launch_inc_dc_sv2_dyn_csr_start_gate_kernel(
                 sym, ctrl_off, participant, stream);
         }
@@ -2066,7 +2021,7 @@ int main(int argc, char **argv)
             } else if (!k1_direct_tx) {
                 launch_inc_dc_sv2_dyn_csr_combine_kernel(
                     sym, ctrl_off,
-                    static_cast<int>(topo.owner_count_per_inc +
+                    static_cast<int>(topo.owner_count +
                                      ctrl.tx_lane_count), stream);
             }
         }
@@ -2108,8 +2063,7 @@ int main(int argc, char **argv)
                 if (lc.contributor_rank != static_cast<uint32_t>(pe)) {
                     continue;
                 }
-                const int home_pe =
-                    static_cast<int>(topo.inc_pe_ids[cc.inc_index]);
+                const int home_pe = static_cast<int>(topo.inc_pe);
                 const uint64_t local_off =
                     ingress_off +
                     static_cast<uint64_t>(cc.ingress_slot) * tile_bytes;
@@ -2127,7 +2081,7 @@ int main(int argc, char **argv)
         if (!is_worker) {
             launch_inc_dc_sv2_dyn_csr_combine_kernel(
                 sym, ctrl_off,
-                static_cast<int>(topo.owner_count_per_inc +
+                static_cast<int>(topo.owner_count +
                                  ctrl.tx_lane_count),
                 stream);
             sync_rc = aclrtSynchronizeStream(stream);
@@ -2197,10 +2151,6 @@ int main(int argc, char **argv)
             aclrtMemcpy(out_host.data(), out_host.size(), sym + output_off,
                         out_host.size(), ACL_MEMCPY_DEVICE_TO_HOST);
             for (uint32_t r = 0; r < plan.result_count; ++r) {
-                if (exec.result_home_inc[r] !=
-                    static_cast<uint32_t>(my_inc_index)) {
-                    continue;
-                }
                 const bool direct_ub_result_tx =
                     tx_lane_count == 0u && !packed_result_tx &&
                     (ctrl.optimization_flags &
@@ -2463,17 +2413,8 @@ int main(int argc, char **argv)
             }
         }
     } else {
-        const uint32_t inc = static_cast<uint32_t>(my_inc_index);
-        for (const auto &cc : exec.schedule) {
-            if (cc.inc_index == inc) {
-                ++local_upload_items;
-            }
-        }
-        for (uint32_t r = 0u; r < plan.result_count; ++r) {
-            if (exec.result_home_inc[r] == inc) {
-                ++local_download_items;
-            }
-        }
+        local_upload_items = exec.schedule.size();
+        local_download_items = plan.result_count;
     }
     const uint64_t physical_upload_bytes_rank =
         local_upload_items * hidden * 2ull * service_epochs;
@@ -2513,7 +2454,7 @@ int main(int argc, char **argv)
               << std::endl;
 
     std::cout << "DYNCSR_EVIDENCE pe=" << pe
-              << " worker_world_size=" << W << " inc_count=" << I
+              << " worker_world_size=" << W
               << " declared_max_topk=" << plan.declared_max_topk
               << " expected_count_min=" << lvr.expected_count_min
               << " expected_count_max=" << lvr.expected_count_max
@@ -2635,7 +2576,7 @@ int main(int argc, char **argv)
               << (service_epochs > 1u ? 1 : 0)
               << " abort_generation=" << ctrl.abort_generation
               << " ready_signal_count="
-              << (ctrl.ready_mode == 3u ? active_inc_group_count
+              << (ctrl.ready_mode == 3u ? active_source_count
                                         : active_group_count)
               << " ready_signal_upper_bound=" << group_count
               << " all_workers_completed_protocol=1" << std::endl;

@@ -1,5 +1,11 @@
 # nb-borrow 单 INC Pull V2 资格报告（2026-09-04）
 
+> 历史口径说明：本报告中的 56/112 GB/s gate 使用当时的
+> `hidden GET + hidden PUT` aggregate logical bytes。2026-09-11 起，主带宽改为
+> Dispatch fan-out 下行字节或 Combine partial 上行字节除以完整算子时间；新协议
+> A/B 与修正口径见
+> [`pull_v2_metadata_push_20260911`](../pull_v2_metadata_push_20260911/README.md)。
+
 本目录只记录 `nb-borrow`（Ascend 910B2C）上的 Pull-Dispatch V2 与
 Pull-Combine V2；不覆盖 yuanmingyu、Push V1 或历史实验。正式性能固定使用
 同一 HCCS 平面的 NPU 0--4（0--3 worker，4 为 INC）。运行前确认 16 张卡空闲。

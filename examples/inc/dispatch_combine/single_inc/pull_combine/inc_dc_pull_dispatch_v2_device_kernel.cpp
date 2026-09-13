@@ -16,10 +16,11 @@ using namespace inc::dc::pull_v2;
 //     Symmetric Ready[worker_count].  Worker r owns element r; INC polls the
 //     corresponding local elements after the workers publish them remotely.
 //   inc_slots
-//     INC-only metadata staging, worker_count * source_slot_stride.  Only the
-//     header and [tokens_offset, hidden_offset) metadata are normally
-//     populated; only sub-cacheline functional tails use their own hidden
-//     position as a correctness fallback staging cell.
+//     INC-only full-slot staging used by the general hidden relay path.
+//   metadata_inbox
+//     Symmetric worker_count * metadata_inbox_stride staging.  Each worker
+//     pushes its header and [tokens_offset, hidden_offset) metadata prefix to
+//     its disjoint INC slice before publishing READY.
 //   source_acks
 //     Symmetric SourceConsumed[worker_count].
 //   destination_hidden / destination_rows / destination_assignments /
@@ -896,8 +897,9 @@ __attribute__((noinline)) __aicore__ void RelayUniformDestinations(
 
 __attribute__((noinline)) __aicore__ void RelayDestinationPackedSafe(
     __gm__ uint8_t *source_base, __gm__ uint8_t *destination_hidden_base,
-    __gm__ uint8_t *inc_slots, __gm__ uint8_t *inc_destination_rows,
-    uint64_t source_slot_stride,
+    __gm__ uint8_t *metadata_inbox, __gm__ uint8_t *inc_slots,
+    __gm__ uint8_t *inc_destination_rows, uint64_t source_slot_stride,
+    uint64_t metadata_inbox_stride,
     uint64_t inc_destination_rows_stride_bytes, uint64_t row_bytes,
     uint32_t worker_count, __gm__ uint32_t *destination_row_counts)
 {
@@ -905,10 +907,12 @@ __attribute__((noinline)) __aicore__ void RelayDestinationPackedSafe(
     // safety path for arbitrary routing and for non-cacheline row widths;
     // neither case permits independent remote MTE writers.
     for (uint32_t source = 0u; source < worker_count; ++source) {
+        __gm__ uint8_t *metadata = metadata_inbox +
+            MulU64ByU32(metadata_inbox_stride, source);
         __gm__ uint8_t *slot = inc_slots +
             MulU64ByU32(source_slot_stride, source);
         __gm__ SlotHeader *header =
-            reinterpret_cast<__gm__ SlotHeader *>(slot);
+            reinterpret_cast<__gm__ SlotHeader *>(metadata);
         const uint64_t bytes = MulU64ByU32(row_bytes, header->token_count);
         const uint64_t transfer_bytes =
             (bytes + kPullDispatchAlignment - 1u) &
@@ -946,10 +950,12 @@ __attribute__((noinline)) __aicore__ void RelayDestinationPackedSafe(
         for (uint32_t row = 0u; row < rows; ++row) {
             __gm__ DestinationRow *entry = layout + row;
             const uint32_t source = entry->source_rank;
+            __gm__ uint8_t *metadata = metadata_inbox +
+                MulU64ByU32(metadata_inbox_stride, source);
             __gm__ uint8_t *slot = inc_slots +
                 MulU64ByU32(source_slot_stride, source);
             __gm__ SlotHeader *header =
-                reinterpret_cast<__gm__ SlotHeader *>(slot);
+                reinterpret_cast<__gm__ SlotHeader *>(metadata);
             __gm__ uint8_t *local = slot + header->hidden_offset +
                 MulU64ByU32(row_bytes, entry->source_token);
             __gm__ uint8_t *packed = destination_staging +
@@ -979,8 +985,8 @@ __attribute__((noinline)) __aicore__ void RelayDestinationPackedSafe(
 
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__
 void inc_dc_pull_dispatch_v2_device_kernel(
-    GM_ADDR source_region, GM_ADDR ready_mailbox, GM_ADDR inc_slots,
-    GM_ADDR source_acks, GM_ADDR destination_hidden,
+    GM_ADDR source_region, GM_ADDR ready_mailbox, GM_ADDR metadata_inbox,
+    GM_ADDR inc_slots, GM_ADDR source_acks, GM_ADDR destination_hidden,
     GM_ADDR destination_rows, GM_ADDR destination_assignments,
     GM_ADDR destination_expert_counts, GM_ADDR destination_completions,
     GM_ADDR inc_destination_rows, GM_ADDR inc_destination_assignments,
@@ -992,7 +998,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     GM_ADDR parser_scratch, GM_ADDR status_line, uint64_t ffts_addr,
     uint64_t session_id,
     uint64_t placement_epoch, uint64_t generation, uint64_t sequence,
-    uint64_t source_slot_stride, uint64_t destination_hidden_slot_stride,
+    uint64_t source_slot_stride, uint64_t metadata_inbox_stride,
+    uint64_t destination_hidden_slot_stride,
     uint64_t destination_rows_slot_stride,
     uint64_t destination_assignments_slot_stride,
     uint64_t destination_expert_counts_slot_stride,
@@ -1039,6 +1046,9 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         generation != 0u && sequence != 0u && ring_slot < slot_count &&
         source_slot_stride >= sizeof(SlotHeader) &&
         source_slot_stride % kPullDispatchAlignment == 0u &&
+        metadata_inbox_stride >= sizeof(SlotHeader) &&
+        metadata_inbox_stride <= source_slot_stride &&
+        metadata_inbox_stride % kPullDispatchAlignment == 0u &&
         channels_per_source != 0u && spin_cap != 0u &&
         parser_cohort != 0u &&
         active_parser_blocks > worker_count &&
@@ -1096,16 +1106,33 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         return;
     }
 
-    // A worker publishes exactly one descriptor and then leaves the kernel;
-    // its immutable source slot remains leased until SourceConsumed arrives.
+    __gm__ uint8_t *source_base = source_region +
+        MulU64ByU32(source_slot_stride, ring_slot);
+
+    // A worker first pushes the route-control prefix into its disjoint INC
+    // inbox, then publishes exactly one descriptor and leaves the kernel.  A
+    // single completion fence covers both the metadata PUT and READY prefix;
+    // publication remains a separate final operation.  The immutable source
+    // slot stays leased until SourceConsumed arrives.
     if (pe != inc_pe) {
         if (block == 0u && pe >= 0 &&
             static_cast<uint32_t>(pe) < worker_count) {
             __gm__ Ready *local =
                 reinterpret_cast<__gm__ Ready *>(ready_mailbox) + pe;
             __gm__ Ready *remote = local;
+            __gm__ SlotHeader *source_header =
+                reinterpret_cast<__gm__ SlotHeader *>(source_base);
+            uint64_t metadata_bytes = sizeof(SlotHeader);
+            if (source_header->hidden_offset >= sizeof(SlotHeader) &&
+                source_header->hidden_offset <= metadata_inbox_stride &&
+                source_header->hidden_offset % kPullDispatchAlignment == 0u)
+                metadata_bytes = source_header->hidden_offset;
+            __gm__ uint8_t *remote_metadata = metadata_inbox +
+                MulU64ByU32(metadata_inbox_stride,
+                            static_cast<uint32_t>(pe));
             aclshmem_uint64_p(&remote->publication, 0u, inc_pe);
             aclshmem_quiet();
+            PutGmRange(remote_metadata, source_base, metadata_bytes, inc_pe);
             aclshmem_putmem(remote, local,
                             __builtin_offsetof(Ready, publication), inc_pe);
             aclshmem_quiet();
@@ -1116,8 +1143,6 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         return;
     }
 
-    __gm__ uint8_t *source_base = source_region +
-        MulU64ByU32(source_slot_stride, ring_slot);
     __gm__ uint8_t *destination_hidden_base = destination_hidden +
         MulU64ByU32(destination_hidden_slot_stride, ring_slot);
     __gm__ uint8_t *destination_rows_base = destination_rows +
@@ -1231,7 +1256,7 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     AscendC::SyncAll<true>();
     dcci_cacheline(status_line);
 
-    // Phase 1: source-local READY/GET and parallel validation/counting.  The
+    // Phase 1: source-local READY/inbox and parallel validation/counting.  The
     // parser blocks are grouped source-major, with a contiguous token slice
     // per lane.  This order is what later makes a tiny deterministic prefix
     // sufficient for atomics-free final writes.
@@ -1283,11 +1308,12 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     source_state + static_cast<uint64_t>(source) *
                         scratch_layout.source_stride + 2u) =
                     AscendC::GetSystemCycle();
-                __gm__ uint8_t *local_slot = inc_slots +
-                    MulU64ByU32(source_slot_stride, source);
-                aclshmem_getmem(local_slot, source_base, sizeof(SlotHeader),
-                                static_cast<int32_t>(source));
-                dcci_cacheline(local_slot);
+                __gm__ uint8_t *local_slot = metadata_inbox +
+                    MulU64ByU32(metadata_inbox_stride, source);
+                // READY publication is ordered after the worker's metadata
+                // PUT.  Refresh the local inbox header before validation; the
+                // source cohort refreshes the remaining metadata in parallel.
+                FlushRange(local_slot, sizeof(SlotHeader));
                 __gm__ SlotHeader *header =
                     reinterpret_cast<__gm__ SlotHeader *>(local_slot);
                 local_status = ValidateHeader(
@@ -1331,17 +1357,16 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                 local_status = observed & ~kOrdinalVisited;
         }
 
-        // Header publication releases a source cohort immediately.  Each lane
-        // pulls a disjoint cache-line range of [tokens_offset, hidden_offset),
-        // so metadata bandwidth scales with parser_cohort and the header can
-        // never be overwritten.  A second source publication below prevents
-        // any parser from consuming metadata until every range is visible and
-        // the padding invariant has been checked.
+        // Header publication releases a source cohort immediately.  Metadata
+        // is already local in the INC inbox; each lane refreshes a disjoint
+        // cache-line range.  A second source publication below prevents any
+        // parser from consuming metadata until every range is visible and the
+        // padding invariant has been checked.
         __gm__ uint32_t *metadata_state = block_status +
             static_cast<uint64_t>(block) * scratch_layout.block_stride + 1u;
         if (local_status == kStatusOk) {
-            __gm__ uint8_t *slot = inc_slots +
-                MulU64ByU32(source_slot_stride, source);
+            __gm__ uint8_t *slot = metadata_inbox +
+                MulU64ByU32(metadata_inbox_stride, source);
             dcci_cacheline(slot);
             __gm__ SlotHeader *header =
                 reinterpret_cast<__gm__ SlotHeader *>(slot);
@@ -1355,21 +1380,10 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                 MulU64ByU32(metadata_lines, lane + 1u) / parser_cohort;
             uint64_t offset = metadata_begin +
                 first_line * kPullDispatchAlignment;
-            uint64_t left =
+            const uint64_t local_bytes =
                 (last_line - first_line) * kPullDispatchAlignment;
-            const uint64_t local_bytes = left;
-            while (left != 0u) {
-                const uint32_t chunk = static_cast<uint32_t>(
-                    left > 0x7fffffc0ull ? 0x7fffffc0ull : left);
-                aclshmem_getmem(slot + offset, source_base + offset, chunk,
-                                static_cast<int32_t>(source));
-                offset += chunk;
-                left -= chunk;
-            }
             if (local_bytes != 0u)
-                FlushRange(slot + metadata_begin +
-                               first_line * kPullDispatchAlignment,
-                           local_bytes);
+                FlushRange(slot + offset, local_bytes);
             *metadata_state = kParserMetadataReady;
         } else {
             *metadata_state = kOrdinalVisited | local_status;
@@ -1403,8 +1417,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         __gm__ uint32_t *cohort_state = source_state +
             static_cast<uint64_t>(source) * scratch_layout.source_stride;
         if (lane == 0u && local_status == kStatusOk) {
-            __gm__ uint8_t *slot = inc_slots +
-                MulU64ByU32(source_slot_stride, source);
+            __gm__ uint8_t *slot = metadata_inbox +
+                MulU64ByU32(metadata_inbox_stride, source);
             __gm__ SlotHeader *header =
                 reinterpret_cast<__gm__ SlotHeader *>(slot);
             if (!HiddenPaddingZero(header, slot))
@@ -1435,8 +1449,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         }
 
         if (local_status == kStatusOk) {
-            __gm__ uint8_t *slot = inc_slots +
-                MulU64ByU32(source_slot_stride, source);
+            __gm__ uint8_t *slot = metadata_inbox +
+                MulU64ByU32(metadata_inbox_stride, source);
             __gm__ SlotHeader *header =
                 reinterpret_cast<__gm__ SlotHeader *>(slot);
             __gm__ TokenRecord *tokens =
@@ -1607,8 +1621,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             if (ready_cycle > last_ready_cycle)
                 last_ready_cycle = ready_cycle;
             __gm__ SlotHeader *header =
-                reinterpret_cast<__gm__ SlotHeader *>(inc_slots +
-                    MulU64ByU32(source_slot_stride, source));
+                reinterpret_cast<__gm__ SlotHeader *>(metadata_inbox +
+                    MulU64ByU32(metadata_inbox_stride, source));
             if ((header->flags & kSlotFlagUniformDestinations) == 0u)
                 all_uniform_hints = false;
             if (!AddU64(total_tokens, header->token_count, &total_tokens) ||
@@ -1723,8 +1737,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     if (*status != kStatusOk) break;
                 }
                 __gm__ SlotHeader *source_header =
-                    reinterpret_cast<__gm__ SlotHeader *>(inc_slots +
-                        MulU64ByU32(source_slot_stride, source));
+                    reinterpret_cast<__gm__ SlotHeader *>(metadata_inbox +
+                        MulU64ByU32(metadata_inbox_stride, source));
                 const bool source_hint =
                     (source_header->flags &
                      kSlotFlagUniformDestinations) != 0u;
@@ -1791,8 +1805,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             // later repeat the same idempotent publication.
             for (uint32_t source = 0u; source < worker_count; ++source) {
                 __gm__ SlotHeader *source_header =
-                    reinterpret_cast<__gm__ SlotHeader *>(inc_slots +
-                        MulU64ByU32(source_slot_stride, source));
+                    reinterpret_cast<__gm__ SlotHeader *>(metadata_inbox +
+                        MulU64ByU32(metadata_inbox_stride, source));
                 if (source_header->token_count != 0u) continue;
                 for (uint32_t lane = 0u; lane < parser_cohort; ++lane) {
                     __gm__ uint32_t *parser_state = block_status +
@@ -1862,8 +1876,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
     if (parallel_uniform_phase2)
         for (uint32_t source = 0u; source < worker_count; ++source) {
             __gm__ SlotHeader *source_header =
-                reinterpret_cast<__gm__ SlotHeader *>(inc_slots +
-                    MulU64ByU32(source_slot_stride, source));
+                reinterpret_cast<__gm__ SlotHeader *>(metadata_inbox +
+                    MulU64ByU32(metadata_inbox_stride, source));
             if ((source_header->token_count & 7u) != 0u) {
                 parallel_uniform_phase2 = false;
                 break;
@@ -1895,8 +1909,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         // publishes every Pass2Ready cell; all other AIVs remain consumers.
         const uint32_t source = parser_index / parser_cohort;
         const uint32_t lane = parser_index % parser_cohort;
-        __gm__ uint8_t *slot = inc_slots +
-            MulU64ByU32(source_slot_stride, source);
+        __gm__ uint8_t *slot = metadata_inbox +
+            MulU64ByU32(metadata_inbox_stride, source);
         __gm__ SlotHeader *header =
             reinterpret_cast<__gm__ SlotHeader *>(slot);
         __gm__ TokenRecord *tokens =
@@ -2165,8 +2179,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
                     scratch_layout.source_stride));
         }
         if (plans_ready) {
-        __gm__ uint8_t *slot = inc_slots +
-            MulU64ByU32(source_slot_stride, side);
+        __gm__ uint8_t *slot = metadata_inbox +
+            MulU64ByU32(metadata_inbox_stride, side);
         __gm__ SlotHeader *header =
             reinterpret_cast<__gm__ SlotHeader *>(slot);
         if (MetadataDigest(header, slot) != header->metadata_digest)
@@ -2255,9 +2269,9 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         (!uniform_fast || row_bytes % kPullDispatchAlignment != 0u) &&
         block == 0u) {
         RelayDestinationPackedSafe(
-            source_base, destination_hidden_base, inc_slots,
-            inc_destination_rows,
-            source_slot_stride, inc_destination_rows_stride_bytes, row_bytes,
+            source_base, destination_hidden_base, metadata_inbox, inc_slots,
+            inc_destination_rows, source_slot_stride, metadata_inbox_stride,
+            inc_destination_rows_stride_bytes, row_bytes,
             worker_count,
             reinterpret_cast<__gm__ uint32_t *>(destination_row_counts));
         __gm__ uint32_t *relay_state = block_status;
@@ -2273,8 +2287,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
         // multi-peer MTE/HCCS issue bandwidth.
         const uint32_t source = block % worker_count;
         const uint32_t channel = block / worker_count;
-        __gm__ uint8_t *slot = inc_slots +
-            MulU64ByU32(source_slot_stride, source);
+        __gm__ uint8_t *slot = metadata_inbox +
+            MulU64ByU32(metadata_inbox_stride, source);
         __gm__ SlotHeader *header =
             reinterpret_cast<__gm__ SlotHeader *>(slot);
         RelayUniformDestinations(
@@ -2462,7 +2476,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
             if (*status == kStatusOk) {
                 __gm__ SlotHeader *header =
                     reinterpret_cast<__gm__ SlotHeader *>(
-                        inc_slots + MulU64ByU32(source_slot_stride, source));
+                        metadata_inbox +
+                            MulU64ByU32(metadata_inbox_stride, source));
                 consumed = header->packet_bytes;
             }
             PublishSourceAck(ack, source, *status, consumed, session_id,
@@ -2481,7 +2496,8 @@ void inc_dc_pull_dispatch_v2_device_kernel(
 
 extern "C" void launch_inc_dc_pull_dispatch_v2_device(
     uint32_t block_dim, void *stream, uint8_t *source_region,
-    uint8_t *ready_mailbox, uint8_t *inc_slots, uint8_t *source_acks,
+    uint8_t *ready_mailbox, uint8_t *metadata_inbox, uint8_t *inc_slots,
+    uint8_t *source_acks,
     uint8_t *destination_hidden, uint8_t *destination_rows,
     uint8_t *destination_assignments, uint8_t *destination_expert_counts,
     uint8_t *destination_completions, uint8_t *inc_destination_rows,
@@ -2494,7 +2510,8 @@ extern "C" void launch_inc_dc_pull_dispatch_v2_device(
     uint8_t *parser_scratch, uint8_t *status_line, uint64_t ffts_addr,
     uint64_t session_id,
     uint64_t placement_epoch, uint64_t generation, uint64_t sequence,
-    uint64_t source_slot_stride, uint64_t destination_hidden_slot_stride,
+    uint64_t source_slot_stride, uint64_t metadata_inbox_stride,
+    uint64_t destination_hidden_slot_stride,
     uint64_t destination_rows_slot_stride,
     uint64_t destination_assignments_slot_stride,
     uint64_t destination_expert_counts_slot_stride,
@@ -2523,7 +2540,7 @@ extern "C" void launch_inc_dc_pull_dispatch_v2_device(
             : kDefaultChannelsPerSource;
     }
     inc_dc_pull_dispatch_v2_device_kernel<<<block_dim, nullptr, stream>>>(
-        source_region, ready_mailbox, inc_slots, source_acks,
+        source_region, ready_mailbox, metadata_inbox, inc_slots, source_acks,
         destination_hidden, destination_rows, destination_assignments,
         destination_expert_counts, destination_completions,
         inc_destination_rows, inc_destination_assignments, journal_header,
@@ -2532,6 +2549,7 @@ extern "C" void launch_inc_dc_pull_dispatch_v2_device(
         destination_row_counts, destination_assignment_counts,
         expert_counts, parser_scratch, status_line, ffts_addr, session_id,
         placement_epoch, generation, sequence, source_slot_stride,
+        metadata_inbox_stride,
         destination_hidden_slot_stride, destination_rows_slot_stride,
         destination_assignments_slot_stride,
         destination_expert_counts_slot_stride, journal_token_capacity,

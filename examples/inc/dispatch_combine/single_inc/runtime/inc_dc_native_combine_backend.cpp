@@ -455,7 +455,6 @@ inc_dc_fw_status_t CreateNativeCombineSession(
     DynCsrCtrl control = created->prepared.control;
     control.this_worker_rank = config.local_pe < control.worker_count
         ? config.local_pe : 0u;
-    control.this_inc_index = 0u;
     std::memcpy(image.data(), &control, sizeof(control));
     if (aclrtMemcpy(created->sym, created->sym_bytes, image.data(),
                     image.size(), ACL_MEMCPY_HOST_TO_DEVICE) != ACL_SUCCESS) {

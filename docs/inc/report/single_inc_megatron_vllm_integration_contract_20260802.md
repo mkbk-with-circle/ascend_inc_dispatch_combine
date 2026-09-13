@@ -1,10 +1,20 @@
 # 单 INC 接入 Megatron / vLLM 的生产契约
 
-日期：2026-08-03（最新版）
+原始资格化日期：2026-08-03；公开接口收口：2026-08-14
 
 ## 结论与路径不变量
 
-现有 C ABI 已覆盖 worker-only process group、caller-owned device tensor、外部 stream、workspace query/lease、异步 request、多 inflight、取消/超时、动态 token 数、device route 描述和 dispatch/combine 并发。框架不得调用 benchmark main，文本 plan 仅用于资格验证。
+当前业务侧只公开
+`examples/inc/dispatch_combine/common/api/inc_dc_single_inc.hpp`。它覆盖
+worker process group、caller-owned device tensor、外部 stream、device route 和
+Dispatch→expert→Combine 生命周期；调用序列固定为
+`create -> dispatch -> compute -> combine -> destroy`。框架不得调用 benchmark
+main，也不得逐层调用内部 Framework/Easy/Inference API。
+
+2026-08-03 验证过的 workspace lease、异步 request、多 inflight、取消/超时和
+stats 能力仍存在于内部 runtime/tests，但不再作为当前原型的公开契约。需要真实
+Megatron/vLLM 集成证明确有必要后，再从最短 API 上增量设计，不能把旧分层入口
+重新暴露给业务代码。
 
 生产通信路径只有一种：`worker push -> single INC -> worker`。禁止 pull、worker
 direct/bypass 和按 shape 切换替代路径。INC 不预知 K、token plan 或负载分布；
@@ -25,16 +35,15 @@ INC 与 worker 的 AIV cohort 只由运行时硬件能力和拓扑规模 W 决�
 | 能力 | 当前状态 | 接入动作 |
 |---|---|---|
 | 动态 top-k/CSR、weight、drop mask | ABI 已有 | 把 router device tensor 编译成 route descriptor |
-| dispatch 输出供 grouped GEMM 使用 | **版本化 layout ABI 已有** | `inc_dc_fw_expert_layout_v1_t` 提供 permutation/inverse、logical/padded offsets、tokens-per-expert 和 2 的幂 alignment；native backend 待填充 |
-| combine 精确反向映射 | **opaque route handle ABI 已有** | 只能从活跃 dispatch request 创建，绑定 generation；combine 使用期间 handle 不可释放，native backend 待消费 |
-| async overlap、多 inflight | ABI 已有 | 框架 backend 接入外部 stream/event，不做 host sync |
+| dispatch 输出供 grouped GEMM 使用 | native layout adapter 已有 | 适配器把 Dispatch 输出映射到 expert-major/padded buffer；业务侧不直接操作 layout extension |
+| combine 精确反向映射 | 最短 API 已封装 | `SingleIncBatch` 绑定 generation 和精确 route，Combine 成功或异常退出时自动释放 |
+| async overlap、多 inflight | 设备/runtime 有历史证据，当前不公开 | 单 INC 普通调用先走最短同步 API；Fusion overlap 走独立 `inc_fusion_api.h` |
 | decode 低延迟 | 传输可运行 | 增加 persistent plan/workspace cache，避免逐 token host 分配 |
 | EPLB/冗余 expert/remap | 路由可表达 | 映射和负载策略留在上层，INC 只执行已编译 plan |
 | FP16/BF16 | 资格范围 | FP8/量化需增加 scale 元数据和数值 gate |
 
-因此，传输内核与语义基础已经具备，expert alignment/permutation 与 opaque
-route handle 的稳定 ABI 也已补齐；但在 device route compiler、layout/handle
-的 native 消费和真实框架 backend 完成前，不应宣称
+因此，传输内核与语义基础已经具备，公开调用面也已经收成单一短路径；但真实
+router adapter、grouped GEMM、动态 shape 和端到端框架门禁完成前，不应宣称
 Megatron/vLLM 生产接入已经完成。
 
 ## 可移植性与失败策略
@@ -43,14 +52,19 @@ Megatron/vLLM 生产接入已经完成。
 - `INC_SINGLE_INC_PHY`、`INC_SINGLE_INC_WORKER_PHYS` 可提供平台 profile；缺省 profile 不适用时，从 live topology 选择同为 `HCCS_SW` 的 peers。
 - 每次下发前重新核对选定的 INC→worker 关系全部同类，并等待全卡 idle；拓扑查询或 AIV capability 查询失败时拒绝运行。
 - 大消息内部按容量分页，计数使用 64 位；OOM 是调用方容量问题，不改变协议语义。
-- 输出顺序由 route metadata 决定，不依赖包完成顺序；workspace、route 和扩展链在 request release 前保持有效。
+- 输出顺序由 route metadata 决定，不依赖包完成顺序；route 生命周期由
+  `SingleIncBatch` 持有到 Combine 完成。
 
 ## 接入层下一步
 
-1. 在 device 上把 Megatron/vLLM router 的 top-k tensor 编译成 dense/CSR plan，同时生成 semantic digest/generation。
-2. 在 native backend 填充已定义的 permutation/expert-alignment layout，并消费已绑定 generation 的 opaque route handle。
-3. prefill 使用流式大 workspace；decode 缓存 plan/workspace/handle，支持 zero-token rank。
+1. 把 Megatron/vLLM router 的 top-k tensor 编译成 `SingleIncRoute`，同时生成 semantic digest/generation。
+2. 用 native layout adapter 将 Dispatch 输出直接交给 grouped GEMM；同一
+   `SingleIncBatch` 随后传给 Combine，不让框架接触内部 route handle。
+3. prefill 复用长生命周期 `SingleInc` 和大 workspace；decode 支持 zero-token
+   rank，并在有测量证据后再增加必要的缓存或异步接口。
 4. TP×EP 只注册 EP worker group；global rank 到 worker/Phy-ID 的映射由 backend 注入，模型代码看不到 INC rank。
 5. capacity/drop、EPLB 和 redundant-expert 策略由框架决定；通信层只执行并验证 plan。
 
-相关实现：`inc_dc_framework_c_api.{h,cpp}`、`inc_dc_single_inc_stream_{main,kernel}.cpp`、`inc_dc_sv2_dyn_csr_combine_{main,kernel}.cpp`。
+公开入口：`examples/inc/dispatch_combine/common/api/inc_dc_single_inc.hpp`。
+设备实现：`examples/inc/dispatch_combine/single_inc/{dispatch,combine,planning,runtime}/`。
+完整示例：`examples/inc/dispatch_combine/common/examples/single_inc_api/`。

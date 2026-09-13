@@ -22,6 +22,7 @@
 | `inc_dc_handle.h` | token 身份、Dispatch handle、Combine inverse entry | Combine 散写后能按身份找回归并位置 |
 | `inc_dc_route.h` | tensor 描述、route 规格、assignment 查询 | 描述「token×topk→expert」而不绑定某 backend |
 | `inc_dc_packet.h` | host/device 共享 packet header 与 assignment metadata | 设备上可见的包格式契约 |
+| `inc_dc_inline_route_protocol.h` | V2 token 自带路由、INC 在线解析的 transport-neutral wire ABI | 未来真实 INC 与当前 SHMEM 样机共享语义 |
 | `inc_dc_layout.h` | Dispatch 对称内存布局描述 | 各 rank 可见 buffer 的摆放规则 |
 | `inc_dc_checked_arith.h` | 防溢出的 size/offset 算术 | 避免 workspace/offset 静默 wrap 导致内存破坏 |
 
@@ -52,5 +53,6 @@ single kernel.
 | `inc_dc_handle.h` | Token identity, Dispatch handle, Combine inverse entries | Recover combine destinations after scatter |
 | `inc_dc_route.h` | Tensor descriptors, routes, assignment queries | Describe token×topk→expert independently |
 | `inc_dc_packet.h` | Shared packet headers and assignment metadata | Device-visible packet contract |
+| `inc_dc_inline_route_protocol.h` | Transport-neutral V2 token-carried route ABI parsed by the INC | Shared semantics for real INC and the SHMEM emulator |
 | `inc_dc_layout.h` | Dispatch symmetric-memory layout | How cross-rank buffers are arranged |
 | `inc_dc_checked_arith.h` | Overflow-safe size/offset math | Prevent silent wrap in workspace math |

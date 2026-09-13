@@ -75,7 +75,7 @@ bool BuildNativeCombinePreparedWorkspace(
     }
     for (uint32_t rank = 0u; rank < workers; ++rank)
         topology.worker_pe_ids[rank] = rank;
-    topology.inc_pe_ids[0] = workers;
+    topology.inc_pe = workers;
     topology.topology_digest = ComputeTopologyDigest(topology);
     IncDcCompiledExecutionPlan execution{};
     IncDcPlanCompileReport compile{};
@@ -88,9 +88,7 @@ bool BuildNativeCombinePreparedWorkspace(
     for (const auto &entry : execution.schedule)
         max_slot = std::max(max_slot, entry.ingress_slot);
     const uint32_t slot_count = max_slot + 1u;
-    const uint32_t owner_total = owners;
     const uint32_t group_count = owners * workers;
-    const uint32_t inc_group_count = workers;
     const uint32_t bitmap_words = (workers + 31u) / 32u;
     const uint64_t payload_bytes = static_cast<uint64_t>(hidden) * 2u;
     if (payload_bytes > std::numeric_limits<uint32_t>::max() - 63u)
@@ -105,6 +103,7 @@ bool BuildNativeCombinePreparedWorkspace(
     control.tile_bytes = tile_bytes;
     control.element_bytes = 2u;
     control.owner_count = owners;
+    control.inc_pe = workers;
     control.generation = 1u;
     control.fail_closed_on_dup = 1u;
     control.max_ingress_slots = slot_count;
@@ -114,14 +113,11 @@ bool BuildNativeCombinePreparedWorkspace(
     control.ready_stride_bytes = 64u;
     control.ready_spin_cap = 40000000u;
     control.worker_count = workers;
-    control.inc_count = 1u;
-    control.owner_total = owner_total;
     control.group_count = group_count;
     control.source_bitmap_words = bitmap_words;
     control.ready_mode = 6u;
     control.output_dcci_small_only = 1u;
     control.device_completion = 1u;
-    control.inc_group_count = inc_group_count;
     control.tx_quiet_window =
         tile_bytes <= 16u * 1024u &&
                 validation.expected_count_max <= 2u
@@ -141,10 +137,10 @@ bool BuildNativeCombinePreparedWorkspace(
     const bool identity_k1 = validation.expected_count_min == 1u &&
         validation.expected_count_max == 1u;
     const uint32_t owners_per_producer = std::max(
-        1u, (owner_total + control.producer_lane_count - 1u) /
+        1u, (owners + control.producer_lane_count - 1u) /
                 control.producer_lane_count);
     const uint64_t chunk_tiles = identity_k1 ? 1u :
-        (static_cast<uint64_t>(workers) * 3u >= owner_total ||
+        (static_cast<uint64_t>(workers) * 3u >= owners ||
          owners_per_producer <= 2u) ? 4u : 64u;
     control.coalesced_chunk_bytes = static_cast<uint32_t>(
         std::max<uint64_t>(tile_bytes,
@@ -164,8 +160,6 @@ bool BuildNativeCombinePreparedWorkspace(
     bool ok =
         Reserve((static_cast<uint64_t>(logical.result_count) + 1u) * 4u,
                 &cursor, &control.result_offsets_off) &&
-        Reserve(static_cast<uint64_t>(logical.result_count) * 4u,
-                &cursor, &control.result_home_inc_off) &&
         Reserve(static_cast<uint64_t>(logical.result_count) * 4u,
                 &cursor, &control.result_home_owner_off) &&
         Reserve(static_cast<uint64_t>(logical.result_count) * 4u,
@@ -191,29 +185,25 @@ bool BuildNativeCombinePreparedWorkspace(
         Reserve(static_cast<uint64_t>(logical.contribution_count) * 4u,
                 &cursor, &control.contrib_source_rank_off) &&
         Reserve(static_cast<uint64_t>(logical.contribution_count) * 4u,
-                &cursor, &control.contrib_home_pe_off) &&
-        Reserve(static_cast<uint64_t>(logical.contribution_count) * 4u,
-                &cursor, &control.contrib_owner_flat_off) &&
+                &cursor, &control.contrib_owner_off) &&
         Reserve(static_cast<uint64_t>(logical.contribution_count) * 4u,
                 &cursor, &control.contrib_result_off) &&
         Reserve((static_cast<uint64_t>(group_count) + 1u) * 4u,
                 &cursor, &control.group_offsets_off) &&
         Reserve(static_cast<uint64_t>(logical.contribution_count) * 4u,
                 &cursor, &control.group_entries_off) &&
-        Reserve((static_cast<uint64_t>(inc_group_count) + 1u) * 4u,
-                &cursor, &control.inc_group_offsets_off) &&
+        Reserve((static_cast<uint64_t>(workers) + 1u) * 4u,
+                &cursor, &control.source_contribution_offsets_off) &&
         Reserve(static_cast<uint64_t>(logical.contribution_count) * 4u,
-                &cursor, &control.inc_group_entries_off) &&
+                &cursor, &control.source_contribution_entries_off) &&
         Reserve((static_cast<uint64_t>(workers) + 1u) * 4u,
                 &cursor, &control.source_group_offsets_off) &&
         Reserve(static_cast<uint64_t>(group_count) * 4u,
                 &cursor, &control.source_group_entries_off) &&
-        Reserve(static_cast<uint64_t>(owner_total) * bitmap_words * 4u,
+        Reserve(static_cast<uint64_t>(owners) * bitmap_words * 4u,
                 &cursor, &control.owner_source_bitmap_off) &&
-        Reserve(static_cast<uint64_t>(owner_total) * bitmap_words * 4u,
+        Reserve(static_cast<uint64_t>(owners) * bitmap_words * 4u,
                 &cursor, &control.waited_source_bitmap_off) &&
-        Reserve(static_cast<uint64_t>(owner_total) * 4u,
-                &cursor, &control.owner_home_pe_off) &&
         Reserve(static_cast<uint64_t>(workers) * 4u,
                 &cursor, &control.worker_pe_off) &&
         Reserve((static_cast<uint64_t>(workers) + 2u) * 64u,
@@ -262,20 +252,20 @@ bool BuildNativeCombinePreparedWorkspace(
     }
 
     std::vector<std::vector<uint32_t>> grouped(group_count);
-    std::vector<std::vector<uint32_t>> inc_grouped(inc_group_count);
+    std::vector<std::vector<uint32_t>> source_contributions(workers);
     std::vector<uint32_t> contribution_owner(logical.contribution_count);
     std::vector<uint32_t> owner_bitmap(
-        static_cast<size_t>(owner_total) * bitmap_words, 0u);
+        static_cast<size_t>(owners) * bitmap_words, 0u);
     for (uint32_t si = 0u; si < execution.schedule.size(); ++si) {
         const auto &compiled = execution.schedule[si];
         const auto &entry =
             logical.contributions[compiled.logical_contribution_index];
         const uint32_t flat = compiled.owner_index;
-        if (flat >= owner_total || entry.contributor_rank >= workers)
+        if (flat >= owners || entry.contributor_rank >= workers)
             return false;
         contribution_owner[si] = flat;
         grouped[flat * workers + entry.contributor_rank].push_back(si);
-        inc_grouped[entry.contributor_rank].push_back(si);
+        source_contributions[entry.contributor_rank].push_back(si);
         owner_bitmap[static_cast<size_t>(flat) * bitmap_words +
                      (entry.contributor_rank >> 5u)] |=
             1u << (entry.contributor_rank & 31u);
@@ -293,27 +283,27 @@ bool BuildNativeCombinePreparedWorkspace(
     for (uint32_t source = 0u; source < workers; ++source) {
         source_group_offsets[source] =
             static_cast<uint32_t>(source_group_entries.size());
-        for (uint32_t owner = 0u; owner < owner_total; ++owner) {
+        for (uint32_t owner = 0u; owner < owners; ++owner) {
             if (!grouped[owner * workers + source].empty())
                 source_group_entries.push_back(owner);
         }
     }
     source_group_offsets[workers] =
         static_cast<uint32_t>(source_group_entries.size());
-    std::vector<uint32_t> inc_group_offsets(inc_group_count + 1u);
-    std::vector<uint32_t> inc_group_entries;
+    std::vector<uint32_t> source_contribution_offsets(workers + 1u);
+    std::vector<uint32_t> source_contribution_entries;
     uint32_t packed_slot = 0u;
     for (uint32_t source = 0u; source < workers; ++source) {
-        inc_group_offsets[source] =
-            static_cast<uint32_t>(inc_group_entries.size());
-        for (uint32_t si : inc_grouped[source])
+        source_contribution_offsets[source] =
+            static_cast<uint32_t>(source_contribution_entries.size());
+        for (uint32_t si : source_contributions[source])
             execution.schedule[si].ingress_slot = packed_slot++;
-        inc_group_entries.insert(inc_group_entries.end(),
-                                 inc_grouped[source].begin(),
-                                 inc_grouped[source].end());
+        source_contribution_entries.insert(source_contribution_entries.end(),
+            source_contributions[source].begin(),
+            source_contributions[source].end());
     }
-    inc_group_offsets[workers] =
-        static_cast<uint32_t>(inc_group_entries.size());
+    source_contribution_offsets[workers] =
+        static_cast<uint32_t>(source_contribution_entries.size());
     if (packed_slot != logical.contribution_count ||
         packed_slot > slot_count) return false;
 
@@ -324,7 +314,6 @@ bool BuildNativeCombinePreparedWorkspace(
     std::vector<uint32_t> ordinals(logical.contribution_count);
     std::vector<uint64_t> generations(logical.contribution_count, 0u);
     std::vector<uint32_t> sources(logical.contribution_count);
-    std::vector<uint32_t> homes(logical.contribution_count, workers);
     for (uint32_t si = 0u; si < execution.schedule.size(); ++si) {
         const auto &compiled = execution.schedule[si];
         const auto &entry =
@@ -336,12 +325,10 @@ bool BuildNativeCombinePreparedWorkspace(
         ordinals[si] = entry.ordinal;
         sources[si] = entry.contributor_rank;
     }
-    std::vector<uint32_t> owner_home(owner_total, workers);
     std::vector<uint32_t> worker_pes(workers);
     for (uint32_t rank = 0u; rank < workers; ++rank) worker_pes[rank] = rank;
 
     Store(&image, control.result_offsets_off, execution.result_offsets);
-    Store(&image, control.result_home_inc_off, execution.result_home_inc);
     Store(&image, control.result_home_owner_off, execution.result_home_owner);
     Store(&image, control.result_dst_rank_off, result_dst_rank);
     Store(&image, control.result_dst_row_off, result_dst_row);
@@ -352,17 +339,17 @@ bool BuildNativeCombinePreparedWorkspace(
     Store(&image, control.contrib_ordinal_off, ordinals);
     Store(&image, control.contrib_gen_off, generations);
     Store(&image, control.contrib_source_rank_off, sources);
-    Store(&image, control.contrib_home_pe_off, homes);
-    Store(&image, control.contrib_owner_flat_off, contribution_owner);
+    Store(&image, control.contrib_owner_off, contribution_owner);
     Store(&image, control.contrib_result_off, contribution_result);
     Store(&image, control.group_offsets_off, group_offsets);
     Store(&image, control.group_entries_off, group_entries);
-    Store(&image, control.inc_group_offsets_off, inc_group_offsets);
-    Store(&image, control.inc_group_entries_off, inc_group_entries);
+    Store(&image, control.source_contribution_offsets_off,
+          source_contribution_offsets);
+    Store(&image, control.source_contribution_entries_off,
+          source_contribution_entries);
     Store(&image, control.source_group_offsets_off, source_group_offsets);
     Store(&image, control.source_group_entries_off, source_group_entries);
     Store(&image, control.owner_source_bitmap_off, owner_bitmap);
-    Store(&image, control.owner_home_pe_off, owner_home);
     Store(&image, control.worker_pe_off, worker_pes);
     std::memcpy(image.data(), &control, sizeof(control));
 

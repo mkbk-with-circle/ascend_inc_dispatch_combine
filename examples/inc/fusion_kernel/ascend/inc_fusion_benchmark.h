@@ -58,7 +58,8 @@ typedef struct inc_fusion_benchmark_mode_info {
     uint32_t mode;
     uint32_t transport;
     uint32_t schedule;
-    uint32_t dedicated_inc_count;
+    /* Boolean: this mode uses the one dedicated INC PE. */
+    uint32_t uses_dedicated_inc;
     uint32_t is_factorial_baseline;
     uint32_t reserved32;
     uint64_t reserved[4];
@@ -74,7 +75,8 @@ typedef struct inc_fusion_benchmark_signature {
     uint32_t abi_version;
     uint32_t mode;
     uint32_t worker_count;
-    uint32_t dedicated_inc_count;
+    /* Boolean: the invocation uses the one dedicated INC PE. */
+    uint32_t uses_dedicated_inc;
     uint32_t dtype;
     uint64_t token_count;
     uint32_t hidden;
@@ -124,7 +126,7 @@ int inc_fusion_benchmark_mode_info(
 
 /*
  * Validate one member first, then validate a pair.  Pair validation accepts
- * different mode and dedicated INC count, but every workload/compute/timing
+ * different mode and dedicated-INC usage, but every workload/compute/timing
  * field must match.  Native vLLM is rejected here because it is an external
  * baseline rather than one cell of the 2x2 attribution experiment.
  */

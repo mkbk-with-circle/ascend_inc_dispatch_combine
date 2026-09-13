@@ -17,11 +17,12 @@
 
 不能直接复用的部分：
 
-- 旧 random runner 生成的是 Push-Dispatch token plan；V2 必须由各 worker 的
-  source slot 携带 metadata，INC 在线拉取和解析。
-- 旧 Dispatch 字节口径和 roofline 公式不适用于 V2。V2 的完整 Dispatch 分子固定为
-  `hidden GET 一次 + hidden PUT 到每个 unique destination 一次`；metadata/control
-  只计入时间，不计入分子。
+- 旧 random runner 生成的是 Host Push-Dispatch token plan；V2 路由仍由各 worker
+  的 source slot 生成，但 worker 会把 header/metadata prefix PUT 到 INC inbox，
+  publication-last READY 后由 INC 在线解析。
+- 旧的双腿相加字节口径不适合作为链路带宽。Dispatch 主分子只计算 INC→Worker
+  fan-out 下行 hidden；Combine 主分子只计算 Worker→INC reduction partial 上行。
+  GET+PUT 字节之和只能作为 aggregate traffic 诊断字段。
 - 当前 GET/relay probe 只能作为链路解释，不能替代完整算子 gate。
 - 设备层仍需补齐：完整 Dispatch operator runner、非对称 workload、故障后不重建
   session 的恢复、双 journal slot 的任意 D/C 错峰，以及长时间 soak。
@@ -43,38 +44,29 @@
 6. 性能样本使用完整 device makespan 的最慢 rank，排除初始化、分配、warmup、
    host oracle 和结果拷回。
 7. 正式性能为 `warmup >= 3, measure >= 10`；报告 `min/mean/median/stddev/CV/P50/P95`。
-   只有下述 canonical Dispatch case 使用固定 raw hard gate，按最小带宽判定且
-   CV 必须 `<= 5%`。
+   主带宽必须使用单一物理方向的有效数据量与完整算子时间；CV 必须 `<= 5%`。
 
 ### 2.1 Dispatch
 
 ```text
-logical_dispatch_bytes =
-    sum(source token hidden bytes)
-  + sum(one hidden row for every (token, unique destination))
+dispatch_down_bytes =
+    sum(one hidden row for every (token, unique destination))
 
-bandwidth = logical_dispatch_bytes / full_dispatch_makespan
+dispatch_bandwidth = dispatch_down_bytes / full_dispatch_makespan
 ```
 
-固定 raw gate **只适用于**完整 Dispatch、`sym_k2_balanced` 对称路由，并且每个 worker
-的 source hidden payload 恰好为 128 MiB：
-
-| 规模 | nominal raw 参考 | 92% gate |
-|---|---:|---:|
-| W2 | 56 GB/s | min >= 51.52 GB/s |
-| W4 | 112 GB/s | min >= 103.04 GB/s |
-
-因此正式 hard-gated case 只有 W2 和 W4 各一个。纯 GET 新标定仅用于诊断和解释
-物理瓶颈，不能下调以上完整算子 gate。小消息、其他数据量及任何非对称 workload
-均不套用固定 raw gate。
+完整时间从 launch 前开始，包含 Worker metadata PUT、READY publication、INC 本地
+解析、hidden GET、fan-out PUT、completion 与 ACK，直到最慢 rank 完成。历史
+`hidden GET + fan-out PUT` 相加得到的 56/112 GB/s nominal 与 51.52/103.04 gate
+不再作为主带宽门限；该 aggregate traffic rate 可保留作流水诊断，但不得与单向
+链路峰值比较。
 
 ### 2.2 Combine
 
-Combine 使用 `partial ingress + owner egress` 的 logical bytes，READY Notice、
-INC GET READY、FP32 reduce、owner PUT、ACK/completion 的时间全部计入分母。正式
-`sym_k2_balanced`、每个 B 恰好 128 MiB partial 的 W2/W4 case 使用相同的
-51.52/103.04 GB/s hard gate，并以 10 个 measure 的最小值判定。其他 top-k、
-非对称和小消息只要求正确、稳定、有限完成，并作为配对回归数据记录。
+Combine 主分子只使用实际参与 reduction 的 Worker→INC FP32 partial ingress bytes；
+owner egress 不与其相加。READY record PUT、Notice、FP32 reduce、owner PUT、
+ACK/completion 的时间全部计入完整分母。历史 `partial ingress + owner egress`
+口径只保留为 aggregate traffic 诊断，不作为主带宽或单向峰值对照。
 
 ## 3. 固定验收矩阵
 
@@ -100,9 +92,9 @@ host validation 阶段明确拒绝，而不是截断或补成另一个逻辑 sha
 
 ### 3.2 数据量阶梯
 
-Dispatch 的 size step 指**每个 worker 的 source hidden payload**；对于
-`sym_k2_balanced`，runner 再精确计算完整算子的 logical bytes。其他场景的
-`target_logical_bytes` 仍指算子逻辑字节，不是含 padding 的 allocation bytes：
+Dispatch 的 size step 指**每个 worker 的 source hidden payload**；runner 根据
+实际 unique destination 精确计算 `dispatch_down_bytes`。其他场景的目标字节仍指
+主方向有效字节，不是 padding、metadata 或 allocation bytes：
 
 ```text
 0, 4 KiB, 64 KiB, 1 MiB, 16 MiB, 64 MiB,

@@ -1,13 +1,14 @@
 # 单 INC — 910b2c-nb 环境状态
 
-> 候选环境；远端 live 探测与性能数据未完成前不作为 ACTIVE，也不用于 PASS 判定。
+> 当前 ACTIVE 环境。单 INC 资格化只覆盖同一 HCCS 平面的 W2/W4；本页的历史
+> 性能锚点与 gate 判定不因 2026-08-14 API 收口而改写。
 > 共享硬约束与 gate 见 [`../../report/single_inc_LIVE_STATUS.md`](../../report/single_inc_LIVE_STATUS.md)。
 
 | 字段 | 值 |
 |:---|:---|
 | profile 名 | `910b2c-nb` |
-| 上次更新 | 2026-08-06 |
-| 更新者 | Codex |
+| 上次更新 | 2026-08-14 |
+| 更新者 | Codex（同步 ACTIVE 状态；性能数据未改写） |
 | 对应共享文档 | `docs/inc/report/single_inc_LIVE_STATUS.md` |
 
 ## 1. 本机身份与软件
@@ -96,7 +97,7 @@ quiet=1..128，并用 contiguous/ping-pong direct-MTE 交叉诊断；所有 lane
 - [x] W2/W4 put-only ingress / egress / duplex roofline
 - [x] legacy W4/K8 Dispatch/Combine representative replay
 - [ ] reproducible random-route campaign
-- [ ] 仅在成为 ACTIVE 后更新 `ACTIVE_HW_PROFILE.md`
+- [x] `ACTIVE_HW_PROFILE.md` 已指向本 profile
 
 ## 6. 本机 Changelog
 
@@ -106,3 +107,4 @@ quiet=1..128，并用 contiguous/ping-pong direct-MTE 交叉诊断；所有 lane
 | 2026-08-06 | Codex | 确认会话直接位于 npu-borrow；完成 W2/W4 put-only 参数扫描与H11峰值验证，记录每-link物理口径 |
 | 2026-08-06 | Codex | 明确本环境只验收同平面 W2/W4；复跑旧环境 W4/K8 D/C 达标 case，结果独立归档且保留旧报告校验和 |
 | 2026-08-07 | Codex | 完成低风险可移植性重构后 W2/W4 40-case sweep：40/40 正确、29/30 gated PASS；统一 capability/policy/map fingerprint，旧 yuanmingyu 与 nb 历史数据均未覆盖 |
+| 2026-08-14 | Codex | 修正文档状态：`ACTIVE_HW_PROFILE.md` 已指向 nb；本次只同步 API/文档关系，未重测或改写任何性能锚点。 |

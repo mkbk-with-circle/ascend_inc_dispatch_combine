@@ -16,13 +16,6 @@ uint64_t Mix(uint64_t h, uint64_t v)
     return h;
 }
 
-bool WorkerReachesInc(const IncDcTopologyDescriptor &topo, uint32_t worker,
-                      uint32_t inc)
-{
-    uint32_t ch = 0;
-    return LookupIngressChannel(topo, worker, inc, &ch);
-}
-
 } // namespace
 
 uint64_t ComputeExecutionDigest(const IncDcCompiledExecutionPlan &plan)
@@ -36,7 +29,6 @@ uint64_t ComputeExecutionDigest(const IncDcCompiledExecutionPlan &plan)
     h = Mix(h, static_cast<uint64_t>(plan.schedule.size()));
     for (const auto &c : plan.schedule) {
         h = Mix(h, c.logical_contribution_index);
-        h = Mix(h, c.inc_index);
         h = Mix(h, c.owner_index);
         h = Mix(h, c.ingress_channel);
         h = Mix(h, c.ingress_slot);
@@ -44,7 +36,6 @@ uint64_t ComputeExecutionDigest(const IncDcCompiledExecutionPlan &plan)
         h = Mix(h, c.buffer_id);
         h = Mix(h, c.element_bytes);
     }
-    for (uint32_t v : plan.result_home_inc) h = Mix(h, v);
     for (uint32_t v : plan.result_home_owner) h = Mix(h, v);
     for (uint32_t v : plan.owner_worklist_offsets) h = Mix(h, v);
     for (uint32_t v : plan.owner_worklist_entries) h = Mix(h, v);
@@ -99,10 +90,9 @@ IncDcStatus CompileLogicalPlanToExecution(
     out->schedule.resize(logical.contribution_count);
     out->result_offsets.assign(logical.result_count + 1u, 0);
     out->contribution_entry_indices.assign(logical.contribution_count, UINT32_MAX);
-    out->result_home_inc.assign(logical.result_count, 0);
     out->result_home_owner.assign(logical.result_count, 0);
 
-    const uint32_t owners_total = topology.owner_count_per_inc;
+    const uint32_t owners_total = topology.owner_count;
     std::vector<std::vector<uint32_t>> per_owner(owners_total);
     std::vector<std::vector<uint32_t>> per_owner_results(owners_total);
     uint32_t next_owner = 0u;
@@ -111,22 +101,15 @@ IncDcStatus CompileLogicalPlanToExecution(
     for (uint32_t ri = 0; ri < logical.result_count; ++ri) {
         out->result_offsets[ri] = sched_i;
         const auto &r = logical.results[ri];
-        constexpr uint32_t home_inc = 0u;
-        const uint32_t home_owner =
-            next_owner % topology.owner_count_per_inc;
+        const uint32_t home_owner = next_owner % topology.owner_count;
         ++next_owner;
-        out->result_home_inc[ri] = home_inc;
         out->result_home_owner[ri] = home_owner;
 
         for (uint32_t j = 0; j < r.contribution_count; ++j) {
             const uint32_t li = r.contribution_begin + j;
             const auto &lc = logical.contributions[li];
-            if (!WorkerReachesInc(topology, lc.contributor_rank, home_inc)) {
-                rep->first_error = "contributor_cannot_reach_home_inc";
-                return IncDcStatus::INVALID_ARGUMENT;
-            }
             uint32_t channel = 0;
-            if (!LookupIngressChannel(topology, lc.contributor_rank, home_inc,
+            if (!LookupIngressChannel(topology, lc.contributor_rank,
                                       &channel)) {
                 rep->first_error = "missing_ingress_channel_edge";
                 return IncDcStatus::INVALID_ARGUMENT;
@@ -149,7 +132,6 @@ IncDcStatus CompileLogicalPlanToExecution(
 
             IncDcCompiledContribution cc{};
             cc.logical_contribution_index = li;
-            cc.inc_index = home_inc;
             cc.owner_index = home_owner;
             cc.ingress_channel = channel;
             cc.ingress_slot = slot;
@@ -243,8 +225,7 @@ IncDcStatus ValidateCompiledExecutionPlan(
     if (plan.schedule.size() != logical.contribution_count) {
         return fail("schedule_size_mismatch");
     }
-    if (plan.result_home_inc.size() != logical.result_count ||
-        plan.result_home_owner.size() != logical.result_count) {
+    if (plan.result_home_owner.size() != logical.result_count) {
         return fail("result_home_size");
     }
     if (plan.result_offsets.size() != logical.result_count + 1u) {
@@ -284,10 +265,8 @@ IncDcStatus ValidateCompiledExecutionPlan(
         if (e < b) return fail("result_offsets_non_monotonic");
         const auto &lr = logical.results[ri];
         if (e - b != lr.contribution_count) return fail("result_csr_count");
-        const uint32_t home_inc = plan.result_home_inc[ri];
         const uint32_t home_owner = plan.result_home_owner[ri];
-        if (home_inc >= plan.topology.inc_count) return fail("home_inc_oob");
-        if (home_owner >= plan.topology.owner_count_per_inc) {
+        if (home_owner >= plan.topology.owner_count) {
             return fail("home_owner_oob");
         }
         for (uint32_t i = b; i < e; ++i) {
@@ -295,20 +274,16 @@ IncDcStatus ValidateCompiledExecutionPlan(
             const auto &lc =
                 logical.contributions[cc.logical_contribution_index];
             if (lc.result_id != ri) return fail("schedule_result_mismatch");
-            if (cc.inc_index != home_inc || cc.owner_index != home_owner) {
+            if (cc.owner_index != home_owner) {
                 return fail("contribution_not_on_unique_home");
-            }
-            if (!WorkerReachesInc(plan.topology, lc.contributor_rank, home_inc)) {
-                return fail("contributor_cannot_reach_home_inc");
             }
             uint32_t expect_ch = 0;
             if (!LookupIngressChannel(plan.topology, lc.contributor_rank,
-                                      home_inc, &expect_ch) ||
+                                      &expect_ch) ||
                 expect_ch != cc.ingress_channel) {
                 return fail("ingress_channel_not_from_edge_map");
             }
-            if (cc.inc_index >= plan.topology.inc_count) return fail("inc_oob");
-            if (cc.owner_index >= plan.topology.owner_count_per_inc) {
+            if (cc.owner_index >= plan.topology.owner_count) {
                 return fail("owner_oob");
             }
             uint64_t expect_off = 0;
@@ -322,7 +297,7 @@ IncDcStatus ValidateCompiledExecutionPlan(
         }
     }
 
-    const uint32_t owners_total = plan.topology.owner_count_per_inc;
+    const uint32_t owners_total = plan.topology.owner_count;
     if (plan.owner_worklist_offsets.size() != owners_total + 1u) {
         return fail("owner_worklist_offsets_size");
     }
@@ -353,10 +328,9 @@ IncDcStatus ValidateCompiledExecutionPlan(
             if (sched_seen[si]) return fail("owner_worklist_dup");
             sched_seen[si] = 1;
             const auto &cc = plan.schedule[si];
-            const uint32_t flat =
-                cc.inc_index * plan.topology.owner_count_per_inc +
-                cc.owner_index;
-            if (flat != o) return fail("owner_worklist_owner_mismatch");
+            if (cc.owner_index != o) {
+                return fail("owner_worklist_owner_mismatch");
+            }
         }
         const uint32_t rb = plan.owner_result_offsets[o];
         const uint32_t re = plan.owner_result_offsets[o + 1];
@@ -368,10 +342,9 @@ IncDcStatus ValidateCompiledExecutionPlan(
             if (!local_results.insert(rid).second) {
                 return fail("owner_result_dup");
             }
-            const uint32_t flat =
-                plan.result_home_inc[rid] * plan.topology.owner_count_per_inc +
-                plan.result_home_owner[rid];
-            if (flat != o) return fail("owner_result_home_mismatch");
+            if (plan.result_home_owner[rid] != o) {
+                return fail("owner_result_home_mismatch");
+            }
             if (result_owner_seen[rid]) return fail("result_home_owner_dup");
             result_owner_seen[rid] = 1;
         }

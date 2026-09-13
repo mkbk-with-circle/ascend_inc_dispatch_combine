@@ -19,7 +19,9 @@ set(INC_DC_PUBLIC_INCLUDES
     ${INC_DC_COMMON_API_DIR} ${INC_DC_COMMON_PROTOCOL_DIR}
     ${INC_DC_COMMON_PLATFORM_DIR} ${INC_DC_SINGLE_DISPATCH_DIR}
     ${INC_DC_SINGLE_COMBINE_DIR} ${INC_DC_SINGLE_PLANNING_DIR}
-    ${INC_DC_SINGLE_RUNTIME_DIR} ${INC_FUSION_DIR})
+    ${INC_DC_SINGLE_RUNTIME_DIR}
+    ${INC_DC_SINGLE_DIR}/inline_route
+    ${INC_FUSION_DIR})
 set(INC_HOST_INCLUDES
     ${PROJECT_SOURCE_DIR}/include ${INC_DC_PUBLIC_INCLUDES}
     ${PROJECT_SOURCE_DIR}/examples/utils ${PROJECT_SOURCE_DIR}/src/host)
@@ -63,6 +65,80 @@ add_library(inc_dc_inference_api SHARED
 inc_host_target(inc_dc_inference_api)
 target_link_libraries(inc_dc_inference_api PUBLIC inc_dc_easy_api)
 target_include_directories(inc_dc_inference_api PUBLIC ${INC_DC_PUBLIC_INCLUDES})
+
+# Recommended product-facing facade.  It only removes lifecycle boilerplate;
+# all qualified V1 kernels and backend calls remain unchanged.
+add_library(inc_dc_single_inc_api SHARED
+    dispatch_combine/common/api/inc_dc_single_inc_api.cpp)
+inc_host_target(inc_dc_single_inc_api)
+target_link_libraries(inc_dc_single_inc_api PUBLIC inc_dc_inference_api)
+target_include_directories(inc_dc_single_inc_api PUBLIC ${INC_DC_PUBLIC_INCLUDES})
+
+# Transport-neutral token-carried route ABI.  This host-only contract gate
+# has no effect on the qualified V1 device path while the V2 INC parser is
+# brought up behind an explicit API.
+add_executable(inc_dc_inline_route_protocol_tests
+    dispatch_combine/tests/common/test_inc_dc_inline_route_protocol.cpp)
+inc_host_target(inc_dc_inline_route_protocol_tests)
+target_compile_options(inc_dc_inline_route_protocol_tests PRIVATE -UNDEBUG)
+
+add_library(inc_dc_inline_route_parser STATIC
+    dispatch_combine/common/protocol/inc_dc_inline_route_parser.cpp)
+inc_host_target(inc_dc_inline_route_parser)
+target_include_directories(inc_dc_inline_route_parser PUBLIC
+    ${INC_DC_COMMON_PROTOCOL_DIR})
+
+add_executable(inc_dc_inline_route_parser_tests
+    dispatch_combine/tests/common/test_inc_dc_inline_route_parser.cpp)
+inc_host_target(inc_dc_inline_route_parser_tests)
+target_compile_options(inc_dc_inline_route_parser_tests PRIVATE -UNDEBUG)
+target_link_libraries(inc_dc_inline_route_parser_tests PRIVATE
+    inc_dc_inline_route_parser)
+
+add_library(inc_dc_inline_route_journal STATIC
+    dispatch_combine/common/protocol/inc_dc_inline_route_journal.cpp)
+inc_host_target(inc_dc_inline_route_journal)
+target_include_directories(inc_dc_inline_route_journal PUBLIC
+    ${INC_DC_COMMON_PROTOCOL_DIR})
+
+add_executable(inc_dc_inline_route_journal_tests
+    dispatch_combine/tests/common/test_inc_dc_inline_route_journal.cpp)
+inc_host_target(inc_dc_inline_route_journal_tests)
+target_compile_options(inc_dc_inline_route_journal_tests PRIVATE -UNDEBUG)
+target_link_libraries(inc_dc_inline_route_journal_tests PRIVATE
+    inc_dc_inline_route_journal)
+
+add_library(inc_dc_single_inc_inline_plan STATIC
+    dispatch_combine/single_inc/inline_route/inc_dc_single_inc_inline_plan.cpp)
+inc_host_target(inc_dc_single_inc_inline_plan)
+target_include_directories(inc_dc_single_inc_inline_plan PUBLIC
+    ${INC_DC_SINGLE_DIR}/inline_route)
+
+add_executable(inc_dc_single_inc_inline_plan_tests
+    dispatch_combine/tests/single_inc/test_inc_dc_single_inc_inline_plan.cpp)
+inc_host_target(inc_dc_single_inc_inline_plan_tests)
+target_compile_options(inc_dc_single_inc_inline_plan_tests PRIVATE -UNDEBUG)
+target_link_libraries(inc_dc_single_inc_inline_plan_tests PRIVATE
+    inc_dc_single_inc_inline_plan)
+
+add_executable(inc_dc_single_inc_inline_protocol_tests
+    dispatch_combine/tests/single_inc/test_inc_dc_single_inc_inline_protocol.cpp)
+inc_host_target(inc_dc_single_inc_inline_protocol_tests)
+target_compile_options(inc_dc_single_inc_inline_protocol_tests PRIVATE
+    -UNDEBUG)
+target_link_libraries(inc_dc_single_inc_inline_protocol_tests PRIVATE
+    inc_dc_inline_route_parser inc_dc_inline_route_journal)
+
+add_library(inc_dc_single_inc_inline_kernel SHARED
+    dispatch_combine/single_inc/inline_route/inc_dc_single_inc_inline_kernel.cpp)
+inc_device_target(inc_dc_single_inc_inline_kernel)
+
+add_executable(inc_dc_single_inc_inline
+    dispatch_combine/single_inc/inline_route/inc_dc_single_inc_inline_main.cpp)
+inc_host_target(inc_dc_single_inc_inline)
+target_link_libraries(inc_dc_single_inc_inline PRIVATE
+    shmem inc_dc_single_inc_inline_kernel)
+add_dependencies(inc_dc_single_inc_inline aclshmem_bootstrap_config_store)
 
 # Single-kernel MoE fusion.  Its planner is deliberately independent of the
 # standalone Dispatch/Combine host backends: both execution modes share wire
@@ -244,6 +320,7 @@ target_include_directories(inc_dc_native_composite_backend PUBLIC
 add_library(inc_dc_native_inc_service STATIC
     dispatch_combine/single_inc/runtime/inc_dc_native_inc_service.cpp)
 inc_host_target(inc_dc_native_inc_service)
+target_link_libraries(inc_dc_native_inc_service PUBLIC inc_dc_single_inc_api)
 target_include_directories(inc_dc_native_inc_service PUBLIC
     ${INC_DC_PUBLIC_INCLUDES})
 
@@ -266,7 +343,7 @@ inc_host_target(inc_dc_os_random_plan)
 foreach(pair IN ITEMS
     "inc_dc_framework_c_api_tests;test_inc_dc_framework_c_api.cpp;inc_dc_framework_api;common"
     "inc_dc_easy_api_tests;test_inc_dc_easy_api.cpp;inc_dc_easy_api;common"
-    "inc_dc_inference_api_tests;test_inc_dc_inference_api.cpp;inc_dc_inference_api;common"
+    "inc_dc_inference_api_tests;test_inc_dc_inference_api.cpp;inc_dc_single_inc_api;common"
     "inc_dc_chunk_planner_tests;test_inc_dc_chunk_planner.cpp;inc_dc_framework_api;common"
     "inc_dc_dispatch_route_plan_tests;test_inc_dc_dispatch_route_plan.cpp;inc_dc_framework_api;common"
     "inc_dc_single_inc_stream_plan_compiler_tests;test_inc_dc_single_inc_stream_plan_compiler.cpp;inc_dc_easy_api;single_inc"
@@ -283,12 +360,12 @@ foreach(pair IN ITEMS
     target_link_libraries(${target} PRIVATE ${library})
 endforeach()
 
-# Runnable host-only single-INC lifecycle example.  The CPU mock backend keeps
-# the public API executable on development hosts without touching any NPU.
-add_executable(inc_dc_inference_api_example
-    dispatch_combine/common/examples/inference_api/inc_dc_inference_api_example.cpp)
-inc_host_target(inc_dc_inference_api_example)
-target_link_libraries(inc_dc_inference_api_example PRIVATE inc_dc_inference_api)
+# The single maintained application example.  Its CPU mock backend keeps the
+# short public API executable on development hosts without touching any NPU.
+add_executable(inc_dc_single_inc_api_example
+    dispatch_combine/common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp)
+inc_host_target(inc_dc_single_inc_api_example)
+target_link_libraries(inc_dc_single_inc_api_example PRIVATE inc_dc_single_inc_api)
 
 add_custom_target(inc_dc_framework_c_header_tests
     COMMAND ${CMAKE_C_COMPILER} -std=c11 -fsyntax-only
@@ -302,16 +379,7 @@ add_custom_target(inc_dc_inference_c_header_tests
     COMMAND ${CMAKE_C_COMPILER} -std=c11 -fsyntax-only
         -I${INC_DC_COMMON_API_DIR}
         ${INC_DC_DIR}/tests/common/test_inc_dc_inference_c_header.c VERBATIM)
-add_custom_target(inc_dc_inference_examples_compile
+add_custom_target(inc_dc_single_inc_c_header_tests
     COMMAND ${CMAKE_C_COMPILER} -std=c11 -fsyntax-only
         -I${INC_DC_COMMON_API_DIR}
-        ${INC_DC_COMMON_DIR}/examples/inference_api/inference_loop.c VERBATIM)
-add_custom_target(inc_dc_easy_examples_compile
-    COMMAND ${CMAKE_C_COMPILER} -std=c11 -fsyntax-only
-        -I${INC_DC_COMMON_API_DIR}
-        -I${INC_DC_COMMON_DIR}/examples/easy_api
-        ${INC_DC_COMMON_DIR}/examples/easy_api/init_example.c
-        ${INC_DC_COMMON_DIR}/examples/easy_api/token_plan_example.c
-        ${INC_DC_COMMON_DIR}/examples/easy_api/dispatch_example.c
-        ${INC_DC_COMMON_DIR}/examples/easy_api/combine_example.c
-        ${INC_DC_COMMON_DIR}/examples/easy_api/full_example.c VERBATIM)
+        ${INC_DC_DIR}/tests/common/test_inc_dc_single_inc_c_header.c VERBATIM)

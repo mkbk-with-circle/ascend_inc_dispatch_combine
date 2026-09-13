@@ -9,7 +9,7 @@ namespace inc {
 namespace dc {
 
 constexpr uint32_t kDynCsrMagic = 0x44594353u; // 'DYCS'
-constexpr uint32_t kDynCsrCtrlBytes = 512u;
+constexpr uint32_t kDynCsrCtrlBytes = 448u;
 // Layout capacity only.  The host queries ACL_DEV_ATTR_VECTOR_CORE_NUM and
 // selects no more owners than the current device actually provides.
 // Protocol storage capacity.  owner_count remains a live-hardware-derived
@@ -99,11 +99,10 @@ struct alignas(64) DynCsrCtrl {
     uint32_t tile_bytes = 0;
     uint32_t element_bytes = 2; // FP16
     uint32_t owner_count = 1;
-    uint32_t this_inc_index = 0;
+    uint32_t inc_pe = 0;
     uint32_t generation = 1;
     uint32_t fail_closed_on_dup = 1;
     uint64_t result_offsets_off = 0;
-    uint64_t result_home_inc_off = 0;
     uint64_t result_home_owner_off = 0;
     uint64_t contrib_slot_off = 0;
     uint64_t contrib_weight_off = 0;
@@ -119,7 +118,6 @@ struct alignas(64) DynCsrCtrl {
     uint64_t stats_off = 0;
     uint64_t owner_stats_off = 0;
     uint64_t contrib_source_rank_off = 0;
-    uint64_t contrib_home_pe_off = 0;
     uint64_t ready_generation_off = 0;
     uint32_t max_ingress_slots = 0;
     uint32_t this_worker_rank = 0;
@@ -128,17 +126,14 @@ struct alignas(64) DynCsrCtrl {
     uint32_t overlap_enable = 0;
     uint32_t ready_stride_bytes = 64;
     uint32_t ready_spin_cap = 40000000;
-    // PERF3 sparse owner-source publication.  A group is
-    // ((inc * owner_count + owner) * worker_count + source).  The variable
-    // length source bitmap deliberately avoids a W<=64 protocol limit.
-    uint64_t contrib_owner_flat_off = 0;
+    // Sparse owner-source publication.  A group is
+    // (owner * worker_count + source).  The variable-length source bitmap
+    // deliberately avoids a W<=64 protocol limit.
+    uint64_t contrib_owner_off = 0;
     uint64_t group_offsets_off = 0;
     uint64_t group_entries_off = 0;
     uint64_t owner_source_bitmap_off = 0;
-    uint64_t owner_home_pe_off = 0;
     uint32_t worker_count = 0;
-    uint32_t inc_count = 0;
-    uint32_t owner_total = 0;
     uint32_t group_count = 0;
     uint32_t source_bitmap_words = 0;
     // 0=barrier, 1=per-slot, 2=owner/source batch, 3=INC/source batch,
@@ -155,12 +150,11 @@ struct alignas(64) DynCsrCtrl {
     // has finished; producer lane 0 waits for every INC record.
     uint32_t device_completion = 0;
     uint64_t worker_pe_off = 0;
-    // Coarser INC-source CSR used by ready_mode=3.  It preserves per-result
-    // top-k semantics while amortizing one ready signal across all owners of
-    // the same destination INC.
-    uint64_t inc_group_offsets_off = 0;
-    uint64_t inc_group_entries_off = 0;
-    uint32_t inc_group_count = 0;
+    // Coarser source-contribution CSR used by ready_mode=3/6.  It preserves
+    // per-result top-k semantics while amortizing one ready signal across all
+    // owners on the single INC.
+    uint64_t source_contribution_offsets_off = 0;
+    uint64_t source_contribution_entries_off = 0;
     uint64_t waited_source_bitmap_off = 0;
     uint64_t source_group_offsets_off = 0;
     uint64_t source_group_entries_off = 0;
@@ -195,7 +189,7 @@ struct alignas(64) DynCsrCtrl {
     uint64_t result_tx_rank_offsets_off = 0;
     uint64_t packed_result_ids_off = 0;
 };
-static_assert(sizeof(DynCsrCtrl) == kDynCsrCtrlBytes, "DynCsrCtrl 512B");
+static_assert(sizeof(DynCsrCtrl) == kDynCsrCtrlBytes, "DynCsrCtrl 448B");
 
 struct alignas(64) DynCsrStats {
     uint32_t magic = 0;

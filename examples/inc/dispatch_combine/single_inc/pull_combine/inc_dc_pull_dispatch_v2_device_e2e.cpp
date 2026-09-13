@@ -23,7 +23,8 @@ using namespace inc::dc::pull_v2;
 
 extern "C" void launch_inc_dc_pull_dispatch_v2_device(
     uint32_t block_dim, void *stream, uint8_t *source_region,
-    uint8_t *ready_mailbox, uint8_t *inc_slots, uint8_t *source_acks,
+    uint8_t *ready_mailbox, uint8_t *metadata_inbox, uint8_t *inc_slots,
+    uint8_t *source_acks,
     uint8_t *destination_hidden, uint8_t *destination_rows,
     uint8_t *destination_assignments, uint8_t *destination_expert_counts,
     uint8_t *destination_completions, uint8_t *inc_destination_rows,
@@ -36,7 +37,8 @@ extern "C" void launch_inc_dc_pull_dispatch_v2_device(
     uint8_t *parser_scratch, uint8_t *status_line, uint64_t ffts_addr,
     uint64_t session_id,
     uint64_t placement_epoch, uint64_t generation, uint64_t sequence,
-    uint64_t source_slot_stride, uint64_t destination_hidden_slot_stride,
+    uint64_t source_slot_stride, uint64_t metadata_inbox_stride,
+    uint64_t destination_hidden_slot_stride,
     uint64_t destination_rows_slot_stride,
     uint64_t destination_assignments_slot_stride,
     uint64_t destination_expert_counts_slot_stride,
@@ -120,6 +122,7 @@ struct WaveOracle {
     std::vector<JournalContributor> fixed_contributors;
     uint64_t ingress_hidden_bytes = 0u;
     uint64_t egress_hidden_bytes = 0u;
+    uint64_t aggregate_logical_bytes = 0u;
     uint64_t logical_bytes = 0u;
 };
 
@@ -615,8 +618,12 @@ bool BuildOracle(const Options &o, uint64_t generation, uint64_t sequence,
     const uint64_t row_bytes = static_cast<uint64_t>(o.hidden) * 2u;
     for (const auto &rows : built.layout.destination_rows)
         built.egress_hidden_bytes += rows.size() * row_bytes;
-    built.logical_bytes = built.ingress_hidden_bytes +
-                          built.egress_hidden_bytes;
+    // Primary operator bandwidth is directional: Dispatch delivers hidden
+    // bytes from INC to destination workers.  The sum of GET+PUT traffic is
+    // retained only as an aggregate-traffic diagnostic.
+    built.logical_bytes = built.egress_hidden_bytes;
+    built.aggregate_logical_bytes = built.ingress_hidden_bytes +
+                                    built.egress_hidden_bytes;
     *oracle = std::move(built);
     return true;
 }
@@ -1027,6 +1034,8 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
     const double seconds = us * 1e-6;
     const double gbps = seconds == 0.0 ? 0.0 :
         static_cast<double>(oracle.logical_bytes) / seconds / 1e9;
+    const double aggregate_gbps = seconds == 0.0 ? 0.0 :
+        static_cast<double>(oracle.aggregate_logical_bytes) / seconds / 1e9;
     const double protocol_us = timeline.all_ready != 0u &&
         timeline.kernel_done > timeline.all_ready
         ? static_cast<double>(timeline.kernel_done - timeline.all_ready) *
@@ -1054,8 +1063,12 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
               << ",\"egress_hidden_bytes\":"
               << oracle.egress_hidden_bytes
               << ",\"logical_bytes\":" << oracle.logical_bytes
+              << ",\"bandwidth_definition\":\"dispatch_egress_bytes/full_operator_time\""
               << ",\"makespan_us\":" << us
               << ",\"logical_gb_s\":" << gbps
+              << ",\"aggregate_logical_bytes\":"
+              << oracle.aggregate_logical_bytes
+              << ",\"aggregate_traffic_gb_s\":" << aggregate_gbps
               << ",\"protocol_makespan_us\":" << protocol_us
               << ",\"protocol_logical_gb_s\":" << protocol_gbps
               << ",\"status\":" << timeline.status
@@ -1063,6 +1076,8 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
               << ",\"cycle_kernel_start\":" << timeline.kernel_start
               << ",\"cycle_all_ready\":" << timeline.all_ready
               << ",\"cycle_headers_pulled\":" << timeline.headers_pulled
+              << ",\"cycle_metadata_inbox_ready\":"
+              << timeline.headers_pulled
               << ",\"cycle_metadata_parse_begin\":"
               << timeline.metadata_parse_begin
               << ",\"cycle_metadata_parse_done\":"
@@ -1179,6 +1194,11 @@ int main(int argc, char **argv)
         static_cast<uint64_t>(o.workers + 1u) * o.workers;
     const uint64_t expert_entries =
         static_cast<uint64_t>(o.workers) * o.expert_count;
+    uint64_t metadata_inbox_stride = sizeof(SlotHeader);
+    for (const ParsedSource &source : sizing.sources)
+        metadata_inbox_stride = std::max<uint64_t>(
+            metadata_inbox_stride, source.header.hidden_offset);
+    metadata_inbox_stride = Align64(metadata_inbox_stride);
     const uint64_t hidden_slot_stride = Align64(row_capacity * row_bytes);
     const uint64_t rows_slot_stride = Align64(
         row_capacity * sizeof(DestinationRow));
@@ -1191,7 +1211,7 @@ int main(int argc, char **argv)
     aclrtStream stream = nullptr;
     bool shmem_initialized = false;
     std::vector<GuardedBuffer *> buffers;
-    GuardedBuffer source_region, ready_mailbox, source_acks;
+    GuardedBuffer source_region, ready_mailbox, metadata_inbox, source_acks;
     GuardedBuffer destination_hidden, destination_rows;
     GuardedBuffer destination_assignments, destination_expert_counts;
     GuardedBuffer destination_completions;
@@ -1201,7 +1221,7 @@ int main(int argc, char **argv)
     GuardedBuffer row_map, source_token_prefix, source_destination_prefix;
     GuardedBuffer destination_row_counts, destination_assignment_counts;
     GuardedBuffer expert_counts, parser_scratch, status_line;
-    buffers = {&source_region, &ready_mailbox, &source_acks,
+    buffers = {&source_region, &ready_mailbox, &metadata_inbox, &source_acks,
         &destination_hidden, &destination_rows, &destination_assignments,
         &destination_expert_counts, &destination_completions, &inc_slots,
         &inc_destination_rows, &inc_destination_assignments, &journal_header,
@@ -1249,6 +1269,9 @@ int main(int argc, char **argv)
               "source_region");
         Alloc(&ready_mailbox, o.workers * sizeof(Ready), true,
               "ready_mailbox");
+        Alloc(&metadata_inbox,
+              static_cast<uint64_t>(o.workers) * metadata_inbox_stride, true,
+              "metadata_inbox");
         Alloc(&source_acks, o.workers * sizeof(SourceConsumed), true,
               "source_acks");
         Alloc(&destination_hidden, hidden_slot_stride * kRingSlots, true,
@@ -1354,7 +1377,7 @@ int main(int argc, char **argv)
                 Fill(&destination_completions, 0u) ? 0 : 1;
         }
         if (status == 0 && o.pe == inc_pe) {
-            status = Fill(&inc_slots, 0u) &&
+            status = Fill(&metadata_inbox, 0u) && Fill(&inc_slots, 0u) &&
                 Fill(&inc_destination_rows, kPoison) &&
                 Fill(&inc_destination_assignments, kPoison) &&
                 Fill(&journal_tokens, kPoison) &&
@@ -1402,7 +1425,8 @@ int main(int argc, char **argv)
         }
         launch_inc_dc_pull_dispatch_v2_device(
             dispatch_aiv_budget, stream, source_region.data,
-            ready_mailbox.data, inc_slots.data, source_acks.data,
+            ready_mailbox.data, metadata_inbox.data, inc_slots.data,
+            source_acks.data,
             destination_hidden.data, destination_rows.data,
             destination_assignments.data, destination_expert_counts.data,
             destination_completions.data, inc_destination_rows.data,
@@ -1416,6 +1440,7 @@ int main(int argc, char **argv)
             parser_scratch.data, status_line.data,
             shmemx_get_ffts_config(), kSessionId,
             kPlacementEpoch, generation, sequence, source_stride,
+            metadata_inbox_stride,
             hidden_slot_stride, rows_slot_stride, assignments_slot_stride,
             expert_slot_stride, journal_token_capacity,
             journal_contributor_capacity, journal_assignment_capacity,
@@ -1443,7 +1468,7 @@ int main(int argc, char **argv)
                 destination_hidden, destination_rows,
                 destination_assignments, destination_expert_counts,
                 destination_completions, source_acks);
-        else
+        else {
             iteration_correct = ValidateInc(o, oracle, expected_status,
                 inc_destination_rows, inc_destination_assignments,
                 journal_header, journal_tokens, journal_contributors,
@@ -1452,6 +1477,25 @@ int main(int argc, char **argv)
                 destination_assignment_counts, expert_counts, status_line,
                 parser_scratch, dispatch_aiv_budget, &timeline,
                 rows_slot_stride, assignments_slot_stride);
+            if (!iteration_correct) {
+                for (uint32_t source = 0u; source < o.workers; ++source) {
+                    SlotHeader observed{};
+                    aclrtMemcpy(&observed, sizeof(observed),
+                        metadata_inbox.data +
+                            static_cast<uint64_t>(source) *
+                                metadata_inbox_stride,
+                        sizeof(observed), ACL_MEMCPY_DEVICE_TO_HOST);
+                    std::cerr << "[DEBUG] metadata_inbox source=" << source
+                              << " magic=" << observed.magic
+                              << " version=" << observed.abi_version
+                              << " source_rank=" << observed.source_rank
+                              << " tokens=" << observed.token_count
+                              << " assignments=" << observed.assignment_count
+                              << " hidden_offset=" << observed.hidden_offset
+                              << '\n';
+                }
+            }
+        }
         for (GuardedBuffer *buffer : buffers)
             iteration_correct = GuardsValid(*buffer) && iteration_correct;
         if (status == 0) aclshmem_barrier_all();
@@ -1497,18 +1541,27 @@ int main(int argc, char **argv)
             protocol_variance += (value - protocol_mean) *
                                  (value - protocol_mean);
         protocol_variance /= measured_protocol_gbps.size();
+        const double min_us = *std::min_element(measured.begin(),
+                                                measured.end());
+        const double max_us = *std::max_element(measured.begin(),
+                                                measured.end());
+        const double mean_gbps = mean == 0.0 ? 0.0 :
+            static_cast<double>(sizing.logical_bytes) / (mean * 1e3);
+        const double min_gbps = max_us == 0.0 ? 0.0 :
+            static_cast<double>(sizing.logical_bytes) / (max_us * 1e3);
         std::cout << std::setprecision(12)
                   << "{\"test\":\"pull_dispatch_v2_device_e2e_summary\""
                   << ",\"workers\":" << o.workers
                   << ",\"workload\":\"" << o.workload_name << "\""
                   << ",\"measure\":" << measured.size()
-                  << ",\"min_us\":"
-                  << *std::min_element(measured.begin(), measured.end())
+                  << ",\"min_us\":" << min_us
                   << ",\"mean_us\":" << mean
-                  << ",\"max_us\":"
-                  << *std::max_element(measured.begin(), measured.end())
+                  << ",\"max_us\":" << max_us
                   << ",\"cv_percent\":"
                   << (mean == 0.0 ? 0.0 : std::sqrt(variance) / mean * 100.0)
+                  << ",\"bandwidth_definition\":\"dispatch_egress_bytes/full_operator_time\""
+                  << ",\"min_gb_s\":" << min_gbps
+                  << ",\"mean_gb_s\":" << mean_gbps
                   << ",\"protocol_min_gb_s\":"
                   << *std::min_element(measured_protocol_gbps.begin(),
                                        measured_protocol_gbps.end())

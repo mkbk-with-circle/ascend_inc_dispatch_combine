@@ -1,11 +1,26 @@
-# C API 接入示例
+# API examples / API 接入示例
 
-这些示例不进入运行库；其中 `.c` 文件同时作为公开 C ABI 的 C11 编译门禁。
+## 中文
+
+示例不进入运行库，只负责展示当前唯一的最短 C++ 调用路径。
 
 | 目录 | 适用场景 |
 |---|---|
-| `easy_api/` | 分步骤学习 init → route plan → Dispatch → Combine |
-| `inference_api/` | prepare-once 的推理热路径；含可运行、带正确性检查的完整 CPU mock 示例 |
+| `single_inc_api/` | **唯一推荐**的 `inc_dc_single_inc.hpp` 完整示例；可运行且含数值检查 |
 
-首次接入建议直接阅读并运行
-[`inference_api/inc_dc_inference_api_example.cpp`](inference_api/inc_dc_inference_api_example.cpp)。
+首次接入只需阅读并运行
+[`single_inc_api/inc_dc_single_inc_api_example.cpp`](single_inc_api/inc_dc_single_inc_api_example.cpp)。
+
+---
+
+## English
+
+These examples are not part of the runtime library. They show the one remaining
+shortest C++ call path.
+
+| Directory | When to use it |
+|---|---|
+| `single_inc_api/` | **The only recommended** complete `inc_dc_single_inc.hpp` example; runnable with numeric checks |
+
+For a first integration, read and run
+[`single_inc_api/inc_dc_single_inc_api_example.cpp`](single_inc_api/inc_dc_single_inc_api_example.cpp).

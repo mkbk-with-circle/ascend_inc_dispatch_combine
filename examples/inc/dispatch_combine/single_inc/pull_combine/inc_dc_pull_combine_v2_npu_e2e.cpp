@@ -980,9 +980,15 @@ int main(int argc, char **argv)
         if (o.pe == inc_pe) {
             const double us = std::chrono::duration<double, std::micro>(
                 end - begin).count();
-            const double logical_bytes = static_cast<double>(
+            // Primary operator bandwidth is directional: Combine consumes
+            // partial rows from workers into INC.  GET+PUT aggregate traffic
+            // remains a diagnostic and is not reported as link bandwidth.
+            const double logical_bytes =
+                static_cast<double>(wave_data.ingress_bytes);
+            const double aggregate_bytes = static_cast<double>(
                 wave_data.ingress_bytes + wave_data.egress_bytes);
             const double gbps = logical_bytes / us / 1.0e3;
+            const double aggregate_gbps = aggregate_bytes / us / 1.0e3;
             const bool warmup = iteration < o.warmup;
             std::cout << std::setprecision(12)
                       << "{\"test\":\"pull_combine_v2_npu_e2e\""
@@ -996,7 +1002,11 @@ int main(int argc, char **argv)
                       << ",\"ingress_bytes\":" << wave_data.ingress_bytes
                       << ",\"egress_bytes\":" << wave_data.egress_bytes
                       << ",\"e2e_us\":" << us
+                      << ",\"bandwidth_definition\":\"combine_ingress_bytes/full_operator_time\""
                       << ",\"logical_gb_s\":" << gbps
+                      << ",\"aggregate_logical_bytes\":"
+                      << static_cast<uint64_t>(aggregate_bytes)
+                      << ",\"aggregate_traffic_gb_s\":" << aggregate_gbps
                       << ",\"status\":" << timeline.status
                       << ",\"cycle_kernel_start\":"
                       << timeline.kernel_start
@@ -1032,6 +1042,7 @@ int main(int argc, char **argv)
                   << ",\"active_aiv\":" << combine_aiv
                   << ",\"measure\":" << measured_gbps.size()
                   << ",\"mean_us\":" << mean_us
+                  << ",\"bandwidth_definition\":\"combine_ingress_bytes/full_operator_time\""
                   << ",\"min_logical_gb_s\":" << minimum
                   << ",\"mean_logical_gb_s\":" << mean
                   << ",\"cv_pct\":"

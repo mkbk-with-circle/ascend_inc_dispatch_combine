@@ -14,7 +14,6 @@ namespace dc {
 
 struct IncDcCompiledContribution {
     uint32_t logical_contribution_index = 0;
-    uint32_t inc_index = 0;       // always 0: the single INC
     uint32_t owner_index = 0;     // == result home_owner
     uint32_t ingress_channel = 0; // from topology edge map
     uint32_t ingress_slot = 0;
@@ -26,8 +25,7 @@ struct IncDcCompiledContribution {
 struct IncDcCompiledExecutionPlan {
     IncDcTopologyDescriptor topology{};
     std::vector<IncDcCompiledContribution> schedule;
-    // Per-result unique home (single INC, one owner in its reduce cohort).
-    std::vector<uint32_t> result_home_inc;
+    // Per-result unique owner in the single INC's reduce cohort.
     std::vector<uint32_t> result_home_owner;
     // CSR over the single INC's owners.
     std::vector<uint32_t> owner_worklist_offsets; // size owners_total+1

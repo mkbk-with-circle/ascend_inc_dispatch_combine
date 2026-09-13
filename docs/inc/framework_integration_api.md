@@ -1,98 +1,72 @@
-# INC dispatch/combine 框架接入 API
+# 单 INC 框架接入接口
 
-## 结论与边界
+## 当前结论
 
-框架接入使用
-`examples/inc/dispatch_combine/inc_dc_framework_c_api.h` 中的稳定 C ABI。
-它统一提供 plan、workspace query、外部 stream 异步 enqueue 和 request
-生命周期，面向 PyTorch 扩展、Megatron MoE、vLLM worker/plugin，以及后续
-融合算子。
+当前原型只保留一个面向业务和框架适配层的入口：
+[`inc_dc_single_inc.hpp`](../../examples/inc/dispatch_combine/common/api/inc_dc_single_inc.hpp)。
+接入方不应逐层调用 Framework / Easy / Inference，也不应调用 benchmark main。
 
-该层不修改当前冻结的 dispatch/combine 内核，也不把 CLI benchmark 当成
-框架 API。设备 backend 必须显式注册已晋升的 kernel lineage；backend 未
-绑定并完成 NPU gate 前，不得宣称 Megatron/vLLM production ready。
+```cpp
+using namespace inc::dc;
 
-## 为什么单独提供 C ABI
+auto op = single_inc_create(config);
+auto batch = op.dispatch(token_input, expert_input, route, stream);
+run_grouped_gemm(expert_input, expert_output, stream);
+op.combine(batch, expert_output, token_output, stream);
+single_inc_destroy(op);
+```
 
-- 不向框架暴露 C++ STL、SHMEM rank、INC owner 或内部 queue。
-- `struct_size + abi_version` 支持向后兼容扩展。
-- `uint64_t stream` 直接承载调用方 `aclrtStream`，enqueue 禁止设备级同步。
-- plan 保存 process group、拓扑代数和静态 route；invocation 保存动态
-  token、device route、tensor、workspace 和 stream。
-- backend vtable 隔离协议实现，未来融合算子可直接复用 device plan，而
-  不必再走 host route generation。
-- context 在创建时预分配 request/workspace lease 槽；enqueue 热路径不做
-  host malloc。
+公开流程只有：
 
-## 最小调用序列
+```text
+create -> dispatch -> expert compute -> combine -> destroy
+```
 
-1. runtime/plugin 初始化 backend vtable，并调用
-   `inc_dc_fw_context_create`。
-2. 每个 EP process group/rank 创建并缓存 `inc_dc_plan_t`。
-3. shape 首次出现时分别对 dispatch/combine 调用
-   `inc_dc_fw_query_workspace`，框架分配对齐的 device workspace。
-4. 填充 device tensor/route descriptor，传入当前 framework stream，
-   调用 `inc_dc_fw_dispatch_async` 或 `inc_dc_fw_combine_async`。
-5. 用 request query 或 stream/event 驱动的 backend 完成通知；只有显式
-   需要 host 结果时才调用 wait。
-6. request 完成/取消后 release；shape cache 淘汰时 release workspace
-   token；process group 销毁时 release plan/context。
+完整可运行示例见
+[`inc_dc_single_inc_api_example.cpp`](../../examples/inc/dispatch_combine/common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp)。
 
-调用方必须保证 tensor、route、workspace 与 stream 的生命周期至少持续到
-request completion。取消只终止该 generation，不得污染后续 invocation。
+## 一次性初始化与热路径
 
-## Megatron 接入需要绑定的语义
+框架适配层在 worker 初始化阶段负责：
 
-- plan key 至少包含 model、EP process group、rank、world size、dtype、
-  hidden、max tokens/top-k、topology generation。
-- dispatch 输入对应 token permutation 前的 hidden states；输出 descriptor
-  对应 expert-local buffer，并保留 combine 所需的 CSR/assignment identity。
-- combine 必须使用同一 microbatch/generation 的 route；activation
-  checkpoint/recompute 不能复用已经 stale 的 request。
-- FP16/BF16、forward/backward、capacity/padding、zero-token rank 和
-  auxiliary routing weight 都需要由 backend capability 与 correctness gate
-  明确覆盖。
-- process-group teardown、elastic/reconfiguration 必须递增 topology
-  generation 并重建 plan，不能沿用旧 rank map。
+1. 按当前 process group、拓扑和固定 shape 填好 `inc_dc_single_inc_config_t`；
+2. 绑定 native composite backend、device allocator 和常驻 INC service；
+3. 调用一次 `single_inc_create(config)`，并在模型生命周期内复用返回的 `SingleInc`。
 
-## vLLM 接入需要绑定的语义
+每个 MoE batch 的热路径只负责：
 
-- decode 的 0/1/小 token 与 prefill 的动态 token 使用同一 API，不为固定
-  batch 重新编译协议。
-- scheduler request churn 通过 operation generation 隔离；超时/取消后释放
-  request，但 device buffer 只能在 backend 确认终态后复用。
-- workspace query 按 plan/op/shape 缓存且可回收，避免动态 shape 长跑耗尽。
-- graph capture 只有 backend capability 声明
-  `GRAPH_SAFE_ENQUEUE` 后才能启用；capture 内不得 route host round-trip、
-  malloc、环境变量解析、busy wait 或隐式 device synchronize。
+1. 将 router 结果编译为本 rank 的 `SingleIncRoute`；
+2. `dispatch()` 将 token fan-out 到 expert buffer，并返回 `SingleIncBatch`；
+3. 在调用方 stream 上运行 grouped GEMM/activation；
+4. `combine()` 复用该 batch 捕获的精确 route，完成加权归约与回传。
 
-## 融合算子预留
+`SingleIncBatch` 自动持有 generation 和 Dispatch route；Combine 成功后自动释放，
+异常退出时由析构回收。业务代码不管理 request、workspace lease 或 route handle。
 
-融合的 permutation+dispatch、expert+combine 或 dispatch+GEMM 后续可直接
-内嵌 `inc_dc_fw_plan_desc_t` 和 device route descriptor。稳定边界是：
+## 当前边界
 
-- 外部 stream 和调用方 workspace；
-- device pointer、shape/stride/dtype；
-- operation/topology generation；
-- async backend ticket。
+- 当前公开 API 是简单的同步生命周期封装；async request、query/cancel、plan/stats
+  暂不公开，需要真实框架集成证明有必要后再增加。
+- `inc_dc_single_inc_api.h` 是 C++ 薄封装和 native controller 的内部 C 桥接，
+  不是另一套用户 API。
+- `inc_dc_framework_c_api.*`、`inc_dc_easy_api.*`、`inc_dc_inference_api.*`
+  仍是已验证 V1 runtime 的内部实现和回归测试依赖，不是接入路径。
+- Fusion Kernel 使用自己的 prepared API：
+  [`inc_fusion_api.h`](../../examples/inc/fusion_kernel/ascend/inc_fusion_api.h)，
+  不应经由旧 Framework/Easy 层调用。
 
-因此融合只替换 backend enqueue，不改变上层 plan/request ABI。建议 device
-route 最终采用自描述 header + CSR offsets/indices + semantic digest，并让
-kernel 在提交前或首包 fail-close 校验 generation、bytes 和 bounds。
+## Megatron / vLLM 适配建议
 
-## Production 晋升门
+适配器只需要持有一个长生命周期 `SingleInc`，并完成三类张量转换：
 
-接入层还需完成以下设备证据后才能进入默认路径：
+- router 输出 -> `SingleIncRoute`；
+- Dispatch 输出 -> expert-major/padded grouped-GEMM 输入；
+- expert 输出 -> Combine 输入，输出写回原 token 顺序。
 
-- 把锁定 dispatch 与 dyn persistent combine 封装成同一个 backend vtable；
-- 证明 enqueue 没有 `aclrtSynchronizeDevice`、进程级 barrier 或 host busy
-  wait；
-- W2/W4/W8、K1/2/4/6/8 和 K>W，zero/ragged/skew/extreme/fault/
-  multi-epoch；
-- 同 context 多 stream、多 inflight、dispatch/combine 任意交错；
-- cancel/timeout/fault 后下一 generation 恢复；
-- Megatron forward/backward/recompute 与 vLLM decode/prefill/churn smoke；
-- 30 秒单 case、3+20 formal、100-window soak，且任何 timeout/error/
-  `>192 GB/s` 均 fail-close。
+TP×EP 场景只把 EP worker 注册到该 communicator；逻辑 rank 到物理 NPU、唯一
+INC 以及 AIV cohort 由 native runtime/profile 决定，不应写进模型代码。动态 shape、
+graph capture 和公开异步接口仍需分别通过正确性与生命周期 gate 后再扩展。
 
-在这些 gate 完成前保持 `p100_frozen` 和 `default_path_replaced=false`。
+更底层的协议、AIV 和 workspace 说明见
+[`single_inc/QUICKSTART.md`](../../examples/inc/dispatch_combine/single_inc/QUICKSTART.md)；
+它们不属于业务调用步骤。

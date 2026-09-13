@@ -8,13 +8,13 @@
 ┌──────────────────────── A 端 Worker ────────────────────────┐
 │ 1. 生成 Hidden、Token ID、Top-k GPU/Expert/Weight           │
 │ 2. 写入一个完整且不可变的 Source Slot                       │
-│ 3. 每个 Wave 只发布一次 READY                               │
+│ 3. PUT Header+Metadata 到 INC，再发布一次 64B READY         │
 └────────────────────────────┬─────────────────────────────────┘
-                             │ READY：只表示整个 Slot 已就绪
+                             │ READY：Metadata 已在 INC；Hidden 可 GET
                              ▼
 ┌──────────────────────── INC Dispatch 半区 ──────────────────┐
-│ 4. 主动 GET Header，验证 Session / Wave / Shape / Capacity  │
-│ 5. 并行 GET Token Metadata 与 Route Metadata                │
+│ 4. 收到 READY，直接读取本地 Header+Metadata inbox           │
+│ 5. 并行刷新并解析 Metadata，无控制面 GET 往返               │
 │ 6. 在线校验 CSR、GPU、Expert、Ordinal、Weight、Digest       │
 │ 7. 计算每个目标的 Row / Assignment / Expert 前缀            │
 │ 8. 建立 Journal：Owner Token ↔ Contributor B Rows           │

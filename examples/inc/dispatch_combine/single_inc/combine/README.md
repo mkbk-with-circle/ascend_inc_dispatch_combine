@@ -69,3 +69,12 @@ symmetric workspace → device kernels (producer / INC reduce / fan-back).
 | `inc_dc_combine_plan_wire.*` | Versioned wire codec | Yes (host/tools) |
 | `inc_dc_combine_topology.*` | Reachability/channel checks | Yes |
 | `inc_dc_combine_plan_compiler.*` | Logical → executable plan | Yes |
+
+### Product-path clarifications
+
+| Statement | Status |
+|---|---|
+| Framework / Easy / native Combine currently use **dyn-CSR** | **True** |
+| BW05 packed is the current Easy hot path | **False** |
+| A `sv2_dyn_csr` CMake target requires source files to keep the `sv2` name | **False**—the target name remains only for compatibility |
+| Qualification must use `../scripts/single_inc/run_single_inc_dyn_case.sh` | **Required by policy**; raw binaries bypass topology/idle gates |

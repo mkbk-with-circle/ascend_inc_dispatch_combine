@@ -207,3 +207,213 @@ W4: PE0→NPU1, PE1→NPU2, PE2→NPU3, PE3→NPU4, INC PE4→NPU0
 - INC 多 packet reduce 对单 tile 保留低固定开销路径；跨多个 1024-element tile 时使用两套 UB 和 `MTE3_MTE2` 生命周期事件做 ping-pong，允许搬运、向量归约与回写流水重叠。
 - 当前编译期安全上限为 64 个 live AIV（由设备侧固定栈数组和 4KiB trace 布局决定）；plan/API 会显式拒绝更大的设备，而不是静默越界。迁移到 AIV>64 的新芯片时需要先扩展 ABI 布局。
 - 大 shape 的报告会明确区分“全量 golden”和“抽样 token golden”；抽样不能替代最终全量资格化。
+
+---
+
+## English
+
+This directory is a buildable, runnable Ascend single-INC fusion prototype.
+The main path is one worker MIX kernel plus one INC vector service kernel:
+
+```text
+INC-Dispatch(token-wave i+1)
+          ∥ GMM1 → SwiGLU(row-slice) → GMM2(token-wave i)
+          ∥ INC-Combine(token-wave i-1)
+```
+
+It does not replace `dispatch_combine/single_inc`, which remains the formal
+standalone Dispatch/Combine bandwidth and gate baseline. This tree checks
+pipelining D, FFN, and C in one kernel, measures real D∥C gain, and exposes a
+prepared API for inference frameworks.
+
+## Ideal token-wave timeline
+
+`Dᵢ`, `Fᵢ`, and `Cᵢ` are wave `i`'s INC Dispatch, `GMM1 → SwiGLU → GMM2`, and
+INC Combine, with `Dᵢ → Fᵢ → Cᵢ`. Cells are abstract slots, not equal wall time.
+
+### Two token waves: fill/drain only, no simultaneous D and C
+
+See the mermaid chart in the Chinese section. Two waves have only fill/drain;
+there is no `D(n+1) ∥ C(n-1)`, so the total latency gap cannot all be attributed
+to single-INC uplink/downlink overlap.
+
+### Four token waves: steady three-stage D, F, C overlap
+
+See the mermaid chart in the Chinese section. For `N` waves, serial time is
+`N(D+F+C)` and ideal pipeline time is about `D+F+C+(N-1)·max(D,F,C)`. Real gain
+also depends on packets, credits, the slowest rank, AIC/AIV contention, and
+head/tail drain. Device traces and wall clocks must both be reported; a diagram
+alone is not a gain claim.
+
+## Code entry points
+
+- Design and acceptance: [`PRINCIPLES.md`](PRINCIPLES.md)
+- C prepared API: [`ascend/inc_fusion_api.h`](ascend/inc_fusion_api.h)
+- Five-backend benchmark contract: [`ascend/inc_fusion_benchmark.h`](ascend/inc_fusion_benchmark.h)
+- vLLM-Ascend contract: [`framework/vllm_ascend/README.md`](framework/vllm_ascend/README.md)
+- Host plan / workspace: [`ascend/inc_fusion_plan.h`](ascend/inc_fusion_plan.h)
+- Dynamic route compile: [`ascend/inc_fusion_route.h`](ascend/inc_fusion_route.h)
+- Device dense-topk route pack: [`ascend/inc_fusion_route_pack.h`](ascend/inc_fusion_route_pack.h)
+- Torch NPU native bridge: [`framework/vllm_ascend/native/README.md`](framework/vllm_ascend/native/README.md)
+- Worker/INC kernels: [`ascend/inc_fusion_kernel.cpp`](ascend/inc_fusion_kernel.cpp)
+- Full API examples: [`examples/README.md`](examples/README.md)
+- Case timeline parser: [`tools/README.md`](tools/README.md)
+- End-to-end check: [`ascend/tests/inc_fusion_e2e_main.cpp`](ascend/tests/inc_fusion_e2e_main.cpp)
+- Current ABI 13 release candidate: [`../../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md`](../../../docs/inc/report/nb-borrow/fusion_kernel_release_20260810/README.md)
+- Current ABI 13 operator qualification: [`../../../docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/README.md`](../../../docs/inc/report/nb-borrow/fusion_kernel_qualified_path_20260811/README.md)
+- Post-cleanup release validation: [`../../../docs/inc/report/nb-borrow/release_validation_20260811/README.md`](../../../docs/inc/report/nb-borrow/release_validation_20260811/README.md)
+- nb reproduction runbook: [`framework/vllm_ascend/RUNBOOK_NB_VLLM.md`](framework/vllm_ascend/RUNBOOK_NB_VLLM.md)
+
+## Which public API to use
+
+Ordinary inference uses `inc_fusion_worker_executor_*` and
+`inc_fusion_remote_service_*`. Plan, workspace, and INC service are created
+once; tensors, route, weights, and stream stay with the caller.
+
+| Where | Init / prepare | Hot path | Teardown |
+|---|---|---|---|
+| All PEs | `inc_fusion_plan_desc_init` → `inc_fusion_prepared_plan_create` → `inc_fusion_prepared_plan_info` | none | `inc_fusion_prepared_plan_destroy` |
+| Worker | `inc_fusion_worker_executor_create` | `inc_fusion_worker_executor_enqueue` | `inc_fusion_worker_executor_destroy` |
+| Remote INC | `inc_fusion_remote_service_create` → W+1 setup barrier → `inc_fusion_remote_service_start` | resident service reads the symmetric descriptor ring; no per-request host launch | `inc_fusion_persistent_service_stop/destroy` |
+| Same-process experiment INC | `inc_fusion_persistent_service_create` | `submit` → `query` | `stop` → `destroy` |
+
+`inc_fusion_prepared_build_args/enqueue` is the lower zero-allocation interface.
+`token_count` is capacity; each request's real token count is
+`active_token_counts`.
+
+## Parse a real case timeline
+
+Current traces only have whole-kernel role spans, INC D/C aggregate windows, and
+relative checkpoints; they cannot rebuild a per-wave absolute Gantt. The parser
+recomputes overlap, theoretical cap, and real window speedup.
+
+```bash
+python3 examples/inc/fusion_kernel/tools/parse_fusion_timeline.py \
+  /path/to/case/pe*.log \
+  --format markdown \
+  --strict \
+  -o /tmp/fusion_timeline.md
+```
+
+Full flags: [`tools/README.md`](tools/README.md).
+`actual_vs_theoretical_pct` is **D/C aggregate service-window efficiency**;
+end-to-end claims still need every worker's makespan.
+
+## Current implementation
+
+- Protocol ABI is 13; the release candidate is frozen BF16 `fused_inc` and no
+  longer walks protocol knobs at runtime.
+- W is a runtime parameter; current nb qualification uses W2/W4 on one HCCS
+  plane and does not hard-code physical card ids.
+- Dispatch dedups hidden on `(source token, destination rank)` and keeps every
+  expert assignment.
+- Combine sends each expert-instance independently; INC weighted-reduces BF16
+  input with FP32 tile math and writes back.
+- INC's 48 AIVs are a fixed 24 Dispatch + 24 Combine split; a worker is
+  8 Dispatch + 8 Combine + 32 activation, with 24 AICs running two GMMs.
+- The outer schedule is token-wave; internally each expert's rows default to
+  2 activation slices handed off on a generation line. Combine AIV sends a
+  slice as soon as GMM2 finishes that slice, without waiting for the whole FFN
+  wave.
+- Four transport queues are independent, fixed depth, and do not grow with
+  total tokens; payload may split into 16KiB packets.
+- Packets use metadata → quiet → 64-bit commit two-phase publish; credits
+  return exact commits; each receive-metadata item owns a cacheline.
+- `inc_fusion_prepared_enqueue` allocates nothing, interprets no route, queries
+  no topology, and does no host sync.
+- Dense top-k route-pack is on device: counts use a stable scalar entry; pack
+  uses one AIV on small inputs and a deterministic multi-AIV analyze/prefix/emit
+  on medium/large regroup work; the EP group does one `[wave_capacity,E+1]`
+  int32 all-gather; the extra column carries each rank's real token count, so
+  there is no `.cpu()`, `argsort`, second collective, or `.item()`.
+- A prepared plan is a capacity bucket; actual tokens may be smaller, and a
+  tail wave may be a legal empty wave. ABI v6 allows per-worker active-token
+  counts; INC writes back using each source's true length and will not write
+  past a short rank's output bound.
+- `inc_fusion_persistent_service_create/submit/query/stop` is the resident INC
+  descriptor ring: the INC kernel starts once, submit allocates nothing and
+  publishes in 64-bit ticket order, and a full ring returns `INC_FUSION_BUSY`.
+- `inc_fusion_remote_service_create/start` plus the worker executor is the W+1
+  cross-process hot path: dynamic generation, ticket, waves, and active-token
+  vectors form one contiguous wire record; INC starts that ticket only after
+  every worker is ready; descriptor ready/complete and packet ready/credit use
+  exact generations; service-ring wrap does not need a full queue zero.
+- `INC_FUSION_EXEC_SERIALIZE_INC_DC` is only a strict alternating stress
+  control; pure D∥C gain is reported from the device-trace service window.
+
+### Resident INC call order
+
+```c
+inc_fusion_persistent_service_t *service = NULL;
+inc_fusion_persistent_service_create(
+    plan, symmetric_base, 4, service_stream, &service);
+
+// device_args must be the INC role; its prepare/copy and submit share a
+// stream, or the caller must make an explicit event dependency.
+uint64_t ticket = 0;
+inc_fusion_persistent_service_submit(
+    service, device_args, request_id, submit_stream, &ticket);
+
+inc_fusion_service_result_t result = {0};
+inc_fusion_persistent_service_query(service, ticket, &result);
+
+inc_fusion_persistent_service_stop(service);
+inc_fusion_persistent_service_destroy(service);
+```
+
+The resident kernel occupies every live INC AIV. After start, do not launch
+another AIV-using device collective on the INC. Cross-request order is kept by
+descriptor tickets, packet generation, and exact credits. Once a request enters
+the push-only protocol it must complete; `stop` is not a force-cancel.
+
+Cross-process mode must finish symmetric heap/control-mirror init and one setup
+barrier on every PE, then INC calls `inc_fusion_remote_service_start`. The
+worker hot path only calls `inc_fusion_worker_executor_enqueue`; rank 0
+publishes the wire record, all workers publish readiness, and there is no
+per-request host collective.
+
+## Build
+
+```bash
+source /usr/local/Ascend/cann-9.1.0-beta.3/set_env.sh
+cmake -S . -B /tmp/shmem-build-fusion \
+  -DUSE_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release -DSOC_TYPE=Ascend910B
+cmake --build /tmp/shmem-build-fusion --target \
+  inc_fusion_plan_tests inc_fusion_benchmark_tests inc_fusion_api_tests \
+  inc_fusion_compute_tests inc_fusion_e2e -j8
+```
+
+Before running, `npu-smi info` must show the target cards idle. Recommended nb
+map:
+
+```text
+W2: PE0→NPU1, PE1→NPU2, INC PE2→NPU0
+W4: PE0→NPU1, PE1→NPU2, PE2→NPU3, PE3→NPU4, INC PE4→NPU0
+```
+
+These are an nb run profile only. Kernels/APIs do not depend on those numbers;
+other machines supply their own map via `worker_pes` and `INC_PE_TO_NPU_MAP`.
+
+## Known bounds
+
+- A worker is still one MIX kernel per request; INC already supports a
+  cross-process, cross-request resident descriptor-ring server. The ring
+  buffers pending requests, but by design only one D+C group runs at a time so
+  multiple groups cannot contend for the 24/24 AIVs and slow the current
+  request. On nb, ring=2 W2/W4 each passed 100 consecutive runs; the Torch
+  worker executor has explicit setup/out/teardown; INC sidecar engine-launcher
+  bind is still in progress.
+- The C++ `std::vector/map` router is now golden/reference only. Production
+  writes prepared device buffers with `route_count_out + one metadata
+  all-gather + route_pack_out`. The protocol table was built and checked in a
+  CANN 8.5 vLLM container and on host CANN 9.1.
+- `operation_generation + wave_count` must fit in 32 bits; hitting the cap
+  requires rebuild/reset of the session to avoid commit-epoch aliasing.
+- INC multi-packet reduce keeps a low fixed-cost path for one tile; across
+  several 1024-element tiles it uses two UB sets and `MTE3_MTE2` lifetime
+  events as ping-pong so copy, vector reduce, and writeback can overlap.
+- Compile-time live-AIV safety cap is 64 (fixed device stack arrays and 4KiB
+  trace layout). Plan/API reject larger devices instead of silently overflowing.
+  Moving to AIV>64 needs an ABI layout extension first.
+- Large-shape reports must distinguish “full golden” from “sampled-token
+  golden”; sampling cannot replace final full qualification.

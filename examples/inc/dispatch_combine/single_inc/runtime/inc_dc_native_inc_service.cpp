@@ -88,6 +88,41 @@ void CloseFd(int *fd)
     }
 }
 
+inc_dc_fw_status_t NativeWorkerBeforeEnqueue(
+    void *opaque, uint32_t operation, uint64_t generation)
+{
+    auto *control = static_cast<NativeSingleIncWorkerControl *>(opaque);
+    if (control == nullptr || control->client == nullptr || generation == 0u)
+        return INC_DC_FW_INVALID_ARGUMENT;
+    if (operation == INC_DC_FW_OP_COMBINE) return INC_DC_FW_OK;
+    if (operation != INC_DC_FW_OP_DISPATCH || control->dispatch == nullptr)
+        return INC_DC_FW_INVALID_ARGUMENT;
+    inc_dc_fw_status_t status = NativeDispatchPrepareGeneration(
+        control->dispatch, generation);
+    return status == INC_DC_FW_OK
+        ? NativeIncServiceSubmitAndWait(
+              control->client, NativeIncServiceOp::DISPATCH_PREPARE,
+              generation)
+        : status;
+}
+
+inc_dc_fw_status_t NativeWorkerAfterEnqueue(
+    void *opaque, uint32_t operation, uint64_t generation)
+{
+    auto *control = static_cast<NativeSingleIncWorkerControl *>(opaque);
+    if (control == nullptr || control->client == nullptr || generation == 0u)
+        return INC_DC_FW_INVALID_ARGUMENT;
+    const NativeIncServiceOp service_operation =
+        operation == INC_DC_FW_OP_DISPATCH ? NativeIncServiceOp::DISPATCH
+        : operation == INC_DC_FW_OP_COMBINE ? NativeIncServiceOp::COMBINE
+                                            : NativeIncServiceOp{};
+    if (operation != INC_DC_FW_OP_DISPATCH &&
+        operation != INC_DC_FW_OP_COMBINE)
+        return INC_DC_FW_INVALID_ARGUMENT;
+    return NativeIncServiceSubmitAndWait(
+        control->client, service_operation, generation);
+}
+
 } // namespace
 
 struct NativeIncService {
@@ -287,6 +322,21 @@ inc_dc_fw_status_t DestroyNativeIncServiceClient(
     if (client == nullptr) return INC_DC_FW_INVALID_ARGUMENT;
     CloseFd(&client->fd);
     delete client;
+    return INC_DC_FW_OK;
+}
+
+inc_dc_fw_status_t BindNativeSingleIncWorkerControl(
+    NativeSingleIncWorkerControl *control,
+    inc_dc_single_inc_config_t *config)
+{
+    if (control == nullptr || config == nullptr ||
+        control->dispatch == nullptr || control->client == nullptr ||
+        config->struct_size < sizeof(*config) ||
+        config->abi_version != INC_DC_SINGLE_INC_ABI_VERSION)
+        return INC_DC_FW_INVALID_ARGUMENT;
+    config->before_enqueue = NativeWorkerBeforeEnqueue;
+    config->after_enqueue = NativeWorkerAfterEnqueue;
+    config->control_context = control;
     return INC_DC_FW_OK;
 }
 

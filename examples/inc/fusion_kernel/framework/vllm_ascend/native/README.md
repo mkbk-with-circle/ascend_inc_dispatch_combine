@@ -65,3 +65,85 @@ cmake --build /tmp/inc-fusion-torch -j8
 封装 setup/teardown，`torch_registration` 再发布 graph-visible、带 prepared output alias
 的 `inc_fusion::moe`。route kernel、fusion API 与 Torch-NPU 必须用同一目标 CANN 构建；
 禁止把宿主 CANN 9.1 二进制加载进 CANN 8.x 的 vLLM 进程。
+
+---
+
+## English
+
+# Native Torch route and worker-lifetime bridge
+
+The base build registers three write-into-preallocated-output route NPU ops:
+
+- `inc_fusion_native::route_count_out`
+- `inc_fusion_native::route_pack_out`
+- `inc_fusion_native::route_pack_parallel_out`
+
+They use the current PyTorch NPU stream, allocate no tensors, and do no host
+sync. The bridge must call `NPUStream::stream()` so the torch_npu software task
+queue enters the same ACL stream first; `stream(false)` must not skip a prior
+PyTorch producer. `local_counts` is `[wave_capacity, expert_count+1]`; the last
+column stores the active-token count on wave 0. The framework then does one
+fixed-capacity `all_gather_into_tensor` inside the vLLM EP device group, getting
+global expert counts and per-rank lengths together; payload does not go through
+HCCL. `route_pack_out` produces Fusion ABI rows/assignments/group-lists/waves.
+
+When `FUSION_API_LIBRARY` is provided, the same shared library also registers:
+
+- `inc_fusion_native::plan_info`: CPU setup op returning exact allocation/ABI
+  before SHMEM init;
+- `inc_fusion_native::worker_prepare`: create a fixed-capacity plan/executor at
+  setup;
+- `inc_fusion_native::worker_moe_out`: enqueue onto the current NPU stream into
+  the caller's prepared tensor; no alloc, no sync;
+- `inc_fusion_native::worker_destroy`: wait this executor's event ring and free
+  at engine teardown;
+- `inc_fusion_native::service_prepare/start/destroy`: for a model-free INC
+  sidecar to create, start after the W+1 PE setup barrier, and stop in order.
+
+`worker_prepare` must receive `symmetric_base/symmetric_bytes/ffts_addr` already
+established by SHMEM bootstrap. The bridge will not implicitly init SHMEM on
+the forward path. The native executor currently accepts only `serial_inc=2` and
+`fused_inc=4`; the two SHMEM baselines are rejected until their independent
+worker-direct backends exist. One long-lived INC service uses one fixed plan
+sized to the engine max token count; dynamic/uneven batches from 0 to capacity
+reuse it. Do not build one executor per capacity starting at ticket 1 against
+the same service. The Python ACLSHMEM binding also exports
+`aclshmem_barrier_all`; it is setup/teardown only, not on the per-request hot
+path.
+
+A worker handle may bind only one ACL stream, because prepared route/output are
+single reused buffers. Same-stream order protects them; cross-stream concurrency
+is rejected. NPU graph capture is also rejected: generation/ticket are built on
+the host each step, and replaying a captured graph would repeat old tickets.
+That reject is a correctness gate, not a performance fallback.
+
+`route_pack_out` is the conservative single-AIV fallback;
+`route_pack_parallel_out` uses live device AIVs in analyze → deterministic
+prefix → emit. Each lane's histogram and prefix state is 64B exclusive; 32B
+row/assignment data is written to UB then emitted by MTE3 to avoid scalar-cache
+false sharing at lane boundaries. Both paths are byte-identical. The framework
+picks a path from protocol work `T*K*(K-1)` and live AIV count; it stores no
+W/T/K case table and does not query hardware on forward.
+
+The route-pack kernel must be built against the same CANN version as the vLLM
+container. Do not reuse a host binary from another CANN. Example:
+
+```bash
+cmake -S /path/to/shmem -B /tmp/shmem-build-vllm \
+  -DUSE_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release -DSOC_TYPE=Ascend910B
+cmake --build /tmp/shmem-build-vllm --target inc_fusion_route_pack_kernel -j8
+
+cmake -S native -B /tmp/inc-fusion-torch \
+  -DCMAKE_PREFIX_PATH="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')" \
+  -DROUTE_PACK_LIBRARY=/tmp/shmem-build-vllm/lib/libinc_fusion_route_pack_kernel.so \
+  -DFUSION_API_LIBRARY=/tmp/shmem-build-vllm/lib/libinc_fusion_api.so \
+  -DASCEND_INCLUDE_DIR="$ASCEND_HOME_PATH/include"
+cmake --build /tmp/inc-fusion-torch -j8
+```
+
+Load with `torch.ops.load_library(...)`.
+`torch_fusion_runtime.PreparedTorchExecutor` wraps setup/teardown;
+`torch_registration` then publishes graph-visible `inc_fusion::moe` with a
+prepared output alias. Route kernel, fusion API, and Torch-NPU must be built
+for the same target CANN. Do not load a host CANN 9.1 binary into a CANN 8.x
+vLLM process.

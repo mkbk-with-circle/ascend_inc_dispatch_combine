@@ -116,3 +116,137 @@ free device/symmetric memory → finalize SHMEM/device`。异常路径应使用�
 ```
 
 该驱动比 API 示例长很多，因为它同时承担测试数据生成、正确性校验、性能采样与故障诊断；生产应用通常已有这些上层能力。
+
+---
+
+## English
+
+# Fusion Kernel API examples
+
+Both examples include only the public header `inc_fusion_api.h`:
+
+| File | Runnable as-is | Purpose |
+|---|---:|---|
+| `inc_fusion_plan_smoke.cpp` | Yes, no NPU | Create a prepared plan, read dynamic memory budget and AIV grouping, print, destroy |
+| `inc_fusion_runtime_skeleton.cpp` | Prints integration hints by default; device use needs a `PlatformAdapter` | Full skeleton for worker enqueue, remote INC resident service, result read, and teardown |
+
+`PlatformAdapter` owns application ACL/SHMEM bootstrap, device mapping, routes,
+weights, and streams. The examples do not invent fake device addresses, and
+host smoke is not a device result.
+
+## Build and run the host examples
+
+Host smoke does not occupy an NPU, but the build still needs CANN/BiSheng:
+
+```bash
+cmake --build <build-dir> --target \
+  inc_fusion_plan_smoke inc_fusion_runtime_skeleton -j
+
+<build-dir>/bin/inc_fusion_plan_smoke
+<build-dir>/bin/inc_fusion_runtime_skeleton
+```
+
+`inc_fusion_plan_smoke` prints something like:
+
+```text
+INC Fusion plan ready
+  ABI version       : 13
+  token waves       : 5
+  ...
+  worker AIV D/C/FFN: 8/16/24
+  INC AIV D/C       : 32/16
+  smoke result      : PASS
+```
+
+Memory and AIV numbers are computed from the current ABI, shape, and live core
+count. Applications must not hard-code them.
+
+## Device integration: full flow
+
+W+1 processes share one `ModelConfig` and expert placement; each process calls
+`RunFusionRole()` once.
+
+### 1. Implement `PlatformAdapter::Initialize`
+
+1. Select the NPU for this PE and init the ACL device.
+2. Init the ACLSHMEM world; every PE must use the same heap capacity and
+   allocation order.
+3. Create the worker stream or INC service stream.
+4. Query live AIV/AIC counts and write back `live_aiv` / `live_aic`.
+
+### 2. Implement `PlatformAdapter::Prepare`
+
+Allocate from `inc_fusion_prepared_plan_info()`:
+
+| Role | Required resources |
+|---|---|
+| All PEs | `aclshmem_malloc(symmetric_bytes)`, `worker_pes`, expert owner/local index, active token counts, FFTS address |
+| Worker | input/output, local W13/W2, packed dispatch rows, assignments, waves, group lists; workspace may be allocated by the executor |
+| INC | workspace of `inc_workspace_bytes`, service stream; does not hold model input/weights |
+
+Default weight layout is row-major `[E_local,H,2I]` / `[E_local,I,H]`. After
+symmetric-heap allocation and before the setup barrier, zero all
+`symmetric_bytes`.
+
+### 3. Two-phase INC start
+
+`inc_fusion_remote_service_create()` only prepares the ring. After all objects
+exist:
+
+1. Every PE runs `BarrierAll()` once;
+2. INC calls `inc_fusion_remote_service_start()`;
+3. Workers may then `inc_fusion_worker_executor_enqueue()`.
+
+Do not reverse this: the resident INC kernel occupies all INC AIVs.
+
+### 4. Worker hot path
+
+Each forward only updates dynamic bindings. Adjacent requests must differ in
+generation by at least `wave_count + 1` to avoid wave-generation aliasing:
+
+```cpp
+inc_fusion_device_bindings_t dynamic{};
+dynamic.input = input;
+dynamic.output = output;
+dynamic.w13 = w13;
+dynamic.w2 = w2;
+dynamic.dispatch_rows = packed_rows;
+dynamic.assignments = packed_assignments;
+dynamic.waves = packed_waves;
+dynamic.active_token_counts = active_tokens;
+dynamic.group_lists = group_lists;
+
+inc_fusion_worker_executor_enqueue(executor, generation, &dynamic, stream);
+```
+
+`INC_FUSION_BUSY` means a ring slot is still in flight. The caller must
+back-pressure, not overwrite.
+
+### 5. INC lifetime and results
+
+INC receives requests from the descriptor ring, runs Dispatch, waits for FFN,
+Combines, then takes the next ticket. The example queries completion by ticket;
+production usually runs until engine shutdown.
+
+Read output after the worker stream completes. A checksum only shows the result
+is readable; formal checks must compare a BF16 golden.
+
+### 6. Teardown order
+
+`stop service → destroy service/executor → teardown barrier → destroy plan →
+free device/symmetric memory → finalize SHMEM/device`. Exception paths should
+use the framework peer-failure mechanism and must not wait for a lost PE.
+
+## Real qualification driver
+
+The device driver with ACLSHMEM bootstrap, BF16 data, golden, and multi-PE
+launch lives at:
+
+```text
+../ascend/tests/inc_fusion_e2e_main.cpp
+../ascend/tests/run_inc_fusion_nb_sweep.sh
+```
+
+That driver is much longer than the API examples because it also generates
+test data, checks correctness, samples performance, and diagnoses faults.
+Production apps usually already have those layers.

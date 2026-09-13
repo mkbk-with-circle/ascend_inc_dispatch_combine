@@ -4,7 +4,10 @@
 
 - 每个 worker、每个 token wave 只发布一个 `Ready`。
 - `Ready` 只携带 epoch 与注册区域标识；不携带 token-plan、地址或 counts。
-- INC GET 固定 header 后，按 tile GET metadata/hidden、在线解析并 fan-out。
+- Worker 先把固定 header 和 metadata prefix PUT 到自己的 INC inbox，完成后
+  publication-last 发布 64B `Ready`。INC 收到通知即可从本地 inbox 并行解析，
+  随即按 tile GET hidden 并 fan-out；metadata 字节数不变，但没有控制面 GET
+  的请求/响应往返。
 - 每个 token 从源 worker 到 INC 只传一份 hidden；对每个唯一目标 GPU 只 PUT
   一份 hidden，同 GPU 多 expert 仅增加 assignment。
 - 目标端采用动态 expert-major 布局；兼容重整按 tile 与网络接收交叠。
@@ -44,9 +47,9 @@ FREE -> DISPATCH_OPEN -> DISPATCH_SEALED -> COMBINE_ACTIVE
 ```text
 INC Dispatch 动态半区（由运行时探测普通 AIV 总数）
 
-GET meta 0 -> parse/reserve 0 -> GET hidden 0 -> PUT destinations 0
-               GET meta 1 -> parse/reserve 1 -> GET hidden 1 -> PUT destinations 1
-                              ...
+PUT meta 0 -> READY 0 -> parse/reserve 0 -> GET hidden 0 -> PUT destinations 0
+PUT meta 1 -> READY 1 -> parse/reserve 1 -> GET hidden 1 -> PUT destinations 1
+                                      ...
 ```
 
 最终实现采用 per-peer channel 与 2–3 个有界 tile credit；禁止跨 AIV 轮询共享

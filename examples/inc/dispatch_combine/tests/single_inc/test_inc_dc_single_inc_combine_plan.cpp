@@ -91,12 +91,57 @@ int main()
     assert(prepared.resources.combine_inc_aiv == 32u);
     assert(prepared.resources.combine_worker_aiv == 24u);
     assert(prepared.control.owner_count == 32u);
+    assert(prepared.control.inc_pe == world);
     assert(prepared.control.producer_lane_count == 24u);
+    assert(prepared.control.group_count ==
+           prepared.control.owner_count * world);
     assert(prepared.control.ready_mode == 6u);
     assert((prepared.control.optimization_flags &
             inc::dc::kDynCsrOptRemoteResultTx) != 0u);
     assert(prepared.immutable_image.size() == prepared.heap_bytes);
     assert(prepared.heap_bytes > prepared.control.output_off);
+    assert(prepared.execution.topology.worker_count == world);
+    assert(prepared.execution.topology.owner_count ==
+           prepared.control.owner_count);
+    assert(prepared.execution.topology.inc_pe == world);
+    for (const auto &compiled : prepared.execution.schedule) {
+        assert(compiled.owner_index < prepared.control.owner_count);
+        const auto &logical = reverse.logical_plan.contributions[
+            compiled.logical_contribution_index];
+        uint32_t channel = UINT32_MAX;
+        assert(inc::dc::LookupIngressChannel(
+            prepared.execution.topology, logical.contributor_rank,
+            &channel));
+        assert(channel == compiled.ingress_channel);
+    }
+
+    // The specialized topology remains fail-closed: the unique INC cannot
+    // overlap a worker, ingress resources remain one-per-worker, and callers
+    // cannot mutate a descriptor without updating its digest.
+    {
+        auto invalid = prepared.execution.topology;
+        invalid.inc_pe = invalid.worker_pe_ids[0];
+        invalid.topology_digest = inc::dc::ComputeTopologyDigest(invalid);
+        inc::dc::IncDcTopologyValidateReport report{};
+        assert(inc::dc::ValidateTopologyDescriptor(invalid, &report) !=
+               inc::dc::IncDcStatus::OK);
+    }
+    {
+        auto invalid = prepared.execution.topology;
+        invalid.worker_ingress_channels[1] =
+            invalid.worker_ingress_channels[0];
+        invalid.topology_digest = inc::dc::ComputeTopologyDigest(invalid);
+        inc::dc::IncDcTopologyValidateReport report{};
+        assert(inc::dc::ValidateTopologyDescriptor(invalid, &report) !=
+               inc::dc::IncDcStatus::OK);
+    }
+    {
+        auto invalid = prepared.execution.topology;
+        invalid.topology_digest ^= 1u;
+        inc::dc::IncDcTopologyValidateReport report{};
+        assert(inc::dc::ValidateTopologyDescriptor(invalid, &report) !=
+               inc::dc::IncDcStatus::OK);
+    }
     for (uint32_t rank = 0u; rank < world; ++rank) {
         const auto &copies = prepared.input_copies[rank];
         assert(copies.size() == reverse.contributor_rows[rank]);

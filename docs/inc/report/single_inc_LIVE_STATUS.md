@@ -7,8 +7,8 @@
 | 字段 | 值 |
 |:---|:---|
 | 文档角色 | 全环境共享：约束 + gate + 进度 |
-| 上次更新 | 2026-08-06 |
-| 更新者 | Codex（回写未过 performance gate 清单；本地 sync 截至 16:45） |
+| 上次更新 | 2026-08-14 |
+| 更新者 | Codex（公开 API 收口；历史性能数字与 gate 原样保留） |
 | 活跃环境指针 | `../report/ACTIVE_HW_PROFILE.md` → `hardware_profiles/<profile>/single_inc_ENV_STATUS.md` |
 | 环境模板 | `env/ENV_STATUS_TEMPLATE.md` |
 | 详表快照 | `single_inc_nonpow2_sweep_cann91_20260805.md` + `single_inc_native_api_closure_cann91_20260804.md` + `single_inc_final_stress_cann91_20260804.md` + `single_inc_final_regular_sweep_cann91_20260804.json` + `single_inc_topk_rank_stress_cann91_20260804.md` + `single_inc_os_random_plan_campaign_cann91_20260804.md` + `single_inc_k1_private_mte_optimization_cann91_20260804.md` |
@@ -240,13 +240,13 @@ Canonical 正则 @256MiB（相对最终目标 120 均未达标；JSON 临时 gat
 | W7 | P0 | K>W/K>8 + rank 去重压测 | **DONE（正确性/扩展）** | Dispatch K=9/16/64 与 Combine K=16/64 全部正确；W8/K64 Dispatch balanced/all1 100 sample CV=0.74%/0.71%；256MiB Combine K64=127.767；8190/2-byte row 与 8 个 host gate 全过，无 top-k 回退 |
 | W8 | P1 | Combine 128MiB/ragged/热点压力缺口 | **OPEN** | W8 balanced 128MiB K8/K16/K64=116.177/116.413/116.161；ragged=109.959。all1=60.108 约为单 worker 屋顶 96%，需补 active-source roofline 报告但未经批准不改 120 formal gate |
 | W9 | P2 | K64 交叠距理论下界 | **OPEN** | W8/256MiB balanced/all1 全 rank 正确且 AIV 合规；speedup=1.688×/1.267×，makespan 高于理论下界 15.28%/16.32% |
-| W10 | P1 | 单 INC 简洁 C API + example | **D/C NATIVE API + SAME-HOST PERSISTENT SERVICE DONE** | Framework/Easy 已有真实 D/C provider：dense plan 正/反向 compiler、fixed-AIV symmetric workspace、worker/INC kernel、event ticket 和全活跃 lane gate；无 mock/子进程伪装。registered view 可跳过 D2D。W2 256MiB Dispatch protocol=124.288–128.047 GB/s；Combine ingress=141.09–143.79 GB/s，与 canonical 同口径无回退。INC 持久 proxy 通过 prepare/ready generation mailbox 隐藏 INC enqueue，整链无逐代 W+1 barrier；同机 TCP 已资格化，跨主机 transport adapter 未完成 |
+| W10 | P1 | 单 INC 最短 C++ API + example | **PUBLIC SURFACE CLOSED / NATIVE SERVICE DONE** | 当前唯一业务入口为 `common/api/inc_dc_single_inc.hpp`：`create -> dispatch -> expert compute -> combine -> destroy`。`SingleIncBatch` 自动持有/释放 generation 与 route；async request、query/cancel、plan/stats 不公开。唯一示例为 `common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp`。Framework/Easy/Inference 仅保留为已验证 V1 runtime 的内部依赖。native provider、registered view 与同机 persistent service 的历史带宽证据不变 |
 | W11 | P0 | 系统熵随机 token-plan 带宽压测 | **DONE（K1 correctness blocker closed）** | 原始 400 case 保留为 388 PASS/12 FAIL 基线；最终修复将原 12 个失败 plan 复测为 12/12。本轮 private-MTE/pair-ready 又复测 W2 历史 4/4 + 新系统熵 4/4，恢复了部分 W2 修复成本；资源 map 不变且 worker `<=1/2` |
 | W12 | P0 | 资源/语义单一真源与静态 contract gate | **DONE** | 修正核心架构、pipeline、框架契约和 CANN 9.1 dispatch gate 锚点；新增静态 gate，禁止旧 24/24、workload-adaptive worker AIV、本地预归约默认计量和静默越界 override 回流。policy 单测覆盖 live AIV=16/24/32/48/64、W=1..16；CANN 9.1 W2 tiny D/C 真机均全 rank PASS，资源为 D=`16/8`、C=`32/24` |
-| W13 | P0 | 公共 API 生命周期与数值 fail-closed | **DONE（host 4096 + native D/C 100 + full 256 GEN）** | host 生命周期 4096 代；native Dispatch/Combine 单算子各 100 代；单 communicator D→identity→C 同一 sessions/workspace/route 连续 256 代，3/3 rank 与数值 PASS。device telemetry D/C 故障在两代分别 fail-closed，紧后一代恢复。仍需 persistent service 支撑真实 kernel hang/link fault 的跨 rank abort/recovery |
-| W14 | P1 | 可观测性与运行时证据 | **API COUNTERS + D/C ACTIVE-LANE TELEMETRY + INJECTION DONE / UNIFIED SNAPSHOT OPEN** | Framework/Easy context stats 不变。Dispatch 强制回读本 PE 全活跃 `StreamLaneStat.error`；Combine 强制校验 global stats、全 producer/owner lane generation 和 fail code。一次性 device-stat 注入已证明 D/C 错误均转 `REQUEST_FAILED` 并可下一代恢复。D/C 已暴露 protocol cycles；仍需 bytes/cycles/chunks/link/owner 统一公共快照 |
-| W15 | P0 | 产品 host 发布门禁 | **DONE** | `run_single_inc_product_host_gate.sh` 一键重建并执行静态 contract、fixed-resource policy、Framework/Easy/C examples、4096 代生命周期、Combine service/FP32 数值语义、D/C plan compiler、composite backend、expert-layout adapter、C/C++ portability ABI、ACL discovery、runtime/client gate；最新全 PASS。native device gate 独立覆盖 W2/W4/W8、100/256-gen、fault/recovery 和大消息无回退 |
-| W16 | P1 | 单 communicator native D→expert→C 整链 | **IDENTITY PIPELINE DONE / GROUPED GEMM BINDING OPEN** | `NativeCompositeBackend` 在一个 Easy communicator 中转发 D/C；reverse compiler 导出 `contributor_dispatch_rows`，route handle 跨 D/C 复用。W2/W4/W8 真机全 rank PASS。中间是 expert-major padded device buffer + identity expert，只验证布局/生命周期，不报 GEMM 性能 |
+| W13 | P0 | API/runtime 生命周期与数值 fail-closed | **DONE（host 4096 + native D/C 100 + full 256 GEN）** | 历史内部 runtime 生命周期 4096 代；native Dispatch/Combine 单算子各 100 代；单 communicator D→identity→C 同一 sessions/workspace/route 连续 256 代，3/3 rank 与数值 PASS。公开 `SingleIncBatch` 将 route 生命周期收进 RAII；device telemetry 故障恢复证据不变 |
+| W14 | P1 | 可观测性与运行时证据 | **INTERNAL COUNTERS + D/C ACTIVE-LANE TELEMETRY DONE / PUBLIC SNAPSHOT DEFERRED** | context stats 与 active-lane telemetry 继续作为内部门禁，不属于当前最短公开 API。Dispatch/Combine 仍校验 lane generation/fail code，故障可 fail-closed 并恢复；若真实框架接入需要，再设计精简公共 snapshot，而不是恢复整套 request/query API |
+| W15 | P0 | 产品 host 发布门禁 | **DONE** | 当前公开门禁为 `inc_dc_single_inc_api_example`、`inc_dc_single_inc_c_header_tests` 与 `inc_dc_inference_api_tests`；native full target 继续验证真实 backend 闭包。2026-08-14 重构后均构建通过，最短示例数值 PASS、workspace alloc/free=2/2。Framework/Easy/Inference 的额外测试只是内部回归，不是使用示例 |
+| W16 | P1 | 单 communicator native D→expert→C 整链 | **IDENTITY PIPELINE DONE / GROUPED GEMM BINDING OPEN** | `NativeCompositeBackend` 在内部 communicator 中转发 D/C；reverse compiler 导出 `contributor_dispatch_rows`，精确 route 由公开 `SingleIncBatch` 跨 D/C 持有。W2/W4/W8 历史真机均全 rank PASS。中间是 expert-major padded device buffer + identity expert，只验证布局/生命周期，不报 GEMM 性能 |
 | W17 | P1 | worker 隐藏 INC 的 persistent proxy | **SAME-HOST DONE / CROSS-HOST ADAPTER OPEN** | `NativeIncService` 长驻 INC，收齐 `DISPATCH_PREPARE`→`DISPATCH_READY`→`COMBINE_READY` 后启动真实 kernel；消息校验 version/op/rank/generation，I/O 有界。W2 256 代、W4/W8 和故障恢复全过，无逐代 W+1 barrier。当前 transport 是同机 loopback，跨主机需 bootstrap/RDMA adapter |
 | W18 | P1 | expert-major/padded native adapter | **DONE（LAYOUT CORE + DEVICE CONSUMPTION）** | 输入配置 expert 全集而非 workload 活跃集；导出 offsets/tokens/permutation/inverse，zero-token expert 保留，非 2 的幂 alignment 拒绝。native full W2/W4 实际经过 alignment=8 padded device buffer；identity 只是 GEMM 可替换槽，不报计算性能 |
 
@@ -264,7 +264,10 @@ Canonical 正则 @256MiB（相对最终目标 120 均未达标；JSON 临时 gat
 | `single_inc_final_stress_cann91_20260804.md` | **压测快照** | CANN 9.1 sweep + 连续下发 |
 | `single_inc_nonpow2_sweep_cann91_20260805.md` | **native 非 2 次幂 sweep** | 24-case 正确/性能明细；§5.1 主证据 |
 
-代码入口：`examples/inc/dispatch_combine/inc_dc_single_inc_stream_*`、`inc_dc_single_inc_combine_plan_*`、`inc_dc_native_dispatch_backend.*`、`inc_dc_native_combine_backend.*`、`inc_dc_native_composite_backend.*`、`inc_dc_native_inc_service.*`、`inc_dc_native_expert_layout_adapter.*`、`inc_dc_sv2_dyn_csr_combine_*`、`inc_dc_easy_api.*`、`easy_api_example/`、overlap scripts。
+公开入口：`examples/inc/dispatch_combine/common/api/inc_dc_single_inc.hpp`。唯一完整示例：
+`examples/inc/dispatch_combine/common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp`。
+设备实现位于 `single_inc/dispatch/`、`single_inc/combine/`、`single_inc/planning/`
+和 `single_inc/runtime/`；Framework/Easy/Inference 只作为内部实现与回归依赖。
 
 ---
 
@@ -272,6 +275,7 @@ Canonical 正则 @256MiB（相对最终目标 120 均未达标；JSON 临时 gat
 
 | 日期 | 谁 | 变更 |
 |:---|:---|:---|
+| 2026-08-14 | Codex | 公开 API 收口为 `inc_dc_single_inc.hpp` 的五步同步生命周期；删除旧 Easy/Inference 示例及 SingleInc async/request/query/cancel/plan/stats 导出，保留底层兼容实现作为稳定 V1 内部依赖；唯一 CPU mock 示例与 host/native 构建门禁通过，历史性能数据不改写。 |
 | 2026-08-03 | handoff | 补齐 `910b-yuanmingyu/single_inc_ENV_STATUS.md`（CANN 8.5 默认 / 9.0 可选写在 ENV）；ACTIVE 指针改为两层 |
 | 2026-08-03 | handoff | **结构变更**：拆成 shared 本文 + per-env `ENV_STATUS`；峰值榜/队列留共享，主机与本机复测下沉环境文档 |
 | 2026-08-03 | handoff | 约束 H9–H13；≥128MiB gate；双目标 K1+overlap；自适应 AIV |

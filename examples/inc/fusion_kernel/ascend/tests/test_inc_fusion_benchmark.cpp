@@ -14,7 +14,7 @@ inc_fusion_benchmark_signature_t Signature(
     inc_fusion_benchmark_signature_init(&result);
     result.mode = mode;
     result.worker_count = 4u;
-    result.dedicated_inc_count =
+    result.uses_dedicated_inc =
         mode == INC_FUSION_BENCH_SERIAL_INC ||
                 mode == INC_FUSION_BENCH_FUSED_INC
             ? 1u : 0u;
@@ -39,13 +39,13 @@ void TestModes()
         INC_FUSION_BENCH_SERIAL_SHMEM, &info));
     assert(info.transport == INC_FUSION_BENCH_TRANSPORT_SHMEM);
     assert(info.schedule == INC_FUSION_BENCH_SCHEDULE_SERIAL);
-    assert(info.dedicated_inc_count == 0u);
+    assert(info.uses_dedicated_inc == 0u);
     assert(info.is_factorial_baseline == 1u);
     assert(inc_fusion_benchmark_mode_info(
         INC_FUSION_BENCH_FUSED_INC, &info));
     assert(info.transport == INC_FUSION_BENCH_TRANSPORT_INC);
     assert(info.schedule == INC_FUSION_BENCH_SCHEDULE_TOKEN_WAVE);
-    assert(info.dedicated_inc_count == 1u);
+    assert(info.uses_dedicated_inc == 1u);
     assert(inc_fusion_benchmark_mode_info(
         INC_FUSION_BENCH_NATIVE_VLLM, &info));
     assert(info.is_factorial_baseline == 0u);

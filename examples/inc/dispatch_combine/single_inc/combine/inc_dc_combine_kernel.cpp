@@ -54,18 +54,13 @@ __aicore__ inline void DynReadyPollDcci(__gm__ int32_t *ready,
 }
 
 __aicore__ inline int32_t DynParticipantPe(
-    uint32_t participant, uint32_t worker_count, uint32_t inc_count,
-    uint32_t owner_count, __gm__ uint32_t *worker_pes,
-    __gm__ uint32_t *owner_home_pes)
+    uint32_t participant, uint32_t worker_count, uint32_t inc_pe,
+    __gm__ uint32_t *worker_pes)
 {
     if (participant < worker_count) {
         return static_cast<int32_t>(worker_pes[participant]);
     }
-    const uint32_t inc = participant - worker_count;
-    if (inc >= inc_count || owner_count == 0u) {
-        return -1;
-    }
-    return static_cast<int32_t>(owner_home_pes[inc * owner_count]);
+    return participant == worker_count ? static_cast<int32_t>(inc_pe) : -1;
 }
 
 // A stream-level SHMEM barrier orders work but, on the target runtime, does
@@ -77,22 +72,18 @@ __aicore__ inline int32_t DynParticipantPe(
 // sized, so W2/W4/W8 and non-contiguous PE maps use identical semantics.
 __aicore__ inline bool DynDeviceGenerationStartGate(
     __gm__ uint8_t *sym, __gm__ DynCsrCtrl *ctrl, uint32_t participant,
-    bool coordinator_lane, __gm__ uint32_t *worker_pes,
-    __gm__ uint32_t *owner_home_pes)
+    bool coordinator_lane, __gm__ uint32_t *worker_pes)
 {
     if (ctrl->start_gate_off == 0u) {
         return true;
     }
-    const uint32_t participant_count =
-        ctrl->worker_count + ctrl->inc_count;
+    const uint32_t participant_count = ctrl->worker_count + 1u;
     if (participant_count == 0u || participant >= participant_count ||
-        ctrl->ready_stride_bytes < 64u || worker_pes == nullptr ||
-        owner_home_pes == nullptr) {
+        ctrl->ready_stride_bytes < 64u || worker_pes == nullptr) {
         return false;
     }
     const int32_t coordinator_pe = DynParticipantPe(
-        0u, ctrl->worker_count, ctrl->inc_count, ctrl->owner_count,
-        worker_pes, owner_home_pes);
+        0u, ctrl->worker_count, ctrl->inc_pe, worker_pes);
     if (coordinator_pe < 0) {
         return false;
     }
@@ -150,8 +141,7 @@ __aicore__ inline bool DynDeviceGenerationStartGate(
             for (uint32_t round = 0u; round < 2u; ++round) {
                 for (uint32_t peer = 1u; peer < participant_count; ++peer) {
                     const int32_t peer_pe = DynParticipantPe(
-                        peer, ctrl->worker_count, ctrl->inc_count,
-                        ctrl->owner_count, worker_pes, owner_home_pes);
+                        peer, ctrl->worker_count, ctrl->inc_pe, worker_pes);
                     if (peer_pe < 0) {
                         return false;
                     }
@@ -183,8 +173,7 @@ __aicore__ inline bool DynWaitPersistentLocalTrigger(
          kDynCsrOptPersistentLocalTrigger) == 0u) {
         return true;
     }
-    const uint32_t participant_count =
-        ctrl->worker_count + ctrl->inc_count;
+    const uint32_t participant_count = ctrl->worker_count + 1u;
     if (ctrl->start_gate_off == 0u || participant_count == 0u ||
         ctrl->ready_stride_bytes < 64u) {
         return false;
@@ -221,8 +210,7 @@ __aicore__ inline bool DynWaitPersistentLocalTrigger(
 __aicore__ inline __gm__ DynCsrPersistentTriggerLine *
 DynPersistentTriggerLine(__gm__ uint8_t *sym, __gm__ DynCsrCtrl *ctrl)
 {
-    const uint32_t participant_count =
-        ctrl->worker_count + ctrl->inc_count;
+    const uint32_t participant_count = ctrl->worker_count + 1u;
     return reinterpret_cast<__gm__ DynCsrPersistentTriggerLine *>(
         sym + ctrl->start_gate_off +
         static_cast<uint64_t>(participant_count) *
@@ -354,12 +342,9 @@ __aicore__ inline bool DynWaitCollectiveValue(
 __aicore__ inline bool DynAckCollectiveCompletion(
     __gm__ uint8_t *sym, __gm__ DynCsrCtrl *ctrl, uint32_t generation)
 {
-    if (sym == nullptr || ctrl == nullptr || ctrl->inc_count == 0u ||
-        ctrl->owner_count == 0u || ctrl->owner_home_pe_off == 0u) {
+    if (sym == nullptr || ctrl == nullptr || ctrl->owner_count == 0u) {
         return false;
     }
-    __gm__ uint32_t *owner_home_pes =
-        reinterpret_cast<__gm__ uint32_t *>(sym + ctrl->owner_home_pe_off);
     // Keep ACK TX storage disjoint from the local completion RX cacheline.
     // The INC may publish generation+1 immediately after observing the ACK;
     // sourcing the ACK from that RX line therefore creates a cross-direction
@@ -370,27 +355,21 @@ __aicore__ inline bool DynAckCollectiveCompletion(
     AscendC::PipeBarrier<PIPE_ALL>();
     DynDcci(reinterpret_cast<__gm__ uint8_t *>(ack_stage),
             ctrl->ready_stride_bytes);
-    for (uint32_t inc = 0u; inc < ctrl->inc_count; ++inc) {
-        const uint64_t completion =
-            DynCollectiveCompletionBase(ctrl) +
-            static_cast<uint64_t>(inc) * ctrl->worker_count +
-            ctrl->this_worker_rank;
-        __gm__ int32_t *done = reinterpret_cast<__gm__ int32_t *>(
-            sym + ctrl->ready_generation_off +
-            completion * ctrl->ready_stride_bytes);
-        const uint32_t home_index = inc * ctrl->owner_count;
-        // Completion is a cacheline protocol, not an atomic arithmetic
-        // protocol.  signal_op can complete while a peer still observes the
-        // old mapped cacheline for milliseconds on this platform.  Publish
-        // the ACK through the same cacheline RMA + quiet sequence as payload
-        // readiness so a long persistent train cannot lose its final ACK.
-        aclshmem_putmem_nbi(
-            reinterpret_cast<__gm__ void *>(done),
-            reinterpret_cast<__gm__ void *>(ack_stage),
-            ctrl->ready_stride_bytes,
-            static_cast<int32_t>(owner_home_pes[home_index]));
-        aclshmem_quiet();
-    }
+    const uint64_t completion =
+        DynCollectiveCompletionBase(ctrl) + ctrl->this_worker_rank;
+    __gm__ int32_t *done = reinterpret_cast<__gm__ int32_t *>(
+        sym + ctrl->ready_generation_off +
+        completion * ctrl->ready_stride_bytes);
+    // Completion is a cacheline protocol, not an atomic arithmetic
+    // protocol.  signal_op can complete while a peer still observes the
+    // old mapped cacheline for milliseconds on this platform.  Publish
+    // the ACK through the same cacheline RMA + quiet sequence as payload
+    // readiness so a long persistent train cannot lose its final ACK.
+    aclshmem_putmem_nbi(
+        reinterpret_cast<__gm__ void *>(done),
+        reinterpret_cast<__gm__ void *>(ack_stage),
+        ctrl->ready_stride_bytes, static_cast<int32_t>(ctrl->inc_pe));
+    aclshmem_quiet();
     return true;
 }
 
@@ -1066,14 +1045,10 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
         uint64_t producer_t0 = 0u;
         __gm__ uint32_t *sources =
             (__gm__ uint32_t *)(sym + ctrl->contrib_source_rank_off);
-        __gm__ uint32_t *home_pes =
-            (__gm__ uint32_t *)(sym + ctrl->contrib_home_pe_off);
         __gm__ uint32_t *slots =
             (__gm__ uint32_t *)(sym + ctrl->contrib_slot_off);
         __gm__ uint32_t *worker_pes =
             (__gm__ uint32_t *)(sym + ctrl->worker_pe_off);
-        __gm__ uint32_t *owner_home_pes =
-            (__gm__ uint32_t *)(sym + ctrl->owner_home_pe_off);
         const uint32_t quiet_window =
             ctrl->producer_quiet_window == 0u ? 1u
                                               : ctrl->producer_quiet_window;
@@ -1092,13 +1067,8 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
             ctrl->ready_mode == 6u) {
             if (ctrl->worker_count == 0u ||
                 ctrl->this_worker_rank >= ctrl->worker_count ||
-                ctrl->inc_count == 0u || ctrl->owner_count == 0u ||
-                ctrl->owner_total == 0u ||
-                ctrl->owner_total != ctrl->inc_count * ctrl->owner_count ||
-                ctrl->group_count != ctrl->owner_total * ctrl->worker_count ||
-                ((ctrl->ready_mode == 3u || ctrl->ready_mode == 6u) &&
-                 ctrl->inc_group_count !=
-                     ctrl->inc_count * ctrl->worker_count) ||
+                ctrl->owner_count == 0u ||
+                ctrl->group_count != ctrl->owner_count * ctrl->worker_count ||
                 ctrl->ready_stride_bytes < sizeof(int32_t)) {
                 return;
             }
@@ -1108,12 +1078,12 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                 (__gm__ uint32_t *)(sym + ctrl->group_entries_off);
             __gm__ uint32_t *contrib_result =
                 (__gm__ uint32_t *)(sym + ctrl->contrib_result_off);
-            __gm__ uint32_t *owner_home_pes =
-                (__gm__ uint32_t *)(sym + ctrl->owner_home_pe_off);
-            __gm__ uint32_t *inc_group_offsets =
-                (__gm__ uint32_t *)(sym + ctrl->inc_group_offsets_off);
-            __gm__ uint32_t *inc_group_entries =
-                (__gm__ uint32_t *)(sym + ctrl->inc_group_entries_off);
+            __gm__ uint32_t *source_contribution_offsets =
+                (__gm__ uint32_t *)(
+                    sym + ctrl->source_contribution_offsets_off);
+            __gm__ uint32_t *source_contribution_entries =
+                (__gm__ uint32_t *)(
+                    sym + ctrl->source_contribution_entries_off);
 
             // Freeze worker-local rank-dedup staging before any SHMEM source
             // read.  Physical contributions own unique slots; the local
@@ -1180,11 +1150,11 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                 // lane 0 idle.  Lane 0 publishes the one ready cacheline only
                 // after every payload shard has completed remotely.
                 bool producer_ok = true;
-                for (uint32_t inc = 0u; inc < ctrl->inc_count; ++inc) {
-                    const uint32_t group =
-                        inc * ctrl->worker_count + ctrl->this_worker_rank;
-                    const uint32_t begin = inc_group_offsets[group];
-                    const uint32_t end = inc_group_offsets[group + 1u];
+                do {
+                    const uint32_t group = ctrl->this_worker_rank;
+                    const uint32_t begin = source_contribution_offsets[group];
+                    const uint32_t end =
+                        source_contribution_offsets[group + 1u];
                     if (end <= begin || end > ctrl->contribution_count) {
                         continue;
                     }
@@ -1198,8 +1168,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                                     (static_cast<uint64_t>(group_size) *
                                      (lane + 1u)) /
                                     ctrl->producer_lane_count);
-                    const uint32_t home_pe =
-                        owner_home_pes[inc * ctrl->owner_count];
+                    const uint32_t home_pe = ctrl->inc_pe;
                     bool valid = true;
                     uint32_t pending = 0u;
                     const bool coalesced =
@@ -1207,11 +1176,10 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                          kDynCsrOptCoalescedGroupPut) != 0u;
                     uint32_t first_slot = 0u;
                     for (uint32_t p = lane_begin; p < lane_end; ++p) {
-                        const uint32_t i = inc_group_entries[p];
+                        const uint32_t i = source_contribution_entries[p];
                         if (i >= ctrl->contribution_count ||
                             sources[i] != ctrl->this_worker_rank ||
-                            slots[i] >= ctrl->max_ingress_slots ||
-                            home_pes[i] != home_pe) {
+                            slots[i] >= ctrl->max_ingress_slots) {
                             valid = false;
                             break;
                         }
@@ -1268,7 +1236,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                         aclshmem_quiet();
                         pst->last_quiet_cycle = GetSystemCycle();
                     }
-                }
+                } while (false);
                 if (!producer_ok) {
                     pst->reserved[0] = kDynCsrFailSlot;
                 }
@@ -1284,16 +1252,15 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                     producer_ok = producer_ok &&
                                   DynWaitProducerPeerPayloads(
                                       sym, ctrl, ctrl->generation);
-                    for (uint32_t inc = 0u; inc < ctrl->inc_count; ++inc) {
-                        const uint32_t group =
-                            inc * ctrl->worker_count + ctrl->this_worker_rank;
-                        const uint32_t begin = inc_group_offsets[group];
-                        const uint32_t end = inc_group_offsets[group + 1u];
+                    do {
+                        const uint32_t group = ctrl->this_worker_rank;
+                        const uint32_t begin = source_contribution_offsets[group];
+                        const uint32_t end =
+                            source_contribution_offsets[group + 1u];
                         if (end <= begin || end > ctrl->contribution_count) {
                             continue;
                         }
-                        const uint32_t home_pe =
-                            owner_home_pes[inc * ctrl->owner_count];
+                        const uint32_t home_pe = ctrl->inc_pe;
                         __gm__ int32_t *ready =
                         reinterpret_cast<__gm__ int32_t *>(
                             sym + ctrl->ready_generation_off +
@@ -1318,29 +1285,21 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                         aclshmem_quiet();
                         ++pst->ready_signals;
                         pst->last_ready_cycle = GetSystemCycle();
-                    }
+                    } while (false);
                 }
                 pst->kernel_cycles = GetSystemCycle() - producer_t0;
                 if (ctrl->device_completion != 0u && lane == 0u) {
-                    bool completion_ok = producer_ok;
-                    for (uint32_t inc = 0u;
-                         completion_ok && inc < ctrl->inc_count; ++inc) {
-                        const uint64_t completion =
-                            DynCollectiveCompletionBase(ctrl) +
-                            static_cast<uint64_t>(inc) *
-                                ctrl->worker_count +
-                            ctrl->this_worker_rank;
-                        __gm__ int32_t *done =
-                            reinterpret_cast<__gm__ int32_t *>(
-                                sym + ctrl->ready_generation_off +
-                                completion * ctrl->ready_stride_bytes);
-                        if (!DynWaitCollectiveValue(
-                                ctrl, done, static_cast<int32_t>(
-                                                ctrl->generation))) {
-                            completion_ok = false;
-                            break;
-                        }
-                    }
+                    const uint64_t completion =
+                        DynCollectiveCompletionBase(ctrl) +
+                        ctrl->this_worker_rank;
+                    __gm__ int32_t *done =
+                        reinterpret_cast<__gm__ int32_t *>(
+                            sym + ctrl->ready_generation_off +
+                            completion * ctrl->ready_stride_bytes);
+                    bool completion_ok = producer_ok &&
+                        DynWaitCollectiveValue(
+                            ctrl, done,
+                            static_cast<int32_t>(ctrl->generation));
                     if (completion_ok) {
                         completion_ok = DynAckCollectiveCompletion(
                             sym, ctrl, ctrl->generation);
@@ -1399,7 +1358,6 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                      kDynCsrOptAsyncRankPrereducePush) != 0u &&
                     ctrl->local_rank_prereduce != 0u &&
                     !staged_rank_dedup && ctrl->producer_lane_count >= 4u &&
-                    ctrl->inc_count == 1u &&
                     ctrl->coalesced_chunk_bytes >
                         kIncDcPrivateMtePacketBytes;
                 if (mn_rank_dedup_pipeline) {
@@ -1411,7 +1369,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                     // reduce and push to overlap without allowing a DCCI to
                     // invalidate an in-flight MTE source.
                     const uint32_t aggregate_tx_target =
-                        (ctrl->owner_total + 2u) / 3u;
+                        (ctrl->owner_count + 2u) / 3u;
                     uint32_t transport_lanes =
                         (aggregate_tx_target + ctrl->worker_count - 1u) /
                         ctrl->worker_count;
@@ -1433,22 +1391,21 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                             ? 1u
                             : ctrl->coalesced_chunk_bytes / ctrl->tile_bytes;
                     if (chunk_tiles == 0u) chunk_tiles = 1u;
-                    for (uint32_t inc = 0u;
-                         inc < ctrl->inc_count && producer_ok; ++inc) {
-                        const uint32_t group =
-                            inc * ctrl->worker_count + ctrl->this_worker_rank;
-                        const uint32_t begin = inc_group_offsets[group];
-                        const uint32_t end = inc_group_offsets[group + 1u];
+                    do {
+                        const uint32_t group = ctrl->this_worker_rank;
+                        const uint32_t begin =
+                            source_contribution_offsets[group];
+                        const uint32_t end =
+                            source_contribution_offsets[group + 1u];
                         if (end <= begin || end > ctrl->contribution_count) {
                             continue;
                         }
-                        const uint32_t home_pe =
-                            owner_home_pes[inc * ctrl->owner_count];
-                        const uint32_t first_i = inc_group_entries[begin];
+                        const uint32_t home_pe = ctrl->inc_pe;
+                        const uint32_t first_i =
+                            source_contribution_entries[begin];
                         if (first_i >= ctrl->contribution_count ||
                             sources[first_i] != ctrl->this_worker_rank ||
-                            slots[first_i] >= ctrl->max_ingress_slots ||
-                            home_pes[first_i] != home_pe) {
+                            slots[first_i] >= ctrl->max_ingress_slots) {
                             producer_ok = false;
                             break;
                         }
@@ -1485,7 +1442,8 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                                 bool valid = true;
                                 for (uint32_t p = first; p < first + count;
                                      ++p) {
-                                    const uint32_t i = inc_group_entries[p];
+                                    const uint32_t i =
+                                        source_contribution_entries[p];
                                     if (i >= ctrl->contribution_count ||
                                         sources[i] !=
                                             ctrl->this_worker_rank ||
@@ -1493,7 +1451,6 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                                             first_slot + (p - begin) ||
                                         slots[i] >=
                                             ctrl->max_ingress_slots ||
-                                        home_pes[i] != home_pe ||
                                         DynPrepareRankDedupContribution(
                                             sym, ctrl, slots, i, true) !=
                                             kDynCsrFailNone) {
@@ -1701,7 +1658,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                                 }
                             }
                         }
-                    }
+                    } while (false);
                 } else {
                 // All lanes execute the same reduce->push state machine, but
                 // starting them in lockstep phase-locks the whole worker:
@@ -1752,21 +1709,21 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                 if (chunk_tiles == 0u) {
                     chunk_tiles = 1u;
                 }
-                for (uint32_t inc = 0u; inc < ctrl->inc_count; ++inc) {
-                    const uint32_t group =
-                        inc * ctrl->worker_count + ctrl->this_worker_rank;
-                    const uint32_t begin = inc_group_offsets[group];
-                    const uint32_t end = inc_group_offsets[group + 1u];
+                do {
+                    const uint32_t group = ctrl->this_worker_rank;
+                    const uint32_t begin =
+                        source_contribution_offsets[group];
+                    const uint32_t end =
+                        source_contribution_offsets[group + 1u];
                     if (end <= begin || end > ctrl->contribution_count) {
                         continue;
                     }
-                    const uint32_t home_pe =
-                        owner_home_pes[inc * ctrl->owner_count];
-                    const uint32_t first_i = inc_group_entries[begin];
+                    const uint32_t home_pe = ctrl->inc_pe;
+                    const uint32_t first_i =
+                        source_contribution_entries[begin];
                     if (first_i >= ctrl->contribution_count ||
                         sources[first_i] != ctrl->this_worker_rank ||
-                        slots[first_i] >= ctrl->max_ingress_slots ||
-                        home_pes[first_i] != home_pe) {
+                        slots[first_i] >= ctrl->max_ingress_slots) {
                         producer_ok = false;
                         continue;
                     }
@@ -1808,12 +1765,12 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                              local_offset < group_size;
                              local_offset += ctrl->producer_lane_count) {
                             const uint32_t p = begin + local_offset;
-                            const uint32_t i = inc_group_entries[p];
+                            const uint32_t i =
+                                source_contribution_entries[p];
                             if (i >= ctrl->contribution_count ||
                                 sources[i] != ctrl->this_worker_rank ||
                                 slots[i] != first_slot + local_offset ||
-                                slots[i] >= ctrl->max_ingress_slots ||
-                                home_pes[i] != home_pe) {
+                                slots[i] >= ctrl->max_ingress_slots) {
                                 producer_ok = false;
                                 break;
                             }
@@ -1913,12 +1870,12 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                         const uint64_t reduce_begin_cycle = GetSystemCycle();
                         bool valid = true;
                         for (uint32_t p = first; p < first + count; ++p) {
-                            const uint32_t i = inc_group_entries[p];
+                            const uint32_t i =
+                                source_contribution_entries[p];
                             if (i >= ctrl->contribution_count ||
                                 sources[i] != ctrl->this_worker_rank ||
                                 slots[i] != first_slot + (p - begin) ||
-                                slots[i] >= ctrl->max_ingress_slots ||
-                                home_pes[i] != home_pe) {
+                                slots[i] >= ctrl->max_ingress_slots) {
                                 valid = false;
                                 break;
                             }
@@ -1970,7 +1927,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                             continue;
                         }
                         const uint32_t owners_per_source =
-                            (ctrl->owner_total + ctrl->worker_count - 1u) /
+                            (ctrl->owner_count + ctrl->worker_count - 1u) /
                             ctrl->worker_count;
                         // A rank-deduplicated long packet can use the private
                         // two-slot transport only if both staging chunks are
@@ -2156,7 +2113,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                         local_transport_cycles +=
                             GetSystemCycle() - transport_begin_cycle;
                     }
-                }
+                } while (false);
                 // A tiny/tail-only train may never fill two slots.  It still
                 // has to release the second wave before draining its tail.
                 if (rank_dedup_wavefront && lane == 0u &&
@@ -2228,26 +2185,19 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                 DynDcci(reinterpret_cast<__gm__ uint8_t *>(pst),
                         sizeof(*pst));
                 if (ctrl->device_completion != 0u && lane == 0u) {
-                    bool completion_ok =
-                        producer_ok && DynWaitProducerPeerLanes(
-                                           sym, ctrl, ctrl->generation);
-                    for (uint32_t inc = 0u;
-                         completion_ok && inc < ctrl->inc_count; ++inc) {
-                        const uint64_t completion =
-                            DynCollectiveCompletionBase(ctrl) +
-                            static_cast<uint64_t>(inc) *
-                                ctrl->worker_count +
-                            ctrl->this_worker_rank;
-                        __gm__ int32_t *done =
-                            reinterpret_cast<__gm__ int32_t *>(
-                                sym + ctrl->ready_generation_off +
-                                completion * ctrl->ready_stride_bytes);
-                        if (!DynWaitCollectiveValue(
-                                ctrl, done, static_cast<int32_t>(
-                                                ctrl->generation))) {
-                            completion_ok = false;
-                        }
-                    }
+                    const uint64_t completion =
+                        DynCollectiveCompletionBase(ctrl) +
+                        ctrl->this_worker_rank;
+                    __gm__ int32_t *done =
+                        reinterpret_cast<__gm__ int32_t *>(
+                            sym + ctrl->ready_generation_off +
+                            completion * ctrl->ready_stride_bytes);
+                    bool completion_ok = producer_ok &&
+                        DynWaitProducerPeerLanes(
+                            sym, ctrl, ctrl->generation) &&
+                        DynWaitCollectiveValue(
+                            ctrl, done,
+                            static_cast<int32_t>(ctrl->generation));
                     if (completion_ok) {
                         completion_ok = DynAckCollectiveCompletion(
                             sym, ctrl, ctrl->generation);
@@ -2316,8 +2266,8 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                     // owner is permanently last.  The arithmetic is generic
                     // for non-power-of-two AIV and owner counts.
                     const uint32_t lane_group_count =
-                        lane < ctrl->owner_total
-                            ? 1u + (ctrl->owner_total - 1u - lane) /
+                        lane < ctrl->owner_count
+                            ? 1u + (ctrl->owner_count - 1u - lane) /
                                        ctrl->producer_lane_count
                             : 0u;
                     for (uint32_t group_pos = 0u;
@@ -2327,12 +2277,9 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                             lane_group_count;
                         const uint32_t order =
                             lane + rotated * ctrl->producer_lane_count;
-                        const uint32_t inc = order % ctrl->inc_count;
-                        const uint32_t owner = order / ctrl->inc_count;
-                        const uint32_t flat =
-                            inc * ctrl->owner_count + owner;
+                        const uint32_t owner = order;
                         const uint32_t group =
-                            flat * ctrl->worker_count +
+                            owner * ctrl->worker_count +
                             ctrl->this_worker_rank;
                         const uint32_t begin = group_offsets[group];
                         const uint32_t end = group_offsets[group + 1u];
@@ -2343,12 +2290,11 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                             continue;
                         }
                         any_chunk = true;
-                        const uint32_t home_pe = owner_home_pes[flat];
+                        const uint32_t home_pe = ctrl->inc_pe;
                         const uint32_t first_i = group_entries[begin];
                         if (first_i >= ctrl->contribution_count ||
                             sources[first_i] != ctrl->this_worker_rank ||
-                            slots[first_i] >= ctrl->max_ingress_slots ||
-                            home_pes[first_i] != home_pe) {
+                            slots[first_i] >= ctrl->max_ingress_slots) {
                             producer_ok = false;
                             continue;
                         }
@@ -2369,8 +2315,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                             if (i >= ctrl->contribution_count ||
                                 sources[i] != ctrl->this_worker_rank ||
                                 slots[i] != first_slot + (p - begin) ||
-                                slots[i] >= ctrl->max_ingress_slots ||
-                                home_pes[i] != home_pe) {
+                                slots[i] >= ctrl->max_ingress_slots) {
                                 valid = false;
                                 break;
                             }
@@ -2458,26 +2403,19 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                 DynDcci(reinterpret_cast<__gm__ uint8_t *>(pst),
                         sizeof(*pst));
                 if (ctrl->device_completion != 0u && lane == 0u) {
-                    bool completion_ok =
-                        producer_ok && DynWaitProducerPeerLanes(
-                                           sym, ctrl, ctrl->generation);
-                    for (uint32_t inc = 0u;
-                         completion_ok && inc < ctrl->inc_count; ++inc) {
-                        const uint64_t completion =
-                            DynCollectiveCompletionBase(ctrl) +
-                            static_cast<uint64_t>(inc) *
-                                ctrl->worker_count +
-                            ctrl->this_worker_rank;
-                        __gm__ int32_t *done =
-                            reinterpret_cast<__gm__ int32_t *>(
-                                sym + ctrl->ready_generation_off +
-                                completion * ctrl->ready_stride_bytes);
-                        if (!DynWaitCollectiveValue(
-                                ctrl, done, static_cast<int32_t>(
-                                                ctrl->generation))) {
-                            completion_ok = false;
-                        }
-                    }
+                    const uint64_t completion =
+                        DynCollectiveCompletionBase(ctrl) +
+                        ctrl->this_worker_rank;
+                    __gm__ int32_t *done =
+                        reinterpret_cast<__gm__ int32_t *>(
+                            sym + ctrl->ready_generation_off +
+                            completion * ctrl->ready_stride_bytes);
+                    bool completion_ok = producer_ok &&
+                        DynWaitProducerPeerLanes(
+                            sym, ctrl, ctrl->generation) &&
+                        DynWaitCollectiveValue(
+                            ctrl, done,
+                            static_cast<int32_t>(ctrl->generation));
                     if (completion_ok) {
                         completion_ok = DynAckCollectiveCompletion(
                             sym, ctrl, ctrl->generation);
@@ -2517,7 +2455,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                 for (uint32_t pos = list_begin + lane; pos < list_end;
                      pos += ctrl->producer_lane_count) {
                     const uint32_t flat = source_group_entries[pos];
-                    if (flat >= ctrl->owner_total) {
+                    if (flat >= ctrl->owner_count) {
                         continue;
                     }
                     const uint32_t group =
@@ -2527,7 +2465,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                     if (end <= begin || end > ctrl->contribution_count) {
                         continue;
                     }
-                    const uint32_t home_pe = owner_home_pes[flat];
+                    const uint32_t home_pe = ctrl->inc_pe;
                     uint32_t pending = 0u;
                     bool valid = true;
                     const bool coalesced =
@@ -2538,8 +2476,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                         const uint32_t i = group_entries[p];
                         if (i >= ctrl->contribution_count ||
                             sources[i] != ctrl->this_worker_rank ||
-                            slots[i] >= ctrl->max_ingress_slots ||
-                            home_pes[i] != home_pe) {
+                            slots[i] >= ctrl->max_ingress_slots) {
                             valid = false;
                             break;
                         }
@@ -2622,26 +2559,18 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                 // ready record with generation e+1 before a slow INC has
                 // observed generation e, causing an exact-equality deadlock.
                 if (ctrl->device_completion != 0u && lane == 0u) {
+                    const uint64_t completion =
+                        DynCollectiveCompletionBase(ctrl) +
+                        ctrl->this_worker_rank;
+                    __gm__ int32_t *done =
+                        reinterpret_cast<__gm__ int32_t *>(
+                            sym + ctrl->ready_generation_off +
+                            completion * ctrl->ready_stride_bytes);
                     bool completion_ok = DynWaitProducerPeerLanes(
-                        sym, ctrl, ctrl->generation);
-                    for (uint32_t inc = 0u;
-                         completion_ok && inc < ctrl->inc_count; ++inc) {
-                        const uint64_t completion =
-                            DynCollectiveCompletionBase(ctrl) +
-                            static_cast<uint64_t>(inc) *
-                                ctrl->worker_count +
-                            ctrl->this_worker_rank;
-                        __gm__ int32_t *done =
-                            reinterpret_cast<__gm__ int32_t *>(
-                                sym + ctrl->ready_generation_off +
-                                completion * ctrl->ready_stride_bytes);
-                        if (!DynWaitCollectiveValue(
-                                ctrl, done, static_cast<int32_t>(
-                                                ctrl->generation))) {
-                            completion_ok = false;
-                            break;
-                        }
-                    }
+                        sym, ctrl, ctrl->generation) &&
+                        DynWaitCollectiveValue(
+                            ctrl, done,
+                            static_cast<int32_t>(ctrl->generation));
                     if (completion_ok) {
                         completion_ok = DynAckCollectiveCompletion(
                             sym, ctrl, ctrl->generation);
@@ -2667,26 +2596,20 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                 return;
             }
 
-            // Each lane owns complete owner-source batches.  Payload
+            // Each lane owns complete owner-source batches. Payload
             // visibility is completed before the single generation signal.
-            // Traverse owner-major / INC-minor.  With lanes >= inc_count this
-            // publishes one owner across all INCs together, avoiding an
-            // inc-major tail where the last INC cannot start reducing until
-            // every owner of earlier INCs has been transported.
             bool producer_ok = true;
-            for (uint32_t order = lane; order < ctrl->owner_total;
+            for (uint32_t order = lane; order < ctrl->owner_count;
                  order += ctrl->producer_lane_count) {
-                const uint32_t inc = order % ctrl->inc_count;
-                const uint32_t owner = order / ctrl->inc_count;
-                const uint32_t flat = inc * ctrl->owner_count + owner;
+                const uint32_t owner = order;
                 const uint32_t group =
-                    flat * ctrl->worker_count + ctrl->this_worker_rank;
+                    owner * ctrl->worker_count + ctrl->this_worker_rank;
                 const uint32_t begin = group_offsets[group];
                 const uint32_t end = group_offsets[group + 1u];
                 if (end <= begin || end > ctrl->contribution_count) {
                     continue;
                 }
-                const uint32_t home_pe = owner_home_pes[flat];
+                const uint32_t home_pe = ctrl->inc_pe;
                 bool valid = true;
                 uint32_t pending = 0;
                 const bool coalesced =
@@ -2697,8 +2620,7 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                     const uint32_t i = group_entries[p];
                     if (i >= ctrl->contribution_count ||
                         sources[i] != ctrl->this_worker_rank ||
-                        slots[i] >= ctrl->max_ingress_slots ||
-                        home_pes[i] != home_pe) {
+                        slots[i] >= ctrl->max_ingress_slots) {
                         valid = false;
                         break;
                     }
@@ -2781,27 +2703,17 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
             // INC.  Other lanes may return independently; stream completion
             // still waits for the whole block launch.
             if (ctrl->device_completion != 0u && lane == 0u) {
+                const uint64_t completion =
+                    DynCollectiveCompletionBase(ctrl) +
+                    ctrl->this_worker_rank;
+                __gm__ int32_t *done = reinterpret_cast<__gm__ int32_t *>(
+                    sym + ctrl->ready_generation_off +
+                    completion * ctrl->ready_stride_bytes);
                 bool completion_ok = DynWaitProducerPeerLanes(
-                    sym, ctrl, ctrl->generation);
-                for (uint32_t inc = 0u; inc < ctrl->inc_count; ++inc) {
-                    if (!completion_ok) {
-                        break;
-                    }
-                    const uint64_t completion =
-                        DynCollectiveCompletionBase(ctrl) +
-                        static_cast<uint64_t>(inc) * ctrl->worker_count +
-                        ctrl->this_worker_rank;
-                    __gm__ int32_t *done =
-                        reinterpret_cast<__gm__ int32_t *>(
-                            sym + ctrl->ready_generation_off +
-                            completion * ctrl->ready_stride_bytes);
-                    if (!DynWaitCollectiveValue(
-                            ctrl, done,
-                            static_cast<int32_t>(ctrl->generation))) {
-                        completion_ok = false;
-                        break;
-                    }
-                }
+                    sym, ctrl, ctrl->generation) &&
+                    DynWaitCollectiveValue(
+                        ctrl, done,
+                        static_cast<int32_t>(ctrl->generation));
                 if (completion_ok) {
                     completion_ok = DynAckCollectiveCompletion(
                         sym, ctrl, ctrl->generation);
@@ -2852,12 +2764,12 @@ inc_dc_sv2_dyn_csr_producer_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                     reinterpret_cast<__gm__ void *>(tile),
                     reinterpret_cast<__gm__ void *>(tile), ctrl->tile_bytes,
                     ready, static_cast<int32_t>(ctrl->generation),
-                    ACLSHMEM_SIGNAL_SET, static_cast<int32_t>(home_pes[i]));
+                    ACLSHMEM_SIGNAL_SET, static_cast<int32_t>(ctrl->inc_pe));
             } else {
                 aclshmem_putmem_nbi(reinterpret_cast<__gm__ void *>(tile),
                                     reinterpret_cast<__gm__ void *>(tile),
                                     ctrl->tile_bytes,
-                                    static_cast<int32_t>(home_pes[i]));
+                                    static_cast<int32_t>(ctrl->inc_pe));
             }
             ++pst->issued;
             ++pending;
@@ -3035,8 +2947,7 @@ inc_dc_sv2_dyn_csr_k1_direct_tx_kernel(__gm__ uint8_t *sym,
 
             const uint64_t direct_base =
                 static_cast<uint64_t>(ctrl->group_count) +
-                static_cast<uint64_t>(ctrl->inc_count) *
-                    ctrl->worker_count;
+                ctrl->worker_count;
             // Publish source completion only after every local direct-TX lane
             // has quieted.  Publish even on failure so peers can unwind.
             for (uint32_t dst_worker = 0u;
@@ -3114,8 +3025,6 @@ __aicore__ inline void DynCsrSplitTxLane(
     if (!DynWaitPersistentLocalTrigger(sym, ctrl)) {
         return;
     }
-    __gm__ uint32_t *home_inc = reinterpret_cast<__gm__ uint32_t *>(
-        sym + ctrl->result_home_inc_off);
     __gm__ uint32_t *dst_rank = reinterpret_cast<__gm__ uint32_t *>(
         sym + ctrl->result_dst_rank_off);
     __gm__ uint32_t *dst_row = reinterpret_cast<__gm__ uint32_t *>(
@@ -3325,7 +3234,6 @@ __aicore__ inline void DynCsrSplitTxLane(
     uint32_t split_count = 0u;
     for (uint32_t r = tx_lane; r < ctrl->result_count;
          r += total_tx_shards) {
-        if (home_inc[r] != ctrl->this_inc_index) continue;
         __gm__ uint8_t *ready =
             sym + ctrl->result_tx_ready_off + static_cast<uint64_t>(r) * 64u;
         uint32_t spins = 0u;
@@ -3558,7 +3466,6 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
         const uint32_t tile_bytes = ctrl->tile_bytes;
         const uint32_t R = ctrl->result_count;
         const uint32_t C = ctrl->contribution_count;
-        const uint32_t this_inc = ctrl->this_inc_index;
         const uint64_t generation = ctrl->generation;
 
         __gm__ DynCsrOwnerStats *ost =
@@ -3586,8 +3493,6 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
 
         __gm__ uint32_t *result_offsets =
             (__gm__ uint32_t *)(sym + ctrl->result_offsets_off);
-        __gm__ uint32_t *home_inc =
-            (__gm__ uint32_t *)(sym + ctrl->result_home_inc_off);
         __gm__ uint32_t *home_owner =
             (__gm__ uint32_t *)(sym + ctrl->result_home_owner_off);
         __gm__ uint32_t *result_dst_rank =
@@ -3598,8 +3503,6 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
             (__gm__ uint32_t *)(sym + ctrl->result_tx_rank_offsets_off);
         __gm__ uint32_t *worker_pes =
             (__gm__ uint32_t *)(sym + ctrl->worker_pe_off);
-        __gm__ uint32_t *owner_home_pes =
-            (__gm__ uint32_t *)(sym + ctrl->owner_home_pe_off);
         __gm__ uint32_t *slots =
             (__gm__ uint32_t *)(sym + ctrl->contrib_slot_off);
         __gm__ uint32_t *weights =
@@ -3618,10 +3521,12 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
             (__gm__ uint32_t *)(sym + ctrl->group_offsets_off);
         __gm__ uint32_t *group_entries =
             (__gm__ uint32_t *)(sym + ctrl->group_entries_off);
-        __gm__ uint32_t *inc_group_offsets =
-            (__gm__ uint32_t *)(sym + ctrl->inc_group_offsets_off);
-        __gm__ uint32_t *inc_group_entries =
-            (__gm__ uint32_t *)(sym + ctrl->inc_group_entries_off);
+        __gm__ uint32_t *source_contribution_offsets =
+            (__gm__ uint32_t *)(
+                sym + ctrl->source_contribution_offsets_off);
+        __gm__ uint32_t *source_contribution_entries =
+            (__gm__ uint32_t *)(
+                sym + ctrl->source_contribution_entries_off);
 
         if (!DynWaitPersistentLocalTrigger(sym, ctrl)) {
             ost->fail_code = kDynCsrFailMissing;
@@ -3670,11 +3575,7 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
             const uint64_t ready_wait_t0 = GetSystemCycle();
             if (ctrl->worker_count == 0u ||
                 ctrl->source_bitmap_words == 0u ||
-                ctrl->owner_total != ctrl->inc_count * oc ||
-                ctrl->group_count != ctrl->owner_total * ctrl->worker_count ||
-                (ctrl->ready_mode == 3u &&
-                 ctrl->inc_group_count !=
-                     ctrl->inc_count * ctrl->worker_count) ||
+                ctrl->group_count != oc * ctrl->worker_count ||
                 ctrl->ready_stride_bytes < sizeof(int32_t)) {
                 fail = kDynCsrFailCsr;
             } else if (ctrl->ready_mode == 3u) {
@@ -3685,7 +3586,7 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                 // sole remote poller and publishes one local generation gate;
                 // all other owners wait only on local GM.
                 if (ctrl->waited_source_bitmap_off == 0u ||
-                    ctrl->inc_group_offsets_off == 0u) {
+                    ctrl->source_contribution_offsets_off == 0u) {
                     fail = kDynCsrFailCsr;
                 } else {
                     __gm__ int32_t *inc_ready_gate =
@@ -3695,19 +3596,18 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                         static_cast<int32_t>(generation);
                     const int32_t failed_generation = -ready_generation;
                     if (owner == 0u) {
-                        __gm__ uint32_t *inc_group_offsets =
+                        __gm__ uint32_t *source_contribution_offsets =
                             reinterpret_cast<__gm__ uint32_t *>(
-                                sym + ctrl->inc_group_offsets_off);
+                                sym + ctrl->source_contribution_offsets_off);
                         for (uint32_t source = 0u;
                              source < ctrl->worker_count &&
                              fail == kDynCsrFailNone;
                              ++source) {
-                            const uint32_t group =
-                                this_inc * ctrl->worker_count + source;
+                            const uint32_t group = source;
                             const uint32_t begin =
-                                inc_group_offsets[group];
+                                source_contribution_offsets[group];
                             const uint32_t end =
-                                inc_group_offsets[group + 1u];
+                                source_contribution_offsets[group + 1u];
                             if (end <= begin) {
                                 continue;
                             }
@@ -3787,8 +3687,8 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                     }
                 }
             } else {
-                const uint32_t flat = this_inc * oc + owner;
-                if (flat >= ctrl->owner_total) {
+                const uint32_t flat = owner;
+                if (flat >= ctrl->owner_count) {
                     fail = kDynCsrFailHome;
                 } else {
                     __gm__ uint32_t *source_bitmap =
@@ -3853,12 +3753,12 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
         if (ctrl->ready_mode == 4u) {
             if (ctrl->worker_count == 0u ||
                 ctrl->source_bitmap_words == 0u ||
-                ctrl->group_count != ctrl->owner_total * ctrl->worker_count ||
+                ctrl->group_count != ctrl->owner_count * ctrl->worker_count ||
                 ctrl->waited_source_bitmap_off == 0u) {
                 fail = kDynCsrFailCsr;
             } else {
-                lazy_flat = this_inc * oc + owner;
-                if (lazy_flat >= ctrl->owner_total) {
+                lazy_flat = owner;
+                if (lazy_flat >= ctrl->owner_count) {
                     fail = kDynCsrFailHome;
                 } else {
                     lazy_waited = reinterpret_cast<__gm__ uint32_t *>(
@@ -3893,8 +3793,7 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
         for (uint64_t rr = result_begin;
              rr < R && fail == kDynCsrFailNone; rr += result_step) {
             const uint32_t r = static_cast<uint32_t>(rr);
-            if (!cyclic_owner_results &&
-                (home_inc[r] != this_inc || home_owner[r] != owner)) {
+            if (!cyclic_owner_results && home_owner[r] != owner) {
                 continue;
             }
             ++owned;
@@ -4042,9 +3941,9 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                     if (ctrl->ready_mode == 5u) {
                         const uint32_t source = sources[i];
                         ready_source = source;
-                        const uint32_t flat = this_inc * oc + owner;
+                        const uint32_t flat = owner;
                         if (source >= ctrl->worker_count ||
-                            flat >= ctrl->owner_total) {
+                            flat >= ctrl->owner_count) {
                             fail = kDynCsrFailCsr;
                             break;
                         }
@@ -4087,25 +3986,22 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                     } else if (ctrl->ready_mode == 6u) {
                         const uint32_t source = sources[i];
                         ready_source = source;
-                        if (source >= ctrl->worker_count ||
-                            ctrl->inc_group_count !=
-                                ctrl->inc_count * ctrl->worker_count) {
+                        if (source >= ctrl->worker_count) {
                             fail = kDynCsrFailCsr;
                             break;
                         }
-                        const uint32_t group =
-                            this_inc * ctrl->worker_count + source;
+                        const uint32_t group = source;
                         const uint32_t group_begin =
-                            inc_group_offsets[group];
+                            source_contribution_offsets[group];
                         const uint32_t group_end =
-                            inc_group_offsets[group + 1u];
+                            source_contribution_offsets[group + 1u];
                         if (group_end <= group_begin ||
                             group_end > ctrl->contribution_count) {
                             fail = kDynCsrFailCsr;
                             break;
                         }
                         const uint32_t first_i =
-                            inc_group_entries[group_begin];
+                            source_contribution_entries[group_begin];
                         if (first_i >= ctrl->contribution_count ||
                             slots[i] < slots[first_i]) {
                             fail = kDynCsrFailCsr;
@@ -4859,8 +4755,6 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                         }
                         const uint64_t completion =
                             DynCollectiveCompletionBase(ctrl) +
-                            static_cast<uint64_t>(this_inc) *
-                                ctrl->worker_count +
                             worker;
                         __gm__ int32_t *done =
                             reinterpret_cast<__gm__ int32_t *>(
@@ -4897,8 +4791,6 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                          worker < ctrl->worker_count; ++worker) {
                         const uint64_t completion =
                             DynCollectiveCompletionBase(ctrl) +
-                            static_cast<uint64_t>(this_inc) *
-                                ctrl->worker_count +
                             worker;
                         __gm__ int32_t *done =
                             reinterpret_cast<__gm__ int32_t *>(
@@ -4924,10 +4816,7 @@ inc_dc_sv2_dyn_csr_combine_kernel(__gm__ uint8_t *sym, uint64_t ctrl_off)
                 for (uint32_t worker = 0u; worker < ctrl->worker_count;
                      ++worker) {
                     const uint64_t completion =
-                        DynCollectiveCompletionBase(ctrl) +
-                        static_cast<uint64_t>(this_inc) *
-                            ctrl->worker_count +
-                        worker;
+                        DynCollectiveCompletionBase(ctrl) + worker;
                     __gm__ int32_t *done =
                         reinterpret_cast<__gm__ int32_t *>(
                             sym + ctrl->ready_generation_off +
@@ -4980,11 +4869,8 @@ inc_dc_sv2_dyn_csr_start_gate_kernel(__gm__ uint8_t *sym,
         __gm__ uint32_t *worker_pes =
             reinterpret_cast<__gm__ uint32_t *>(
                 sym + ctrl->worker_pe_off);
-        __gm__ uint32_t *owner_home_pes =
-            reinterpret_cast<__gm__ uint32_t *>(
-                sym + ctrl->owner_home_pe_off);
         (void)DynDeviceGenerationStartGate(
-            sym, ctrl, participant, true, worker_pes, owner_home_pes);
+            sym, ctrl, participant, true, worker_pes);
     }
 }
 

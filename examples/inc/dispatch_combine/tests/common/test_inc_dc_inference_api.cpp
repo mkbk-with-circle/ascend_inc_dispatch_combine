@@ -1,4 +1,5 @@
-#include "inc_dc_inference_api.h"
+#include "inc_dc_single_inc_api.h"
+#include "inc_dc_single_inc.hpp"
 
 #include <cassert>
 #include <cstdlib>
@@ -230,5 +231,33 @@ int main()
     assert(inc_dc_infer_plan_destroy(plan) == INC_DC_FW_OK);
     assert(backend.frees == 4u);
     assert(inc_dc_infer_session_destroy(session) == INC_DC_FW_OK);
+
+    // The only public facade: create -> dispatch -> combine -> destroy.
+    Backend short_backend{};
+    inc_dc_single_inc_config_t short_config{};
+    inc_dc_single_inc_config_init(&short_config);
+    short_config.worker_world_size = 4u;
+    short_config.worker_rank = 0u;
+    short_config.hidden_size = 7168u;
+    short_config.tokens = 128u;
+    short_config.topk = 2u;
+    short_config.backend = Ops(&short_backend);
+    short_config.allocate_device = Allocate;
+    short_config.free_device = Free;
+    short_config.allocator_context = &short_backend;
+
+    inc::dc::SingleIncRoute short_route{};
+    inc_dc_easy_route_device_init(
+        &short_route.device, INC_DC_FW_ROUTE_OPAQUE_DEVICE_PLAN,
+        static_route, sizeof(static_route), 42u, 9u);
+    short_route.dispatch_output_rows = 256u;
+    short_route.combine_input_rows = 256u;
+
+    auto short_op = inc::dc::single_inc_create(short_config);
+    auto batch = short_op.dispatch(input, output, short_route, 1u);
+    short_op.combine(batch, input, output, 2u);
+    inc::dc::single_inc_destroy(short_op);
+    assert(short_backend.enqueues == 2u);
+    assert(short_backend.allocations == short_backend.frees);
     return 0;
 }

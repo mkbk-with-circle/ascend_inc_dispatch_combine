@@ -451,9 +451,9 @@ __aicore__ inline void PublishReadyNoticeToInc(
     __gm__ CombineReadyNoticeV2 *remote,
     int32_t inc_pe)
 {
-    // A notice is exactly one cacheline and is the worker's sole remote
-    // control transfer for this wave.  READY and payload remain local until
-    // the INC observes this notice and actively pulls them.
+    // READY is pushed separately before this publication. The one-cacheline
+    // notice is the release point after which INC may read its local READY
+    // copy and begin pulling partial rows.
     __gm__ uint8_t *local_line =
         reinterpret_cast<__gm__ uint8_t *>(local);
     dcci_cacheline(local_line);
@@ -952,8 +952,9 @@ void inc_dc_pull_combine_v2_device_kernel(
                            &output_slot_offset) &&
         CheckedMulU64ByU32(tiles_per_row, accumulator_count, &total_tasks);
 
-    // Each worker publishes one cacheline notice. READY and payload stay in
-    // its registered local region and are pulled by the INC.
+    // Each worker pushes its complete READY descriptor, waits for remote
+    // visibility, and then publishes one cacheline notice. Payload remains in
+    // the registered worker region until the source ACK.
     if (pe != inc_pe) {
         if (launch_valid && block == 0u && pe >= 0 &&
             static_cast<uint32_t>(pe) < worker_count) {
@@ -965,6 +966,9 @@ void inc_dc_pull_combine_v2_device_kernel(
             dcci_cacheline(
                 reinterpret_cast<__gm__ uint8_t *>(local_ready) + 64u);
             AscendC::PipeBarrier<PIPE_ALL>();
+            aclshmem_putmem(local_ready, local_ready, sizeof(*local_ready),
+                            inc_pe);
+            aclshmem_quiet();
             __gm__ CombineReadyNoticeV2 *local =
                 reinterpret_cast<__gm__ CombineReadyNoticeV2 *>(
                     ready_notices) +
@@ -1256,15 +1260,10 @@ void inc_dc_pull_combine_v2_device_kernel(
                     break;
                 }
 
-                __gm__ CombineReadyV2 *remote_ready =
+                __gm__ CombineReadyV2 *ready =
                     reinterpret_cast<__gm__ CombineReadyV2 *>(
                         ready_records) +
                     static_cast<uint64_t>(ring_slot * worker_count) + source;
-                __gm__ CombineReadyV2 *ready =
-                    reinterpret_cast<__gm__ CombineReadyV2 *>(
-                        ready_staging) + source;
-                aclshmem_getmem(ready, remote_ready, sizeof(*ready),
-                                static_cast<int32_t>(source));
                 dcci_cacheline(reinterpret_cast<__gm__ uint8_t *>(ready));
                 dcci_cacheline(
                     reinterpret_cast<__gm__ uint8_t *>(ready) + 64u);

@@ -12,16 +12,12 @@ namespace dc {
 
 struct IncDcTopologyDescriptor {
     uint32_t worker_count = 0;
-    uint32_t inc_count = 0;
-    uint32_t owner_count_per_inc = 0;
+    uint32_t owner_count = 0;
     std::vector<uint32_t> worker_pe_ids;
-    std::vector<uint32_t> inc_pe_ids;
-    // CSR: worker -> reachable INC indices
-    std::vector<uint32_t> worker_inc_offsets; // size worker_count+1
-    std::vector<uint32_t> worker_inc_indices;
-    // Explicit edge resource map: parallel to worker_inc_indices.
-    // ingress_channel for (worker, inc) = worker_inc_channels[edge_pos].
-    std::vector<uint32_t> worker_inc_channels;
+    uint32_t inc_pe = 0;
+    // Every worker has exactly one edge to the single INC.  The vector keeps
+    // only the per-worker transport resource selected for that edge.
+    std::vector<uint32_t> worker_ingress_channels;
     uint64_t topology_generation = 0;
     uint64_t topology_digest = 0;
 };
@@ -41,9 +37,9 @@ IncDcStatus BuildSingleIncTopology(uint32_t worker_count,
                                    uint64_t generation,
                                    IncDcTopologyDescriptor *out);
 
-// Lookup explicit channel for (worker, inc). Returns false if no edge.
+// Lookup the explicit worker -> single-INC ingress channel.
 bool LookupIngressChannel(const IncDcTopologyDescriptor &topo, uint32_t worker,
-                          uint32_t inc_index, uint32_t *channel_out);
+                          uint32_t *channel_out);
 
 uint64_t ComputeTopologyDigest(const IncDcTopologyDescriptor &topo);
 

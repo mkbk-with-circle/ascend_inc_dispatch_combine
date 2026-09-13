@@ -73,7 +73,7 @@ extern "C" int inc_fusion_benchmark_mode_info(
     case INC_FUSION_BENCH_SERIAL_INC:
         info->transport = INC_FUSION_BENCH_TRANSPORT_INC;
         info->schedule = INC_FUSION_BENCH_SCHEDULE_SERIAL;
-        info->dedicated_inc_count = 1u;
+        info->uses_dedicated_inc = 1u;
         info->is_factorial_baseline = 1u;
         return 1;
     case INC_FUSION_BENCH_FUSED_SHMEM:
@@ -84,7 +84,7 @@ extern "C" int inc_fusion_benchmark_mode_info(
     case INC_FUSION_BENCH_FUSED_INC:
         info->transport = INC_FUSION_BENCH_TRANSPORT_INC;
         info->schedule = INC_FUSION_BENCH_SCHEDULE_TOKEN_WAVE;
-        info->dedicated_inc_count = 1u;
+        info->uses_dedicated_inc = 1u;
         info->is_factorial_baseline = 1u;
         return 1;
     case INC_FUSION_BENCH_NATIVE_VLLM:
@@ -116,9 +116,9 @@ extern "C" int inc_fusion_benchmark_validate_signature(
         signature->topk > signature->expert_count ||
         signature->token_wave_capacity == 0u)
         return Fail(error, error_bytes, "invalid benchmark workload shape");
-    if (signature->dedicated_inc_count != mode.dedicated_inc_count)
+    if (signature->uses_dedicated_inc != mode.uses_dedicated_inc)
         return Fail(error, error_bytes,
-                    "dedicated INC count does not match benchmark mode");
+                    "dedicated INC usage does not match benchmark mode");
     if (signature->route_digest == 0u ||
         signature->expert_placement_digest == 0u ||
         signature->compute_implementation_digest == 0u ||

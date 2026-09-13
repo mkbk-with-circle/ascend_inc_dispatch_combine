@@ -1,5 +1,10 @@
 # Yuan single-INC + current fusion delivery
 
+> 当前唯一源码真源是本仓库的 `shmem` worktree。历史目录
+> `shmem-hybrid-yuan-single-current-fusion` 只是等价提交的旧 worktree，
+> `build-hybrid-yuan-single-current-fusion` 只是由该旧 worktree 生成的 CMake
+> 构建缓存；二者都不是运行或继续开发所需的源码入口。
+
 This branch intentionally combines these qualified components:
 
 | Component | Source |
@@ -13,6 +18,18 @@ This branch intentionally combines these qualified components:
 The main-repository commits happen to be the same today, so no source-level
 cherry-pick is required. The important assembly fix is making the previously
 implicit CATLASS dependency and its sparse zero-M guard reproducible.
+
+## Public entry points
+
+- Standalone Single-INC application code includes only
+  `examples/inc/dispatch_combine/common/api/inc_dc_single_inc.hpp` and follows
+  `create -> dispatch -> compute -> combine -> destroy`.
+- Its only maintained runnable example is
+  `examples/inc/dispatch_combine/common/examples/single_inc_api/inc_dc_single_inc_api_example.cpp`.
+- Fusion uses `examples/inc/fusion_kernel/ascend/inc_fusion_api.h` directly.
+
+Framework/Easy/Inference remain internal V1 runtime and regression dependencies;
+they are not alternative integration APIs.
 
 ## Correctness-only validation
 
@@ -60,6 +77,7 @@ git status --short
 git rev-parse HEAD
 ```
 
-The expected result for this delivery is a clean worktree on branch
-`hybrid-yuan-single-current-fusion-20260812`.  Use the repository preparation
-script on the destination before building the fusion target.
+The expected result for a transferred delivery is a clean canonical `shmem`
+worktree.  A separate `hybrid-yuan-single-current-fusion-20260812` worktree or
+its build directory is not required.  Use the repository preparation script
+on the destination before building the fusion target.

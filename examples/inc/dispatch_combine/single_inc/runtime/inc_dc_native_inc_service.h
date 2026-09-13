@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "inc_dc_framework_c_api.h"
+#include "inc_dc_single_inc_api.h"
 
 namespace inc::dc::single_stream {
 
@@ -47,6 +48,19 @@ inc_dc_fw_status_t NativeIncServiceSubmitAndWait(
     uint64_t generation);
 inc_dc_fw_status_t DestroyNativeIncServiceClient(
     NativeIncServiceClient *client);
+
+/*
+ * One-time worker binding for the high-level single-INC API.  It hides the
+ * required Dispatch prepare and post-enqueue service rendezvous.  The three
+ * referenced objects must outlive the public inc_dc_single_inc_t handle.
+ */
+struct NativeSingleIncWorkerControl {
+    NativeDispatchSession *dispatch = nullptr;
+    NativeIncServiceClient *client = nullptr;
+};
+inc_dc_fw_status_t BindNativeSingleIncWorkerControl(
+    NativeSingleIncWorkerControl *control,
+    inc_dc_single_inc_config_t *config);
 
 } // namespace inc::dc::single_stream
 

@@ -1,5 +1,10 @@
 # 单 INC native API 闭环（CANN 9.1，2026-08-04）
 
+> 这是 2026-08-04 的内部 runtime 资格化快照。文中的 Framework/Easy request
+> 名称保留当时的实验语境和原始性能证据，不是当前推荐调用路径。2026-08-14
+> 起唯一公开入口为 `examples/inc/dispatch_combine/common/api/inc_dc_single_inc.hpp`，
+> 业务流程为 `create -> dispatch -> compute -> combine -> destroy`。
+
 ## 结论
 
 Dispatch 和 Combine 均已有真实 `inc_dc_fw_backend_ops_t` provider：

@@ -84,19 +84,20 @@ Dispatch、Expert 计算、Combine、结果打印和资源释放。
 ## 协议概要
 
 ```text
-Dispatch：A READY → INC GET(metadata + 一份 hidden) → unique-destination PUT → B
+Dispatch：A PUT header/metadata → READY → INC GET 一份 hidden → unique-destination PUT → B
 Compute： B Expert FFN → same-GPU local weighted reduce → FP32 partial
-Combine： B Notice → INC GET READY/partial → reduce → selective owner PUT → A
+Combine： B PUT READY → Notice → INC GET partial → reduce → selective owner PUT → A
 ```
 
 详细的两张独立流程图见 [`FLOW.md`](FLOW.md)。
 
 关键不变量：
 
-- Worker 每个 Wave 只发布一次 READY/Notice。
+- Worker 先把 Dispatch header/metadata PUT 到 INC inbox，远端可见后每个 Wave
+  只 publication-last 发布一次 READY；INC 不再 GET 路由 metadata。
 - Dispatch 中每个 Token Hidden 从源 Worker 只 GET 一份。
 - 同一目标 GPU 上多个 Expert 共享该 Hidden Row。
-- Combine READY Record 保留在 B 端；INC 收到64B Notice 后主动 GET。
+- Combine READY Record 先 PUT 到 INC；INC 收到64B Notice 后直接读取本地描述。
 - Journal 使用 `(owner_rank, owner_row)` 作为主键，不以 Token ID 作为唯一身份。
 - Dispatch/Combine 使用互不重叠的动态半 AIV；并发时可对 Combine 启用 transport
   lane governor，但 Solo 默认不变。
@@ -107,7 +108,7 @@ Combine： B Notice → INC GET READY/partial → reduce → selective owner PUT
 |---|---|
 | `inc_dc_pull_dispatch_v2.{h,cpp}` | Dispatch Host 协议、Slot 与 Journal 编译 |
 | `inc_dc_pull_dispatch_v2_abi.h` | Dispatch/Journal 设备 ABI |
-| `inc_dc_pull_dispatch_v2_device_kernel.cpp` | READY→GET→Parse→Fan-out 数据面 |
+| `inc_dc_pull_dispatch_v2_device_kernel.cpp` | Metadata PUT→READY→Parse→Hidden GET→Fan-out 数据面 |
 | `inc_dc_pull_combine_v2.{h,cpp}` | Combine Notice、READY 和 Pull Index 协议 |
 | `inc_dc_pull_combine_v2_device_kernel.cpp` | Partial GET→Reduction→Owner PUT 数据面 |
 | `inc_dc_pull_v2_api.{h,cpp}` | 最短应用 Frontend API |
