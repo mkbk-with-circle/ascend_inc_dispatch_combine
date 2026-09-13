@@ -69,6 +69,15 @@ void TestWorkerLifecycle()
     Mock mock;
     SingleIncSession session;
     assert(single_inc_create(Config(), Ops(), &mock, &session));
+    BatchHandle overflow_batch;
+    Completion overflow_done;
+    Status overflow = shmem_dispatch_alltoall_inc<DataType::BF16>(
+        &session, WaveId{1u, 1u, 0u, 0u, 0u}, nullptr, nullptr, nullptr,
+        nullptr, nullptr, std::numeric_limits<uint32_t>::max(), 2u, nullptr,
+        reinterpret_cast<Stream>(1u), &overflow_batch, &overflow_done);
+    assert(overflow.code == StatusCode::INVALID_ARGUMENT);
+    assert(mock.dispatches == 0u && !overflow_batch.live &&
+           !overflow_done.live);
     float input[8]{};
     uint64_t token_ids[2]{};
     uint32_t destinations[4]{};

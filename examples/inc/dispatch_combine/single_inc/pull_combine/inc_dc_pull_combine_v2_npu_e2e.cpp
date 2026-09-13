@@ -26,7 +26,7 @@ using namespace inc::dc::pull_v2;
 extern "C" void launch_inc_dc_pull_combine_v2_device(
     uint32_t block_dim, void *stream, uint8_t *symmetric_partials,
     uint8_t *ready_records, uint8_t *ready_notices,
-    uint8_t *ready_staging, uint8_t *registrations,
+    uint8_t *registrations,
     uint8_t *source_acks, uint8_t *owner_output,
     uint8_t *owner_completions, uint8_t *source_offsets, uint8_t *pulls,
     uint8_t *owner_offsets, uint8_t *results, uint8_t *journal_header,
@@ -614,7 +614,7 @@ bool ValidateWorker(const Options &o, const Wave &wave_data,
 }
 
 bool ValidateInc(const Wave &wave_data, const GuardedBuffer &journal,
-                 const GuardedBuffer &ready_staging,
+                 const GuardedBuffer &ready_records,
                  const GuardedBuffer &ready_notices,
                  const GuardedBuffer &ready_state,
                  const GuardedBuffer &timeline_buffer,
@@ -669,9 +669,8 @@ bool ValidateInc(const Wave &wave_data, const GuardedBuffer &journal,
                 static_cast<uint64_t>(wave_data.plan.ring_slot) *
                     wave_data.plan.worker_count + source;
             if (aclrtMemcpy(&descriptor, sizeof(descriptor),
-                            ready_staging.data +
-                                static_cast<uint64_t>(source) *
-                                    sizeof(descriptor),
+                            ready_records.data +
+                                notice_index * sizeof(descriptor),
                             sizeof(descriptor),
                             ACL_MEMCPY_DEVICE_TO_HOST) == ACL_SUCCESS) {
                 CombineReadyNoticeV2 notice{};
@@ -777,13 +776,13 @@ int main(int argc, char **argv)
     if (status == 0)
         std::cerr << "[STAGE] pe=" << o.pe << " initialized\n" << std::flush;
 
-    GuardedBuffer partials, ready, notices, ready_staging, registrations;
+    GuardedBuffer partials, ready, notices, registrations;
     GuardedBuffer acks, output, completions;
     GuardedBuffer source_offsets, pulls, owner_offsets, results, journal;
     GuardedBuffer pull_next, heads, counts, result_index, ready_state;
     GuardedBuffer payload_offsets, timeline_buffer;
     std::vector<GuardedBuffer *> buffers{&partials, &ready, &notices,
-        &ready_staging, &registrations, &acks, &output, &completions,
+        &registrations, &acks, &output, &completions,
         &source_offsets, &pulls, &owner_offsets, &results, &journal,
         &pull_next, &heads, &counts, &result_index, &ready_state,
         &payload_offsets, &timeline_buffer};
@@ -804,8 +803,6 @@ int main(int argc, char **argv)
             sizeof(CombineReadyV2), true, "ready");
         Alloc(&notices, static_cast<uint64_t>(kRingSlots) * o.workers *
             sizeof(CombineReadyNoticeV2), true, "ready_notices");
-        Alloc(&ready_staging, static_cast<uint64_t>(o.workers) *
-            sizeof(CombineReadyV2), false, "ready_staging");
         Alloc(&registrations, static_cast<uint64_t>(o.workers) *
             sizeof(CombineRegionRegistration), true, "registrations");
         Alloc(&acks, static_cast<uint64_t>(kRingSlots) * o.workers *
@@ -908,7 +905,6 @@ int main(int argc, char **argv)
                 CopyToDevice(
                     result_index.data,
                     wave_data.plan.accumulator_result_index) &&
-                Fill(&ready_staging, kPoison) &&
                 Fill(&ready_state, 0u) && Fill(&payload_offsets, 0u) &&
                 Fill(&timeline_buffer, 0u) ? 0 : 1;
             if (status == 0)
@@ -945,7 +941,7 @@ int main(int argc, char **argv)
                   << iteration << '\n' << std::flush;
         launch_inc_dc_pull_combine_v2_device(
             combine_aiv, stream, partials.data, ready.data,
-            notices.data, ready_staging.data, registrations.data,
+            notices.data, registrations.data,
             acks.data, output.data, completions.data, source_offsets.data,
             pulls.data, owner_offsets.data, results.data, journal.data,
             pull_next.data, heads.data, counts.data, result_index.data,
@@ -970,7 +966,7 @@ int main(int argc, char **argv)
             correct = ValidateWorker(o, wave_data, ring_slot, acks, output,
                                      completions);
         else
-            correct = ValidateInc(wave_data, journal, ready_staging,
+            correct = ValidateInc(wave_data, journal, ready,
                                   notices, ready_state, timeline_buffer,
                                   &timeline);
         for (GuardedBuffer *buffer : buffers)

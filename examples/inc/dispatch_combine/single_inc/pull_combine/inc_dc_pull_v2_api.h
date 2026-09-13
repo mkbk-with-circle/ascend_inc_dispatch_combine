@@ -2,6 +2,7 @@
 #define INC_DC_PULL_V2_API_H
 
 #include <cstdint>
+#include <limits>
 
 namespace inc::dc::pull_v2::api {
 
@@ -180,6 +181,10 @@ Status shmem_dispatch_alltoall_inc(
     uint32_t topk, DispatchOutput *output, Stream stream,
     BatchHandle *batch, Completion *completion)
 {
+    if (topk == 0u ||
+        token_count > std::numeric_limits<uint32_t>::max() / topk) {
+        return Status{StatusCode::INVALID_ARGUMENT, "invalid argument"};
+    }
     DispatchInput input{};
     input.send_buffer = send_buffer;
     input.send_token_ids = send_token_ids;

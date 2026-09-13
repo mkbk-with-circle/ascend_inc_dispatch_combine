@@ -1,6 +1,0 @@
-[STAGE] pe=2 initialized
-[STAGE] pe=2 prepared iteration=0
-[STAGE] pe=2 launch iteration=0
-[STAGE] pe=2 kernel_status=0 iteration=0
-{"test":"pull_combine_v2_npu_e2e","iteration":0,"warmup":false,"workers":2,"workload":"sym_k2_balanced","hidden":8192,"rows":4096,"active_aiv":22,"ingress_bytes":268435456,"egress_bytes":134217728,"e2e_us":9675.321,"logical_gb_s":41.6165193899,"status":0,"cycle_kernel_start":1029657850768566,"cycle_plan_index_done":1029657850791742,"cycle_kernel_done":1029657851234228,"correct":true}
-{"test":"pull_combine_v2_npu_e2e_summary","workers":2,"workload":"sym_k2_balanced","hidden":8192,"rows":4096,"active_aiv":22,"measure":1,"mean_us":9675.321,"min_logical_gb_s":41.6165193899,"mean_logical_gb_s":41.6165193899,"cv_pct":0,"correct":true}

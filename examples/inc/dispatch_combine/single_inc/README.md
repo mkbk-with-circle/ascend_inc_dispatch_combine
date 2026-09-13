@@ -1,25 +1,22 @@
-# Single INC
-
-当前独立 Dispatch/Combine 的唯一主路径位于
-[`pull_combine/`](pull_combine/README.md)，协议版本为 Pull V2。
+# Single-INC Pull V2
 
 ```text
-Dispatch: Worker READY → INC GET token+route → parse/reorder → INC PUT B
+Dispatch: Worker PUT Header/metadata → READY → INC GET hidden → INC PUT B
 Compute : B expert compute + same-GPU local weighted reduce
-Combine : B Notice → INC GET partials → FP32 reduce → INC PUT original A
+Combine : B PUT READY descriptor → Notice → INC GET partials
+          → FP32 reduce → INC PUT original A
 ```
 
-- 最短接入：[`QUICKSTART.md`](QUICKSTART.md)
-- 公共头文件：[`pull_combine/inc_dc_pull_v2_api.h`](pull_combine/inc_dc_pull_v2_api.h)
-- 完整示例：[`pull_combine/inc_dc_pull_v2_api_example.cpp`](pull_combine/inc_dc_pull_v2_api_example.cpp)
-- 两张详细流程图：[`pull_combine/FLOW.md`](pull_combine/FLOW.md)
-- 设计与门禁：[`pull_combine/PULL_DISPATCH_V2_DESIGN.md`](pull_combine/PULL_DISPATCH_V2_DESIGN.md)
+- [快速接入](QUICKSTART.md)
+- [实现、API 与构建](pull_combine/README.md)
+- [协议流程图](pull_combine/FLOW.md)
+- [Dispatch 设计](pull_combine/PULL_DISPATCH_V2_DESIGN.md)
 
-历史实现从 `single-inc-v1-legacy` 标签读取，不应与当前 Pull V2 混用。
+当前源码只保留这一套 Dispatch/Combine 实现。归档标签
+`archive/pre-api-cleanup-20260913` 保存清理前代码。
 
 ## English
 
-The sole maintained standalone Dispatch/Combine path is `pull_combine/` (Pull
-V2). Use `QUICKSTART.md` for the shortest integration path and `FLOW.md` for
-the protocol diagrams. Recover legacy implementations from the Git tag rather
-than mixing them into the current build.
+This directory contains the sole maintained Single-INC Pull V2 implementation.
+Use [QUICKSTART.md](QUICKSTART.md) for integration and
+[pull_combine/README.md](pull_combine/README.md) for build and validation.

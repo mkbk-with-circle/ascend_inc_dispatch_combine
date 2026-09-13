@@ -900,7 +900,7 @@ __aicore__ inline bool ReduceTwoContributorTaskRange(
 extern "C" [[bisheng::core_ratio(0, 1)]] __global__ __aicore__
 void inc_dc_pull_combine_v2_device_kernel(
     GM_ADDR symmetric_partials, GM_ADDR ready_records,
-    GM_ADDR ready_notices, GM_ADDR ready_staging, GM_ADDR registrations,
+    GM_ADDR ready_notices, GM_ADDR registrations,
     GM_ADDR source_acks, GM_ADDR owner_output, GM_ADDR owner_completions,
     GM_ADDR source_offsets, GM_ADDR pulls, GM_ADDR owner_offsets,
     GM_ADDR results, GM_ADDR journal_header, GM_ADDR pull_next,
@@ -1458,7 +1458,7 @@ finalize:
 extern "C" void launch_inc_dc_pull_combine_v2_device(
     uint32_t block_dim, void *stream, uint8_t *symmetric_partials,
     uint8_t *ready_records, uint8_t *ready_notices,
-    uint8_t *ready_staging, uint8_t *registrations,
+    uint8_t *registrations,
     uint8_t *source_acks, uint8_t *owner_output,
     uint8_t *owner_completions, uint8_t *source_offsets, uint8_t *pulls,
     uint8_t *owner_offsets, uint8_t *results, uint8_t *journal_header,
@@ -1477,8 +1477,8 @@ extern "C" void launch_inc_dc_pull_combine_v2_device(
     uint32_t slot_count, uint64_t spin_cap)
 {
     inc_dc_pull_combine_v2_device_kernel<<<block_dim, nullptr, stream>>>(
-        symmetric_partials, ready_records, ready_notices, ready_staging,
-        registrations, source_acks, owner_output, owner_completions,
+        symmetric_partials, ready_records, ready_notices, registrations,
+        source_acks, owner_output, owner_completions,
         source_offsets, pulls, owner_offsets, results, journal_header,
         pull_next, accumulator_heads, accumulator_contributor_counts,
         accumulator_result_index, source_ready_state,

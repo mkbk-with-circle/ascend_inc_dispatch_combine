@@ -1,6 +1,0 @@
-[STAGE] pe=2 initialized
-[STAGE] pe=2 ready
-[STAGE] pe=2 kernel_status=0
-[BW] workers=2 bytes_per_worker=134217728 lanes_per_worker=6 warmup=3 iterations=10 seconds=0.0844205 aggregate_total_GBps=41.3367 aggregate_conservative_GBps=31.7974
-[STAGE] pe=2 verified=1
-[PASS] pe=2 bytes=134217728 transport-selected-by-shmem

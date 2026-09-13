@@ -12,14 +12,21 @@ using namespace inc::dc::pull_v2::api;
 SingleIncSession op{};
 single_inc_create(config, native_backend, backend_context, &op);
 
+DispatchInput dispatch{};
+dispatch.send_buffer = token_hidden;
+dispatch.send_token_ids = token_ids;
+dispatch.destination_gpus = topk_destination_gpus;
+dispatch.expert_ids = topk_expert_ids;
+dispatch.expert_weights = topk_expert_weights;
+dispatch.token_count = token_count;
+dispatch.assignment_count = token_count * topk;
+dispatch.fixed_topk = topk;
+
 BatchHandle batch{};
 Completion dispatch_done{};
 shmem_dispatch_alltoall_inc<DataType::BF16>(
-    &op, wave,
-    token_hidden, token_ids,
-    topk_destination_gpus, topk_expert_ids, topk_expert_weights,
-    token_count, topk,
-    &dispatch_output, stream, &batch, &dispatch_done);
+    &op, wave, &dispatch, &dispatch_output,
+    stream, &batch, &dispatch_done);
 
 // 如当前 stream/依赖关系不能表达消费顺序，再显式等待 Completion。
 completion_wait(&op, dispatch_done);
@@ -36,9 +43,8 @@ completion_wait(&op, combine_done);
 single_inc_destroy(&op);
 ```
 
-这里的 `native_backend` 是一次性部署时绑定的 transport/device launcher；它不进入
-每个 token 的路由规划。当前仓库已固定稳定的 Frontend ABI，真实框架接入仍需提供
-与部署环境匹配的 BackendOps adapter，不能用 Host Reference Backend 代替性能路径。
+`native_backend` 在部署时绑定 transport/device launcher，不进入逐 token 路由规划。
+应用热路径只接触 Session、输入/输出、BatchHandle 和 Completion。
 
 完整、可独立运行并打印 fan-out/reduction 结果的参考程序见
 [`pull_combine/inc_dc_pull_v2_api_example.cpp`](pull_combine/inc_dc_pull_v2_api_example.cpp)。

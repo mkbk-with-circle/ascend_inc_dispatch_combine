@@ -360,7 +360,7 @@ struct CombineContext {
     uint64_t pull_capacity = 1u;
     uint64_t accumulator_capacity = 1u;
     uint64_t source_capacity = 1u;
-    C::GuardedBuffer partials, ready, notices, ready_staging, registrations;
+    C::GuardedBuffer partials, ready, notices, registrations;
     C::GuardedBuffer acks, output, completions, source_offsets, pulls;
     C::GuardedBuffer owner_offsets, results, journal, pull_next, heads;
     C::GuardedBuffer counts, result_index, ready_state, payload_offsets;
@@ -377,8 +377,8 @@ struct CombineContext {
         accumulator_capacity = std::max<uint64_t>(
             sizing.plan.accumulator_count, 1u);
         source_capacity = std::max<uint64_t>(o.workers, 1u);
-        buffers = {&partials, &ready, &notices, &ready_staging,
-            &registrations, &acks, &output, &completions, &source_offsets,
+        buffers = {&partials, &ready, &notices, &registrations, &acks,
+            &output, &completions, &source_offsets,
             &pulls, &owner_offsets, &results, &journal, &pull_next, &heads,
             &counts, &result_index, &ready_state, &payload_offsets,
             &timeline_buffer};
@@ -400,8 +400,6 @@ struct CombineContext {
                   static_cast<uint64_t>(C::kRingSlots) * o.workers *
                       sizeof(P::CombineReadyNoticeV2), true,
                   "ss_c_notices") &&
-            alloc(&ready_staging, static_cast<uint64_t>(o.workers) *
-                  sizeof(P::CombineReadyV2), false, "ss_c_ready_staging") &&
             alloc(&registrations, static_cast<uint64_t>(o.workers) *
                   sizeof(P::CombineRegionRegistration), true,
                   "ss_c_registrations") &&
@@ -496,7 +494,6 @@ struct CombineContext {
                     wave.plan.accumulator_contributor_counts) &&
                 C::CopyToDevice(result_index.data,
                     wave.plan.accumulator_result_index) &&
-                C::Fill(&ready_staging, C::kPoison) &&
                 C::Fill(&ready_state, 0u) &&
                 C::Fill(&payload_offsets, 0u) &&
                 C::Fill(&timeline_buffer, 0u) ? 0 : 1;
@@ -512,7 +509,7 @@ struct CombineContext {
     {
         C::launch_inc_dc_pull_combine_v2_device(
             aiv, stream, partials.data, ready.data, notices.data,
-            ready_staging.data, registrations.data, acks.data, output.data,
+            registrations.data, acks.data, output.data,
             completions.data, source_offsets.data, pulls.data,
             owner_offsets.data, results.data, journal.data, pull_next.data,
             heads.data, counts.data, result_index.data, ready_state.data,
@@ -531,7 +528,7 @@ struct CombineContext {
     {
         bool ok = pe < inc_pe
             ? C::ValidateWorker(o, wave, 0u, acks, output, completions)
-            : C::ValidateInc(wave, journal, ready_staging, notices,
+            : C::ValidateInc(wave, journal, ready, notices,
                 ready_state, timeline_buffer, timeline);
         for (C::GuardedBuffer *buffer : buffers)
             ok = C::GuardsValid(*buffer) && ok;

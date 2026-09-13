@@ -1,7 +1,0 @@
-launcher noise before trace
-FUSION_WORKER_TRACE pe=0 role3=9085 checkpoints=8691,8766,8834,8908,8927 role4=10112 checkpoints=8647,9612,10005,10042,10083 role5=13384 checkpoints=11538,11877,12825,13382,0 role6=17044 checkpoints=14145,15330,15836,15458,16938
-FUSION_INC_DISPATCH_CHECKPOINTS 9761,9781,9967,10423,11170
-FUSION_INC_COMBINE_CHECKPOINTS 16834,0,16921,17443,17638
-FUSION_INC_TRACE d_span_cycles=11192 c_span_cycles=17640 overlap_cycles=10877 overlap_realized=0.971855 dc_window_speedup=1.60579 dc_theoretical_max=1.63447
-(Worker_TP0_EP0 pid=42) INC_FUSION_DEVICE_TRACE rank=0 layer=1 call=7 records=[{'role': 3, 'lane': 0, 'cycles': 2206, 'checkpoints': [1567, 1793, 1894, 2020, 2038]}, {'role': 6, 'lane': 3, 'cycles': 44765, 'checkpoints': [32183, 38379, 41154, 40887, 44342]}]INC_FUSION_DEVICE_TRACE rank=1 layer=1 call=7 records=[{'role': 5, 'lane': 2, 'cycles': 39130, 'checkpoints': [25184, 34697, 35641, 39104, 34658]}]
-unrelated footer

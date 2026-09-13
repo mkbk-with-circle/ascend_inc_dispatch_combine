@@ -48,13 +48,13 @@ Dispatch 的核心语义：
 │ 1. 执行 Expert FFN                                           │
 │ 2. 同一 Token 在本 GPU 上的多个 Expert 先做 Local Reduce      │
 │ 3. FP32 Partial Rows 与 128B READY 写入注册 Ring Slot         │
-│ 4. READY 留在 B 端，只向 INC 发布一次 64B Notice              │
+│ 4. PUT 128B READY 到 INC，完成后发布一次 64B Notice           │
 └────────────────────────────┬──────────────────────────────────┘
                              │ Notice
                              ▼
 ┌──────────────────────── INC Combine 半区 ────────────────────┐
 │ 5. 验证 Notice 的 Session / Generation / Wave / Source       │
-│ 6. 主动 GET 128B READY，校验 Cookie / Row Count / Offset     │
+│ 6. 读取 INC 本地 READY，校验 Cookie / Row Count / Offset     │
 │ 7. 读取 Dispatch Seal 时生成的确定性 Pull Index              │
 │ 8. 已 READY 的 Source 可以先处理，不等待 Rank 顺序            │
 │                                                               │

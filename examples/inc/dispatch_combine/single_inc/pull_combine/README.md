@@ -26,21 +26,19 @@ single_inc_create(config, backend_ops, backend_context, &session);
 
 BatchHandle batch;
 Completion dispatch_done;
+DispatchInput dispatch{};
+dispatch.send_buffer = token_hidden;
+dispatch.send_token_ids = token_ids;
+dispatch.destination_gpus = topk_destination_gpus;
+dispatch.expert_ids = topk_expert_ids;
+dispatch.expert_weights = topk_expert_weights;
+dispatch.token_count = token_count;
+dispatch.assignment_count = token_count * topk;
+dispatch.fixed_topk = topk;
 
 shmem_dispatch_alltoall_inc<DataType::BF16>(
-    &session,
-    wave,
-    token_hidden,
-    token_ids,
-    topk_destination_gpus,
-    topk_expert_ids,
-    topk_expert_weights,
-    token_count,
-    topk,
-    &dispatch_output,
-    stream,
-    &batch,
-    &dispatch_done);
+    &session, wave, &dispatch, &dispatch_output,
+    stream, &batch, &dispatch_done);
 
 // Grouped GEMM / Expert FFN，并在每个 B 上先做 local weighted reduce。
 run_experts_and_local_reduce(dispatch_output, fp32_partials, stream);
@@ -77,9 +75,8 @@ Dispatch、Expert 计算、Combine、结果打印和资源释放。
 - `BatchHandle` 持有 generation-scoped Journal 生命周期；不可跨 Session、重复消费或
   在 Combine 前复用 Ring Slot。
 - API 是异步 enqueue 接口；设备错误通过 `Completion` 查询或等待。
-- 当前仓库提供稳定 Frontend、Host Reference Example 和完整设备 qualification；
-  真实推理热路径还需要把框架 Router 的 Device Arrays 绑定到 Pull V2 Device Pack
-  Adapter。API 不会静默把 Device Route 拷回 CPU。
+- `BackendOps` 在部署时绑定实际 transport/device launcher；逐 wave 调用不重新创建
+  session 或规划接口对象。
 
 ## 协议概要
 
@@ -110,7 +107,7 @@ Combine： B PUT READY → Notice → INC GET partial → reduce → selective o
 | `inc_dc_pull_dispatch_v2_abi.h` | Dispatch/Journal 设备 ABI |
 | `inc_dc_pull_dispatch_v2_device_kernel.cpp` | Metadata PUT→READY→Parse→Hidden GET→Fan-out 数据面 |
 | `inc_dc_pull_combine_v2.{h,cpp}` | Combine Notice、READY 和 Pull Index 协议 |
-| `inc_dc_pull_combine_v2_device_kernel.cpp` | Partial GET→Reduction→Owner PUT 数据面 |
+| `inc_dc_pull_combine_v2_device_kernel.cpp` | READY PUT→Notice→Partial GET→Reduction→Owner PUT 数据面 |
 | `inc_dc_pull_v2_api.{h,cpp}` | 最短应用 Frontend API |
 | `inc_dc_pull_*_e2e.cpp` | Host/真机资格测试，不是应用调用路径 |
 | `tests/*.py` | Gate、Overlap、非对称和压力矩阵 Runner |
@@ -132,12 +129,8 @@ cmake --build /tmp/shmem-pull-v2-build -j8 --target \
 /tmp/shmem-pull-v2-build/bin/inc_dc_pull_v2_api_example
 ```
 
-## 结果
+## 当前验证
 
-- 正式性能与稳定性：
-  [`pull_v2_qualified_20260904`](../../../../../docs/inc/report/nb-borrow/pull_v2_qualified_20260904/README.md)
-- 非对称压力与交叠调优：
-  [`pull_v2_overlap_stress_20260905`](../../../../../docs/inc/report/nb-borrow/pull_v2_overlap_stress_20260905/README.md)
-
-当前 nb-borrow 的 W2/W4 128 MiB、top-k2 Dispatch/Combine 均通过既定 Gate；任意
-Ragged/Hotspot 路由走正确性优先的安全重整路径，性能仍是后续优化项。
+当前代码、构建指纹、命令和可复现的性能结论统一记录在
+[`pull_v2_current_20260913`](../../../../../docs/inc/report/nb-borrow/pull_v2_current_20260913/README.md)。
+旧协议、旧 workload 和旧代码树的报告只存在于 Git 历史，不作为当前结论。

@@ -73,7 +73,8 @@ JournalContributor(B rank, destination row)
 ```
 
 Combine 默认 canonical partial 布局：B 把同 GPU 多 expert 输出按 weight 本地归并回
-`partial[destination_row]`，发布一个 READY；INC 直接 GET、tile reduce、PUT owner。
+`partial[destination_row]`，先 PUT 128B READY descriptor，再 publication-last 发布
+64B Notice；INC 读取本地 descriptor 后 GET partial、tile reduce、PUT owner。
 Combine 使用运行时/profile 选择的 FP32 tile、MTE2 ping/pong、UB Add 和直接 PUT；
 Reducer 数量由 launcher 从当前芯片的普通 AIV 数量推导，不编码某一 SKU 的固定值。
 
@@ -93,21 +94,16 @@ worker:
 必须支持 `Combine(wave N, slot s)` 与 `Dispatch(wave N+1, slot 1-s)` 任意错峰并发，
 standalone benchmark 不得借用另一半 INC AIV。
 
-## Gate
+## 性能口径
 
-正式带宽 gate 只用于对称 workload：每个 worker 恰好 128 MiB hidden
-payload，worker 输入量与 destination 负载对称。完整 Dispatch 从 READY
-publication 计到 destination 重整完成、destination completion 和 source ACK
-均发布：
+正式样本使用对称 workload：每个 worker 恰好 128 MiB hidden payload，worker
+输入量与 destination 负载对称。完整时间从 kernel launch 前开始，包含 metadata
+PUT、READY、解析、hidden GET、fan-out、completion 和 source ACK：
 
 ```text
-logical bytes = hidden GET once + hidden PUT once per unique destination
-W2 min >= 51.52 GB/s   # 56 GB/s nominal raw x 92%
-W4 min >= 103.04 GB/s  # 112 GB/s nominal raw x 92%
-10 measures 全正确，CV <= 5%
+Dispatch bandwidth = fan-out egress hidden bytes / full Dispatch time
+warmup >= 3, measure >= 10, all correct, CV <= 5%
 ```
 
-另外记录 GET-only、PUT-only、匹配 fan-out 比例的 GET+PUT mixed roofline，以及
-重整带宽；旧 Push-Dispatch 数据不覆盖，只作为 legacy 对照。小消息及不同程度
-的非对称 workload 在正式 gate 通过后测试，不套用上述固定 raw gate；它们必须
-正确、稳定、无死锁或越界，并报告带宽、延迟和相对对称基线的退化。
+GET 与 PUT 两腿字节之和只作 aggregate traffic 诊断。当前可复现数据、构建指纹
+和限制见 `docs/inc/report/nb-borrow/pull_v2_current_20260913/README.md`。
