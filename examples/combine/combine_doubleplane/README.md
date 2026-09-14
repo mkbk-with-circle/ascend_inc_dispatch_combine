@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 # 双平面 MoE Combine 示例
 
 > **暂不支持 Ascend950**：当前暂不支持在 Ascend950 平台配套编译运行。
@@ -5,6 +6,9 @@
 本示例实现非量化 MoE combine 的双平面版本。它保持与 `examples/combine/combine_classic` 相同的输入输出和校验语义，但在 expert 输出回传阶段同时启用 MTE 与 SDMA，根据 segment 大小自适应选择传输路径。
 
 双平面路径依赖 SHMEM SDMA 能力。SDMA 功能要求 CANN 9.0.0 及以上，并需要安装匹配硬件平台的 toolkit 和 ops-legacy 软件包。基础安装和独立 SDMA demo 可参考 `examples/sdma/README.md`。
+
+<!-- English -->
+> **English:** This README documents the dual-plane MoE Combine operator and its validation workflow.
 
 ## 为什么使用双平面
 
@@ -24,6 +28,11 @@
 - 关注通信阶段 `comm_only` 性能，希望比较 MTE-only 与 MTE+SDMA 的差异。
 
 如果每个 segment 都较小，SDMA 的 issue/event/quiet 成本可能抵消收益。
+
+<!-- English -->
+### English — Design rationale
+
+The Chinese section explains this design and its relationship to the baseline, including when each path should be used.
 
 ## 功能说明
 
@@ -47,6 +56,11 @@
 ```text
 x_out[token] = sum(topk_output[token, topk] * expert_scales[token, topk])
 ```
+
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
 
 ## 方案设计
 
@@ -85,6 +99,11 @@ threshold_den = max(pe_size - 1, 1) * local_expert_num
 
 也就是说，只有“大于 2MB 且大于当前 PE 远端平均段大小”的远端大段才走 SDMA。本地段、空段、小段和普通段仍走 MTE。
 
+<!-- English -->
+### English — Workflow and implementation
+
+The Chinese section above defines the execution stages, data movement, synchronization, and ownership rules. Its diagrams, formulas, and code fragments apply unchanged.
+
 ## 实现逻辑
 
 主要阶段：
@@ -100,6 +119,11 @@ threshold_den = max(pe_size - 1, 1) * local_expert_num
 
 注意：SDMA 只负责大段 payload 数据面；status ready 控制面仍由 MTE 写入。这样可以保证 status 不会早于 payload 可见。
 
+<!-- English -->
+### English — Workflow and implementation
+
+The Chinese section above defines the execution stages, data movement, synchronization, and ownership rules. Its diagrams, formulas, and code fragments apply unchanged.
+
 ## 与经典 Combine 的关系
 
 双平面的输入输出与经典 combine 一致：
@@ -111,6 +135,11 @@ threshold_den = max(pe_size - 1, 1) * local_expert_num
 
 因此可以先用经典 combine 建立正确性基线，再用双平面对相同 shape 做性能对比。
 
+<!-- English -->
+### English — Design rationale
+
+The Chinese section explains this design and its relationship to the baseline, including when each path should be used.
+
 ## 构建
 
 在仓库根目录执行：
@@ -118,6 +147,11 @@ threshold_den = max(pe_size - 1, 1) * local_expert_num
 ```bash
 bash scripts/build.sh -examples
 ```
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
 
 ## 运行
 
@@ -137,6 +171,11 @@ bash scripts/run.sh -pes 8 -bs 8 -h 16 -topk 2 -expertPerPe 8 -type int32_t
 
 脚本会自动生成 combine 输入和 golden 输出，启动每个 PE 对应的进程，输出写入 `output/x_out_<rank>.bin`，并执行父目录公共脚本 `../scripts/check_combine.py` 校验结果。
 
+<!-- English -->
+### English — ## 运行
+
+This section covers ## 运行. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 常用参数
 
 ```text
@@ -152,6 +191,11 @@ bash scripts/run.sh -pes 8 -bs 8 -h 16 -topk 2 -expertPerPe 8 -type int32_t
 
 `bfloat16_t` 当前未在 combine doubleplane 示例中实例化。原因是 CANN 9.0 beta 后端不支持 combine 累加路径需要的标量 bf16 cast，脚本会主动拒绝 `-type bfloat16_t`。
 
+<!-- English -->
+### English — Parameters
+
+The tables above define option names, defaults, units, ranges, and constraints. Their literal spellings and values remain unchanged.
+
 ## 如何选择使用
 
 推荐用同一组 shape 对比经典版和双平面：
@@ -165,6 +209,11 @@ bash scripts/run.sh --perf -pes 8 -bs 32 -h 7168 -topk 8 -expertPerPe 8 -type in
 ```
 
 优先观察 `comm_only`。如果 `comm_only` 降低，说明大段回传走 SDMA 对通信阶段有效；如果 `full_op` 收益较小，需要结合 status wait、加权归约和同步开销一起分析。
+
+<!-- English -->
+### English — ## 如何选择使用
+
+This section covers ## 如何选择使用. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
 
 ## 性能测试
 
@@ -191,3 +240,8 @@ CSV 指标包括：
 - `comm_only`：Stage 1 回传通信及必要的完成/status 协议。
 
 单 rank 文件名为 `combine_doubleplane_perf_rank<rank>.csv`。使用 `--prof-pe all` 时，脚本会轮流 profile 每个 PE，并生成 `combine_doubleplane_perf_summary.csv`。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.

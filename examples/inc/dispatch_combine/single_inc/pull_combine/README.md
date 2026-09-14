@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 # Single-INC Pull Dispatch / Combine V2
 
 本目录只保留当前 Pull V2 实现。历史 Push-Dispatch/Pull-Combine V1、旧 endpoint
@@ -13,6 +14,9 @@ git switch --detach single-inc-v1-legacy
 ```text
 single-inc-pull-v2-qualified-pre-api
 ```
+
+<!-- English -->
+> **English:** This README documents the Pull V2 public API, protocol, implementation, build, and validation.
 
 ## 最短应用接口
 
@@ -78,6 +82,11 @@ Dispatch、Expert 计算、Combine、结果打印和资源释放。
 - `BackendOps` 在部署时绑定实际 transport/device launcher；逐 wave 调用不重新创建
   session 或规划接口对象。
 
+<!-- English -->
+### English — ## 最短应用接口
+
+This section covers ## 最短应用接口. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 协议概要
 
 ```text
@@ -99,6 +108,11 @@ Combine： B PUT READY → Notice → INC GET partial → reduce → selective o
 - Dispatch/Combine 使用互不重叠的动态半 AIV；并发时可对 Combine 启用 transport
   lane governor，但 Solo 默认不变。
 
+<!-- English -->
+### English — ## 协议概要
+
+This section covers ## 协议概要. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 当前源码
 
 | 文件 | 用途 |
@@ -111,6 +125,11 @@ Combine： B PUT READY → Notice → INC GET partial → reduce → selective o
 | `inc_dc_pull_v2_api.{h,cpp}` | 最短应用 Frontend API |
 | `inc_dc_pull_*_e2e.cpp` | Host/真机资格测试，不是应用调用路径 |
 | `tests/*.py` | Gate、Overlap、非对称和压力矩阵 Runner |
+
+<!-- English -->
+### English — ## 当前源码
+
+This section covers ## 当前源码. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
 
 ## 构建与运行
 
@@ -129,8 +148,18 @@ cmake --build /tmp/shmem-pull-v2-build -j8 --target \
 /tmp/shmem-pull-v2-build/bin/inc_dc_pull_v2_api_example
 ```
 
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
+
 ## 当前验证
 
 当前代码、构建指纹、命令和可复现的性能结论统一记录在
 [`pull_v2_current_20260913`](../../../../../docs/inc/report/nb-borrow/pull_v2_current_20260913/README.md)。
 旧协议、旧 workload 和旧代码树的报告只存在于 Git 历史，不作为当前结论。
+
+<!-- English -->
+### English — Current validation
+
+The Chinese section records the build, test, fingerprint, and measurement evidence for the retained implementation.

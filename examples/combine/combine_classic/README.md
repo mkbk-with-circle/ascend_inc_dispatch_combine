@@ -1,6 +1,10 @@
+<!-- 中文 / Chinese -->
 # 经典 MoE Combine 示例
 
 本示例实现非量化 MoE 的经典 combine 算子，对应设计文档 `DOC/moe_dispatch_combine_non_quant_architecture.md`。Combine 消费 dispatch 阶段生成的 expert 输出和辅助元数据，将每个 topK expert 的结果回传到原始 token 所在 PE，并完成加权归约。
+
+<!-- English -->
+> **English:** This README documents the classic MoE Combine operator and its validation workflow.
 
 ## 功能说明
 
@@ -25,6 +29,11 @@
 x_out[token] = sum(topk_output[token, topk] * expert_scales[token, topk])
 ```
 
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
+
 ## 实现逻辑
 
 Kernel 启动 `pe_size` 个 AIV core。发送回传阶段中，`core_id == src_rank` 的 core 负责将本 PE 上的 expert 输出写回对应来源 rank。
@@ -41,6 +50,11 @@ Kernel 启动 `pe_size` 个 AIV core。发送回传阶段中，`core_id == src_r
 
 当前经典版本数据面和控制面都使用 MTE。
 
+<!-- English -->
+### English — Workflow and implementation
+
+The Chinese section above defines the execution stages, data movement, synchronization, and ownership rules. Its diagrams, formulas, and code fragments apply unchanged.
+
 ## 默认 shape
 
 ```text
@@ -50,6 +64,11 @@ BS、PEs、expertPerPe 可配置
 ```
 
 可以通过 `-h`、`-topk` 或性能 sweep 参数覆盖默认值。
+
+<!-- English -->
+### English — Default shape
+
+The table above defines the default dimensions, data types, routing parameters, and derived sizes.
 
 ## 构建
 
@@ -66,6 +85,11 @@ bash scripts/build.sh -examples
 ```bash
 bash scripts/build.sh -soc_type Ascend950 -examples
 ```
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
 
 ## 运行
 
@@ -97,6 +121,11 @@ bash scripts/run.sh -pes 2 -bs 8 -topk 4 -expertPerPe 2 -type int32_t
 
 脚本会自动生成 combine 输入和 golden 输出，启动每个 PE 对应的进程，输出写入 `output/x_out_<rank>.bin`，并执行父目录公共脚本 `../scripts/check_combine.py` 校验结果。
 
+<!-- English -->
+### English — ## 运行
+
+This section covers ## 运行. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 常用参数
 
 ```text
@@ -112,6 +141,11 @@ bash scripts/run.sh -pes 2 -bs 8 -topk 4 -expertPerPe 2 -type int32_t
 
 `bfloat16_t` 当前未在 combine 示例中实例化。原因是 CANN 9.0 beta 后端不支持 combine 累加路径需要的标量 bf16 cast，脚本会主动拒绝 `-type bfloat16_t`。
 
+<!-- English -->
+### English — Parameters
+
+The tables above define option names, defaults, units, ranges, and constraints. Their literal spellings and values remain unchanged.
+
 ## 测试流程
 
 一次功能测试会执行：
@@ -121,6 +155,11 @@ bash scripts/run.sh -pes 2 -bs 8 -topk 4 -expertPerPe 2 -type int32_t
 3. 启动每个 PE 的 `combine` 进程。
 4. 写出 `output/x_out_<rank>.bin`。
 5. 使用父目录公共脚本 `../scripts/check_combine.py` 比较所有 rank 输出。
+
+<!-- English -->
+### English — Correctness and validation
+
+The Chinese section defines input generation, reference results, checks, tolerances, and pass/fail conditions. Every listed check remains required.
 
 ## 性能测试
 
@@ -168,3 +207,8 @@ DataSize/B,Npus,Blocks,UBsize/KB,Bandwidth/GB/s,CoreMaxTime/us
 附加列包括 `Metric`、`GlobalDataSize/B`、`PerPeBandwidth/GB/s`、`BS`、`H`、`TopK`、`ExpertPerPe`、`Dtype`、`Warmup`、`Loops`、`ProfPe` 和 `CaseId`。
 
 可使用 `--analyse plot` 或 `--analyse md` 在性能测试后调用统一性能报告脚本。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.

@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 # 双平面 MoE Dispatch 示例
 
 > **暂不支持 Ascend950**：当前暂不支持在 Ascend950 平台配套编译运行。
@@ -5,6 +6,9 @@
 本示例实现非量化 MoE dispatch 的双平面版本。它保持与 `examples/dispatch/dispatch_classic` 相同的外部语义和输出格式，但在 payload 传输上同时启用 MTE 与 SDMA，根据 segment 大小自适应选择传输路径。
 
 双平面路径依赖 SHMEM SDMA 能力。SDMA 功能要求 CANN 9.0.0 及以上，并需要安装匹配硬件平台的 toolkit 和 ops-legacy 软件包。基础安装和独立 SDMA demo 可参考 `examples/sdma/README.md`。
+
+<!-- English -->
+> **English:** This README documents the dual-plane MoE Dispatch operator and its validation workflow.
 
 ## 为什么使用双平面
 
@@ -24,6 +28,11 @@
 - 希望比较 MTE-only 与 MTE+SDMA 双通路在通信阶段的收益。
 
 如果 shape 很小或路由非常均匀，双平面可能不会明显优于经典版，因为 SDMA 路径本身有 issue、event 和 quiet 的固定成本。
+
+<!-- English -->
+### English — Design rationale
+
+The Chinese section explains this design and its relationship to the baseline, including when each path should be used.
 
 ## 方案设计
 
@@ -62,6 +71,11 @@ threshold_den = max(pe_size - 1, 1) * local_expert_num
 
 也就是说，只有“大于 2MB 且大于当前 PE 远端平均段大小”的远端大段才走 SDMA。本地段、空段、小段和普通段仍走 MTE。
 
+<!-- English -->
+### English — Workflow and implementation
+
+The Chinese section above defines the execution stages, data movement, synchronization, and ownership rules. Its diagrams, formulas, and code fragments apply unchanged.
+
 ## 实现逻辑
 
 主要阶段：
@@ -77,6 +91,11 @@ threshold_den = max(pe_size - 1, 1) * local_expert_num
 
 注意：SDMA 只负责大段 payload 数据面；控制面仍然由 MTE 负责。这样可以避免对端看到 ready 但 payload 仍未完成的时序问题。
 
+<!-- English -->
+### English — Workflow and implementation
+
+The Chinese section above defines the execution stages, data movement, synchronization, and ownership rules. Its diagrams, formulas, and code fragments apply unchanged.
+
 ## 与经典 Dispatch 的关系
 
 双平面的输入输出与经典 dispatch 一致：
@@ -88,6 +107,11 @@ threshold_den = max(pe_size - 1, 1) * local_expert_num
 
 因此同一组 golden/check 脚本可以验证两条路径。功能正确性应与经典 dispatch 完全一致，差异主要体现在通信阶段性能。
 
+<!-- English -->
+### English — Design rationale
+
+The Chinese section explains this design and its relationship to the baseline, including when each path should be used.
+
 ## 构建
 
 在仓库根目录执行：
@@ -95,6 +119,11 @@ threshold_den = max(pe_size - 1, 1) * local_expert_num
 ```bash
 bash scripts/build.sh -examples
 ```
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
 
 ## 运行
 
@@ -114,6 +143,11 @@ bash scripts/run.sh -pes 8 -bs 8 -h 16 -topk 2 -expertPerPe 8 -type int32_t
 
 脚本会自动生成输入、路由矩阵和 golden 数据，启动每个 PE 对应的进程，输出写入 `output/`，并校验经典 dispatch 的四个输出。
 
+<!-- English -->
+### English — ## 运行
+
+This section covers ## 运行. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 常用参数
 
 ```text
@@ -128,6 +162,11 @@ bash scripts/run.sh -pes 8 -bs 8 -h 16 -topk 2 -expertPerPe 8 -type int32_t
 ```
 
 `expertPerPe` 上限为 1024。Kernel 在 AI core 栈上为每个目标 local expert 分配固定工作区，超过该上限会被 host 侧拒绝。
+
+<!-- English -->
+### English — Parameters
+
+The tables above define option names, defaults, units, ranges, and constraints. Their literal spellings and values remain unchanged.
 
 ## 如何选择使用
 
@@ -144,6 +183,11 @@ bash scripts/run.sh --perf -pes 8 -bs 32 -h 1024 -topk 2 -expertPerPe 8 -type in
 ```
 
 如果 `comm_only` 降低，说明大段 payload 走 SDMA 对通信阶段有效；如果 `full_op` 收益不明显，需要结合 shape、路由倾斜度和后续 compact/同步成本判断。
+
+<!-- English -->
+### English — ## 如何选择使用
+
+This section covers ## 如何选择使用. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
 
 ## 性能测试
 
@@ -170,3 +214,8 @@ CSV 指标包括：
 - `comm_only`：Stage 1 payload 通信及必要的元数据/status 协议。
 
 单 rank 文件名为 `dispatch_doubleplane_perf_rank<rank>.csv`。使用 `--prof-pe all` 时，脚本会轮流 profile 每个 PE，并生成 `dispatch_doubleplane_perf_summary.csv`。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.

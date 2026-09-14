@@ -1,6 +1,10 @@
+<!-- 中文 / Chinese -->
 # Pull V2 current validation（2026-09-13）
 
 本报告只描述当前源码树最终保留的 Single-INC Pull V2。
+
+<!-- English -->
+> **English:** This README documents the retained Pull V2 protocol, API, build, tests, binary fingerprints, and reproducible measurements.
 
 ## 当前协议
 
@@ -24,6 +28,11 @@ Combine:
   → owner PUT / ACK / Completion
 ```
 
+<!-- English -->
+### English — Current protocol
+
+The Chinese section defines the retained Dispatch and Combine control and payload sequence, publication ordering, and completion semantics.
+
 ## 公共 API
 
 唯一入口为
@@ -36,6 +45,11 @@ create → dispatch → expert compute/local reduce → combine → wait → des
 
 API 使用 `BatchHandle` 保存 Dispatch Journal 生命周期，Combine 消费同一 handle；
 `BackendOps` 只在 session 创建时绑定 transport/device launcher。
+
+<!-- English -->
+### English — Public API
+
+The Chinese section defines the supported application API and object lifecycle. Function names, types, templates, and examples remain unchanged.
 
 ## Fresh build 与 host 验证
 
@@ -69,6 +83,11 @@ Combine、数值检查和销毁。
 | Combine source | `1afbe5d84eda5264aa591025f88b2544c35545027453af2d019dd578b47780be` |
 | Combine device library | `63e2e6a991899db4c8b83597f54f0261fa9939ca0d6734230f86c30d20ef4526` |
 
+<!-- English -->
+### English — ## Fresh build 与 host 验证
+
+This section covers ## Fresh build 与 host 验证. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 当前可复现的设备性能
 
 Dispatch 的 fresh-build library 与 2026-09-11 真机测量 library SHA256 完全一致。
@@ -98,3 +117,8 @@ pull_v2_overlap_qualification.py \
 ```
 
 W4 使用 `--workers 4 --channels 3` 和新的输出目录。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.

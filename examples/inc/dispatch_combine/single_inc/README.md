@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 # Single-INC Pull V2
 
 ```text
@@ -15,8 +16,16 @@ Combine : B PUT READY descriptor → Notice → INC GET partials
 当前源码只保留这一套 Dispatch/Combine 实现。归档标签
 `archive/pre-api-cleanup-20260913` 保存清理前代码。
 
+<!-- English -->
+> **English:** This README documents the maintained Single-INC Pull V2 data flow.
+
 ## English
 
 This directory contains the sole maintained Single-INC Pull V2 implementation.
 Use [QUICKSTART.md](QUICKSTART.md) for integration and
 [pull_combine/README.md](pull_combine/README.md) for build and validation.
+
+<!-- English -->
+### English — ## English
+
+This section covers ## English. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.

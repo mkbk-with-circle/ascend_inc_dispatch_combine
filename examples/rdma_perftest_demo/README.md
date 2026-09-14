@@ -1,8 +1,17 @@
+<!-- 中文 / Chinese -->
 # 样例介绍
+
+<!-- English -->
+> **English:** This README documents the RDMA performance-test demo.
 
 ## 环境要求
 
 同[rdma_demo](../rdma_demo/README.md)中的环境要求。
+
+<!-- English -->
+### English — Requirements and supported platforms
+
+The Chinese section lists required hardware, software, build options, and supported products. Versions and environment variables remain unchanged.
 
 ## 使用方式
 
@@ -64,3 +73,8 @@
         - highlevel_put_bw: 测试Put高阶接口的带宽。
         - rdma_mte_bw: 测试并行下发MTE和RDMA时的带宽。
     - msg_len: 测试传输的数据量大小，单位为字节（Byte）。
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.

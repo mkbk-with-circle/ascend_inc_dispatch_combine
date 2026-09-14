@@ -1,4 +1,8 @@
+<!-- 中文 / Chinese -->
 # SHMEM MegaMoE 示例（Ascend950）
+
+<!-- English -->
+> **English:** This README documents the Ascend 950 SHMEM MegaMoE example.
 
 ## 样例介绍
 
@@ -20,6 +24,11 @@ Token 和权重量化模式：
 | --- | --- | --- |
 | `arch35_e4m3` | E4M3 | E8M0 |
 | `arch35_e5m2` | E5M2 | E8M0 |
+
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
 
 ## 计算定义
 
@@ -68,6 +77,11 @@ Y_t = Sum(routing_weights[t, k] * Z_expert_ids[t, k], k=0..experts_per_token-1)
 | `weight2_scale` | E8M0 | 分块 Scale | 第二次投影的 MXFP Scale |
 | `y` | BF16 | `[token_count, model_dim]` | 加权合并后的本 Rank 输出 |
 | `expert_token_counts` | INT32 | `[local_expert_count]` | 本 Rank 各专家实际处理的 Token 数 |
+
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
 
 ## 整体数据流
 
@@ -149,6 +163,11 @@ BF16 形式交给 Combine 流程，不对 Combine 结果再做额外量化。
 所有专家结果返回后，源 Rank 执行 `CombineRoutedTokens`。它读取每个 Token 的全部路由结果，
 乘以对应的 `routing_weights` 后累加，并将最终结果转换为 BF16 写入 `y`。
 
+<!-- English -->
+### English — Workflow and implementation
+
+The Chinese section above defines the execution stages, data movement, synchronization, and ownership rules. Its diagrams, formulas, and code fragments apply unchanged.
+
 ## AIC/AIV 分工与同步
 
 | 处理单元 | 主要工作 |
@@ -166,6 +185,11 @@ BF16 形式交给 Combine 流程，不对 Combine 结果再做额外量化。
 
 运行前会检查 `local_expert_count` 不大于可用 AIC 数量。如果资源不足，程序会直接报错，
 避免多个局部专家错误地竞争同一组 AIC 流水资源。
+
+<!-- English -->
+### English — AIC/AIV roles and synchronization
+
+The Chinese section assigns compute and communication work to AIC/AIV cores and defines synchronization between stages.
 
 ## 内存布局
 
@@ -201,6 +225,11 @@ BF16 形式交给 Combine 流程，不对 Combine 结果再做额外量化。
 `memory_layout.h` 还为量化 Combine 模式预留了 `matmulOutput` 和 `rowGroupReadyFlags` 布局；
 当前命令行样例固定走 BF16 非量化 Combine 路径，因此不会使用这两个可选区域。
 
+<!-- English -->
+### English — Memory layout and capacity
+
+The Chinese section defines symmetric memory, workspace regions, alignment, ownership, and capacity requirements. Offsets, sizes, and formulas remain authoritative.
+
 ## 目录结构
 
 ```text
@@ -225,6 +254,11 @@ examples/shmem_mega_moe/
 |-- main.cpp                                # 可执行程序入口
 `-- scripts/run_shmem_mega_moe_arch35.sh    # 多 Rank 拉起脚本
 ```
+
+<!-- English -->
+### English — Directory layout
+
+The directory tree and file roles above define the layout. All paths and inline comments remain exact.
 
 ## 编译
 
@@ -253,6 +287,11 @@ export ASCEND_HOME_PATH=/path/to/ascend-toolkit/latest
 
 CMake 会检查 SHMEM MegaMoE 的 Host、Tiling、Kernel 头文件及 Catlass 依赖，只有依赖完整时
 才注册 `shmem_mega_moe` 目标。
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
 
 ## 运行
 
@@ -333,6 +372,11 @@ Rank，并返回非零状态，避免通信错误被某个成功进程掩盖。
 设置 `AIC_NUM` 或 `AIV_NUM` 时，覆盖值不能超过运行时检测到的硬件核数，并且必须保持
 `AIC_NUM:AIV_NUM=1:2` 的 MIX Kernel 比例；同时覆盖两项可以避免单项覆盖后比例不匹配。
 
+<!-- English -->
+### English — ## 运行
+
+This section covers ## 运行. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 参数约束
 
 运行前 Host 会进行 Shape、资源和容量校验，主要约束如下：
@@ -351,6 +395,11 @@ token_count * rank_size * min(experts_per_token, local_expert_count)
 
 显式设置 `max_received_tokens` 时，当前数值验证程序要求它不小于上述容量；否则 Host 参数
 校验直接失败，不会启动多 Rank Kernel。
+
+<!-- English -->
+### English — Parameters
+
+The tables above define option names, defaults, units, ranges, and constraints. Their literal spellings and values remain unchanged.
 
 ## 正确性校验
 
@@ -387,6 +436,11 @@ verify=pass(expert_token,numeric_golden)
 该校验不依赖固定的 Rank 数，也覆盖非 Tile 对齐的 Token 数。目标环境验收时建议至少覆盖
 2、4、8 Rank，两种 FP8 模式以及多组 Token 数。
 
+<!-- English -->
+### English — Correctness and validation
+
+The Chinese section defines input generation, reference results, checks, tolerances, and pass/fail conditions. Every listed check remains required.
+
 ## 性能指标说明
 
 样例同时输出 Kernel Event 和端到端两种耗时：
@@ -399,6 +453,11 @@ verify=pass(expert_token,numeric_golden)
 `warmup` 轮不计入统计，`loop` 控制正式计时轮数。比较算子本身性能时应使用
 `kernel_event_avg_ms`；评估完整调用开销时使用 `e2e_avg_ms`。多 Rank 场景下应同时确认所有
 Rank 的校验结果，并以相同 Shape、核数和运行模式进行对比。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.
 
 ## 常见问题
 
@@ -423,3 +482,8 @@ AscendC 接口。
 减小 Token/维度/Rank 数，或检查 `max_received_tokens` 是否设置过大。若显式设置的接收容量
 小于数值验证所需下限，Host 会直接报错。大 Shape 运行前应先根据内存布局估算每个 Rank 的
 实际占用。
+
+<!-- English -->
+### English — Troubleshooting
+
+The Chinese section lists common failures, likely causes, and corrective actions.

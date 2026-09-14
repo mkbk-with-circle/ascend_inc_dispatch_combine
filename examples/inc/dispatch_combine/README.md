@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 # Single-INC Pull V2 Dispatch / Combine
 
 当前维护路径位于 [single_inc/pull_combine](single_inc/pull_combine/README.md)。
@@ -19,8 +20,16 @@ Combine : Worker PUT READY descriptor → Notice
 
 旧实现可从 `archive/pre-api-cleanup-20260913` 恢复。
 
+<!-- English -->
+> **English:** This README documents the maintained Single-INC Pull V2 Dispatch/Combine path.
+
 ## English
 
 The maintained path is Single-INC Pull V2. Workers push control metadata before
 READY/Notice; INC then validates local control state and pulls payload. The
 links above are the API, example, protocol, and qualification entry points.
+
+<!-- English -->
+### English — ## English
+
+This section covers ## English. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.

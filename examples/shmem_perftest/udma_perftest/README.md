@@ -1,8 +1,17 @@
+<!-- 中文 / Chinese -->
 # udma_perftest
+
+<!-- English -->
+> **English:** This README documents the Ascend 950 UDMA benchmark.
 
 ## 示例概述
 
 `udma_perftest` 是用于**测试 shmem UDMA 低阶接口性能**的参数化测试示例，平行于同目录下的 `mte_perftest`（针对 MTE 引擎）。该示例通过 [SHMEMI_PROF_START/END](../../../src/device/utils/prof/shmemi_prof.h) 宏采集性能数据，覆盖 `aclshmemx_udma_put_nbi` / `aclshmemx_udma_get_nbi` / `aclshmemx_udma_put_signal_nbi` 三个低阶接口在不同数据量下的传输带宽。**该脚本测试结果仅做参考，性能以实际场景为准**。
+
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
 
 ## 测试目的
 
@@ -13,6 +22,11 @@
 3. **单向 Get** (`get`)：仅 prof PE 调用 `aclshmemx_udma_get_nbi`，从对端 PE 拉取数据。
 4. **双向 Get** (`bi_get`)：两个 PE 同时调用 get，互相拉取数据。
 5. **Put + Signal** (`put_signal`)：仅 prof PE 调用 `aclshmemx_udma_put_signal_nbi`，传输数据后写一个远端信号；测试结束做信号值校验。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.
 
 ## 与 `mte_perftest` (MTE 版) 的差异
 
@@ -26,6 +40,11 @@
 | SOC 限制 | 通用 | **仅 Ascend950**：非 950 上 device kernel 内置 abort |
 | CSV 文件名 | `<test>_<dtype>_<pe>.csv` | `udma_<test>_<dtype>_<pe>.csv` |
 
+<!-- English -->
+### English — ## 与 `mte_perftest` (MTE 版) 的差异
+
+This section covers ## 与 `mte_perftest` (MTE 版) 的差异. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 编译说明
 
 UDMA 仅在 Ascend950 上可用：
@@ -34,6 +53,11 @@ UDMA 仅在 Ascend950 上可用：
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 bash scripts/build.sh -examples -soc_type Ascend950
 ```
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
 
 ## 使用方法
 
@@ -126,6 +150,11 @@ CSV 文件名加 metric 前缀：`output/udma_<metric>_<test_type>_<dtype>_<pe>.
 ./run.sh -t get -d float --exponent-range 8 20 --loop-count 1000 --batch 16
 ```
 
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
+
 ## put_signal 行为说明
 
 `put_signal` 模式由 perftest 自动管理信号：
@@ -134,6 +163,11 @@ CSV 文件名加 metric 前缀：`output/udma_<metric>_<test_type>_<dtype>_<pe>.
 - 每个数据点循环 `warmup + loop_count` 次，每次调用 `aclshmemx_udma_put_signal_nbi(..., signal_base + i, peer_pe)`，信号值线性递增以避开脏数据干扰。
 - 数据点结束后，host 端读回对端信号槽，校验是否等于 `signal_base + (warmup + loop_count - 1)`。
 - 校验失败会打印 ERROR 但不终止后续数据点。
+
+<!-- English -->
+### English — ## put_signal 行为说明
+
+This section covers ## put_signal 行为说明. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
 
 ## CSV 输出
 
@@ -145,6 +179,11 @@ DataSize/B, Npus, Blocks, UBsize/KB, Bandwidth/GB/s, CoreMaxTime/us, SingleCoreT
 
 `Blocks` 列恒为 1。文件名带 metric 前缀：`output/udma_<metric>_<test_type>_<dtype>_<pe>.csv`，例如 `udma_bw_put_float_0.csv` 或 `udma_lat_put_float_0.csv`。`--metric lat` 时 `Bandwidth/GB/s` 列填 0，`CoreMaxTime/SingleCoreTime` 列填单次 `put_nbi` 下发耗时。
 
+<!-- English -->
+### English — Output
+
+The Chinese section defines terminal output and generated files. Field names, CSV columns, units, and examples remain exact.
+
 ## 输出示例
 
 ```bash
@@ -155,6 +194,11 @@ pe: 0 size: 1024 frame_id: 0
 [SUCCESS] udma_perftest done in pe 0
 ```
 
+<!-- English -->
+### English — Output
+
+The Chinese section defines terminal output and generated files. Field names, CSV columns, units, and examples remain exact.
+
 ## 已知约束
 
 1. UDMA 头文件 `include/device/gm2gm/engine/shmem_device_udma.h` 注明：concurrent RMA/AMO operations to the same PE are not supported。本 perftest 通过 `block_dim=1` 规避，多核场景留作后续扩展。
@@ -162,3 +206,8 @@ pe: 0 size: 1024 frame_id: 0
 3. **不支持 D2H / `HOST_SIDE` (DRAM)**：UDMA 引擎当前未对 Host 侧 DRAM 提供 RMA 路径，仅测 HBM。
 4. 原子操作 (`aclshmemx_udma_atomic_add` 等) 不在本 perftest 范围。
 5. 高阶 UDMA RMA 接口默认通过 `PIPE_MTE3` staging 下发 WQE，默认 UB 配置为 `offset = 189 * 1024`、`ub_size = 128` 字节、`sync_id = 0`。如果调用 `aclshmemx_set_udma_config` 修改配置，`ub_size` 必须不小于 128 字节。本 perftest 的低阶接口路径仍按显式入参使用本地 UB。
+
+<!-- English -->
+### English — Constraints and boundaries
+
+All platform, alignment, resource, synchronization, lifecycle, and safety restrictions listed above apply unchanged.

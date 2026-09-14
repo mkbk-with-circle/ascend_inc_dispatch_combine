@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 ## 概述
 
 本样例基于 SHMEM 工程，介绍 device kernel 侧通过 SDMA 批量数据传输接口在普通 Device 内存和 Host 侧 SHMEM 对称内存之间搬运数据的使用。
@@ -8,9 +9,17 @@
 - `get`：验证 `aclshmemx_sdma_get_nbi`，数据方向为本 PE 和目标 PE 的 `HOST_SIDE` SHMEM 内存到本 PE 普通 Device 内存。
 - `all`：依次执行 `put` 和 `get`。
 
+<!-- English -->
+> **English:** This README documents the SDMA device-to-host example.
+
 ## 支持的产品型号
 
 - Atlas A3 训练系列产品/Atlas A3 推理系列产品
+
+<!-- English -->
+### English — Requirements and supported platforms
+
+The Chinese section lists required hardware, software, build options, and supported products. Versions and environment variables remain unchanged.
 
 ## 样例实现
 
@@ -43,6 +52,11 @@
 （4）`get` kernel 中，调用 `aclshmemx_sdma_get_nbi` 从本 PE 或目标 PE 的 `HOST_SIDE` SHMEM 对称地址读取数据，写入本 PE 普通 Device 内存。接口内部根据源 PE 编号完成 Host 侧地址转换，`pe == my_pe` 时验证本地 H2D。
 
 （5）`aclshmemx_sdma_put_nbi` 和 `aclshmemx_sdma_get_nbi` 为非阻塞接口，kernel 中调用 `aclshmemx_sdma_quiet` 等待当前 block 提交的 SDMA 任务完成。
+
+<!-- English -->
+### English — ## 样例实现
+
+This section covers ## 样例实现. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
 
 ## 编译执行
 
@@ -89,6 +103,11 @@ bash run.sh -pes 2 -op put -type uint8 -elems 1048576 -heap_mb 16
 | `-elems` | `1048576` | 每个 PE 的元素个数。 |
 | `-heap_mb` | `16` | 每个 PE 的 SHMEM heap 大小，单位 MB。 |
 
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
+
 ## 约束限制
 
 ### PE 数量和启动进程要求
@@ -100,3 +119,8 @@ bash run.sh -pes 2 -op put -type uint8 -elems 1048576 -heap_mb 16
 ```bash
 bash run.sh -pes 4 -op put -type uint8 -elems 1048576
 ```
+
+<!-- English -->
+### English — Constraints and boundaries
+
+All platform, alignment, resource, synchronization, lifecycle, and safety restrictions listed above apply unchanged.

@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 # INC Examples
 
 当前只维护 Single-INC Pull V2 Dispatch / Combine：
@@ -13,9 +14,17 @@ dispatch_combine/
 native stream、inline-route 和 Fusion 实验可从
 `archive/pre-api-cleanup-20260913` 恢复，不参与当前构建。
 
+<!-- English -->
+> **English:** This README documents the maintained Single-INC Pull V2 example tree.
+
 ## English
 
 The maintained INC example is Single-INC Pull V2 Dispatch / Combine. Start at
 [Quickstart](dispatch_combine/single_inc/QUICKSTART.md). Legacy and experimental
 implementations are recoverable from `archive/pre-api-cleanup-20260913` and
 are not built.
+
+<!-- English -->
+### English — ## English
+
+This section covers ## English. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.

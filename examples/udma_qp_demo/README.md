@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 ## 概述
 
 本样例基于 SHMEM 工程，介绍 device kernel 在直连 UDMA 场景下，使用多个 QP 并发完成同一对端 PE 的 Put/Get/PutSignal 数据传输。
@@ -7,6 +8,9 @@
 - `put`：当前 PE 使用多个 QP，将本地普通 Device 内存中的数据写入下一个 PE 的 SHMEM 对称内存。
 - `get`：当前 PE 使用多个 QP，从下一个 PE 的 SHMEM 对称内存读取数据到本地普通 Device 内存。
 - `put_signal`：每个 QP 使用一个 `WRITE_WITH_NOTIFY` WQE 写入自己的数据分片和独立 signal word。
+
+<!-- English -->
+> **English:** This README documents the UDMA queue-pair demo.
 
 ## 版本和平台支持说明
 
@@ -20,6 +24,11 @@
 ```text
 Required Hcomm UDMA APIs not found, disabling ACLSHMEM_UDMA_SUPPORT
 ```
+
+<!-- English -->
+### English — Requirements and supported platforms
+
+The Chinese section lists required hardware, software, build options, and supported products. Versions and environment variables remain unchanged.
 
 ## 样例实现
 
@@ -46,6 +55,11 @@ Required Hcomm UDMA APIs not found, disabling ACLSHMEM_UDMA_SUPPORT
 （2）Put 模式调用 `aclshmemx_udma_qp_put_nbi`，Get 模式调用 `aclshmemx_udma_qp_get_nbi`，PutSignal 模式调用 `aclshmemx_udma_qp_put_signal_nbi`。每个 AIV 只提交自己负责的数据分片。
 
 （3）提交后调用 `aclshmemx_udma_qp_quiet`，等待当前对端 PE、当前 QP 上的操作完成。PutSignal 的数据和 signal 位于同一个 WQE；不同 QP 之间不提供隐式顺序。
+
+<!-- English -->
+### English — ## 样例实现
+
+This section covers ## 样例实现. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
 
 ## 编译执行
 
@@ -106,3 +120,8 @@ PutSignal 还会输出 signal 校验结果：
 | `-heap_mb` | `1024` | 每个 PE 的 SHMEM 对称堆大小，单位为 MiB；PutSignal 模式必须同时容纳数据缓冲区和每 QP 一个 `uint64_t` signal word。 |
 | `-first_npu` | `0` | PE0 对应的逻辑 NPU 编号；PE `i` 使用 `first_npu + i`。 |
 | `-ipport` | 动态本机端口 | 引导初始化地址；未指定时由脚本随机选择本机端口。 |
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.

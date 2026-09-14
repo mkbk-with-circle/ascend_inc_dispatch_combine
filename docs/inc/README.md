@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 # Single-INC Pull V2
 
 当前 INC 目录只记录维护中的 Pull V2 Dispatch / Combine。
@@ -9,3 +10,6 @@
 
 历史协议、实验实现和旧性能报告已从当前树删除，可从
 `archive/pre-api-cleanup-20260913` 恢复。
+
+<!-- English -->
+> **English:** This README documents the maintained Single-INC Pull V2 documentation entry point.
