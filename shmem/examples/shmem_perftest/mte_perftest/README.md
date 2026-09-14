@@ -1,8 +1,17 @@
+<!-- 中文 / Chinese -->
 # mte_perftest
+
+<!-- English -->
+> **English:** This README documents the SHMEM MTE benchmark.
 
 ## 示例概述
 
 mte_perftest是一个用于**测试shmem MTE（Memory Transfer Engine）性能**的参数化测试示例，支持多种测试类型、多种数据类型和灵活的参数配置。该示例通过[SHMEMI_PROF_START/END](../../../src/device/utils/prof/shmemi_prof.h)宏采集性能数据，测试不同核数和数据量下的MTE传输带宽，帮助用户评估MTE数据传输性能。**该脚本测试结果仅做参考，性能以实际场景为准**
+
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
 
 ## 测试目的
 
@@ -14,6 +23,11 @@ mte_perftest是一个用于**测试shmem MTE（Memory Transfer Engine）性能**
 4. **双向Get**: 两个PE同时执行get操作，互相读取数据
 
 通过测试结果，用户可以了解MTE接口在不同场景下的性能表现。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.
 
 ## 功能特性
 
@@ -42,6 +56,11 @@ mte_perftest是一个用于**测试shmem MTE（Memory Transfer Engine）性能**
 - ✅ 生成CSV格式性能报告
 - ✅ 支持批量测试（"all"选项）
 
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
+
 ## 编译说明
 
 在shmem根目录下编译示例：
@@ -59,6 +78,11 @@ bash scripts/build.sh -examples -cann
 # Ascend950 平台
 bash scripts/build.sh -soc_type Ascend950 -examples -cann
 ```
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
 
 ## 使用方法
 
@@ -161,6 +185,11 @@ DRAM测试需要运行环境支持Host侧DRAM内存访问，相关硬件和可�
 python ../utils/perf_data_process.py -d output
 ```
 
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
+
 ## 输出说明
 
 ### CSV文件格式
@@ -189,6 +218,11 @@ CSV文件包含以下字段：
 | `CoreMaxTime/us` | 最大核时间（微秒） |
 | `SingleCoreTime/us` | 单核时间（微秒），每个核一列 |
 
+<!-- English -->
+### English — Output
+
+The Chinese section defines terminal output and generated files. Field names, CSV columns, units, and examples remain exact.
+
 ## 性能采集说明
 
 本示例使用`SHMEMI_PROF_START/END`宏进行性能数据采集：
@@ -198,6 +232,11 @@ CSV文件包含以下字段：
 - **最大记录帧数**: `ACLSHMEM_CYCLE_PROF_FRAME_CNT`（1024帧）
 
 只有环境变量指定的PE会输出CSV文件，其他PE的数据不会被采集。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.
 
 ## 注意事项
 
@@ -253,3 +292,8 @@ CSV文件包含以下字段：
    ```bash
    (64 - 1 + 1) × (30 - 10 + 1) = 64 × 21 = 1344 > 1024（超出限制）
    ```
+
+<!-- English -->
+### English — Constraints and boundaries
+
+All platform, alignment, resource, synchronization, lifecycle, and safety restrictions listed above apply unchanged.

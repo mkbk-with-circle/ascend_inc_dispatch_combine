@@ -1,7 +1,11 @@
+<!-- 中文 / Chinese -->
 # 样例介绍
 
 本样例展示在 SIMD 与 SIMT 混合编译模式下，如何对 SIMT 远程内存访问（RMA）接口进行性能测试（Performance Test）。
 测试用于评估单机两卡间 Device-to-Device 的 `gm2gm`（global memory 到 global memory）数据传输能力，覆盖**单向**的 `put` 与 `get` 操作，并输出带宽与时延统计。
+
+<!-- English -->
+> **English:** This README documents the SIMT RMA benchmark.
 
 ## 测试模型
 
@@ -17,6 +21,11 @@
 | `put` | Active PE 的对称内存 → Passive PE 的对称内存 | Passive PE |
 | `get` | Passive PE 的对称内存 → Active PE 的对称内存 | Active PE |
 
+<!-- English -->
+### English — ## 测试模型
+
+This section covers ## 测试模型. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 性能测试方法
 
 为获得贴近真实的带宽与时延、避免数据缓存（Data Cache）命中导致结果虚高，以及方便实现，本样例采用以下设计：
@@ -26,6 +35,11 @@
 - **逻辑段与逻辑环**：每个 Core 物理上分配一块 1MB 的对称内存。设单次传输大小为 $X$ 字节、使用 $N$ 个 Core，定义每个 Core 的**逻辑段**大小为 $L = \min(1\text{MB},\ (100 + loops) \times X)$（且不小于 $X$，并保证为 $X$ 的整数倍）。$N$ 个逻辑段首尾相接，构成一个大小为 $N \times L$ 的**逻辑环**，Core $j$ 的逻辑段起始于环内偏移 $j \times L$。
 - **滑动窗口遍历**：第 $i$ 次迭代时，所有 Core 共同构成一个滑动窗口，窗口整体在环内的起点为 $(i \times X) \bmod (N \times L)$。Core $j$ 本次传输的目标偏移为 $\big(i \times X + j \times L\big) \bmod (N \times L)$，即各 Core 在环上彼此错开一个逻辑段、各自传输一段长 $X$ 的数据。窗口每轮前进 $X$ 字节并在环内回绕。由于 $X \le L$，同一轮内各 Core 的数据段互不重叠；迭代之间由 `SyncAll` 保证不冲突。
 - **避免缓存命中**：连续传输的地址不断前移，使其尽量落在不同缓存行上；当总传输量较小时逻辑环只占用刚好够用的空间，较大时按 1MB 上限循环复用，从而避免数据缓存命中抬高带宽读数。校验时按同样的逻辑段布局逐段比对（每段前 $L$ 字节），与实际写入的区域完全一致。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.
 
 ## 源文件宏定义配置
 
@@ -41,9 +55,19 @@
 > **提示**：修改上述常量后，需重新回到根目录执行编译（见下文），新配置才会生效。
 > 由于部分原因，目前同一个编译单元中，两个仅调用相似simt rma接口的vf函数会导致编译错误（尽管编译不会报错，运行时会有错误），本样例通过修改源码以测试不同的simt RMA接口，并提供了常量定义以方便修改。
 
+<!-- English -->
+### English — Compile-time configuration
+
+The macros above select the operation, data type, sizes, iteration count, and compile-time behavior.
+
 ## 支持的设备
 
 - Ascend950
+
+<!-- English -->
+### English — ## 支持的设备
+
+This section covers ## 支持的设备. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
 
 ## 使用方式
 
@@ -124,3 +148,8 @@ bash run.sh -b 4 --exponent-range 8 12
 | `Bandwidth/GiB/s (1024)` | 同一带宽按二进制单位换算（除以 $1024^3$）。`none` 操作下恒为 0。 |
 | `CoreMaxTime/us` | 多个 Core 中，单次操作平均耗时最长的那个 Core 的时延（微秒），即带宽计算所用的时间。 |
 | `SingleCoreTime/us` | 各 Core 单次操作的平均时延（微秒），由该 Core `loops` 次传输的总时长除以 `loops` 得到，每个 Core 一列。 |
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.

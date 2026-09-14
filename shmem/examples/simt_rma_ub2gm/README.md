@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 # 样例介绍
 
 本样例旨在展示 SIMD 与 SIMT 混合编译模式下，SIMT 远程内存访问（RMA）接口使用 UB 作为中转缓冲区进行数据搬运的典型方法。样例代码通过 `__simt_vf__` 函数在 Device 侧申请 UB 数组，并调用 SIMT RMA NBI 接口在 GM 与 UB 之间完成数据传输。
@@ -18,6 +19,9 @@ simt::aclshmem_int32_put_nbi(__gm__ int32_t *dst, __ubuf__ int32_t *src, uint32_
 | `elem_size` | 传输的 `int32_t` 元素个数 |
 | `pe` | 目标或源 PE 编号 |
 
+<!-- English -->
+> **English:** This README documents the SIMT RMA UB-to-GM example.
+
 ## 样例执行流程
 
 本样例通过以下流程演示 UB 到 GM 的 RMA 数据路径：
@@ -29,9 +33,19 @@ simt::aclshmem_int32_put_nbi(__gm__ int32_t *dst, __ubuf__ int32_t *src, uint32_
 5. **UB 到本地 GM**：每个 PE 使用 `aclshmem_int32_put_nbi` 将 UB 缓冲区中的数据写入自身 `res_prev`。
 6. **结果校验**：通信操作完成后，各 PE 将数据拷贝回 Host 并自动校验传输结果。
 
+<!-- English -->
+### English — Workflow and implementation
+
+The Chinese section above defines the execution stages, data movement, synchronization, and ownership rules. Its diagrams, formulas, and code fragments apply unchanged.
+
 ## 支持的设备
 
 - Ascend950
+
+<!-- English -->
+### English — ## 支持的设备
+
+This section covers ## 支持的设备. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
 
 ## 目录结构
 
@@ -42,6 +56,11 @@ examples/simt_rma_ub2gm/
 ├── main.cpp
 └── run.sh
 ```
+
+<!-- English -->
+### English — Directory layout
+
+The directory tree and file roles above define the layout. All paths and inline comments remain exact.
 
 ## 使用方式
 
@@ -72,3 +91,8 @@ examples/simt_rma_ub2gm/
    [SUCCESS] PE 0: Verification passed for RMA transfers.
    [SUCCESS] PE 1: Verification passed for RMA transfers.
    ```
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.

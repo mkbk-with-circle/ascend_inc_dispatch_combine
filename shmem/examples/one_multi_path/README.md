@@ -1,4 +1,8 @@
+<!-- 中文 / Chinese -->
 # One Path + Multi Path 单核分片搬运样例
+
+<!-- English -->
+> **English:** This README documents the one-path plus multi-path sharded transfer example.
 
 ## 样例介绍
 
@@ -25,6 +29,11 @@ peer_pe = (pe_id + 1) % n_pes
 两段搬运在同一个 kernel 中顺序执行。本样例只验证两种链路映射的数据访问正确性，不验证
 `one_path` 和 `multi_path` 并发，也不采集或比较带宽。
 
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
+
 ## 支持平台与前置条件
 
 - Ascend950 运行环境。
@@ -35,6 +44,11 @@ peer_pe = (pe_id + 1) % n_pes
 
 本样例不支持 A2/A3。`linkType` 的实际路由由 CANN 运行时和硬件组网决定，运行前应确认所用
 CANN 与驱动版本支持上述接口及对应链路类型。
+
+<!-- English -->
+### English — Requirements and supported platforms
+
+The Chinese section lists required hardware, software, build options, and supported products. Versions and environment variables remain unchanged.
 
 ## 目录结构
 
@@ -48,6 +62,11 @@ examples/one_multi_path/
 └── run.sh                            # 单机或多机多进程启动脚本
 ```
 
+<!-- English -->
+### English — Directory layout
+
+The directory tree and file roles above define the layout. All paths and inline comments remain exact.
+
 ## 调用流程
 
 1. 每个 PE 完成 `aclInit`、`aclrtSetDevice` 和 `aclshmemx_init_attr`。
@@ -59,6 +78,11 @@ examples/one_multi_path/
 7. 数据按 32 字节边界分成两半，启动一个 AIV block；单次搬运超过 16 KB 时在 kernel 内分块循环。
 8. 同一个 kernel 先通过 `one_path` remote VA 搬运前半段，再通过 `multi_path` remote VA 搬运后半段。
 9. 将结果复制到 Host，逐个 `int32_t` 元素校验后交换最终状态并释放资源。
+
+<!-- English -->
+### English — Workflow and implementation
+
+The Chinese section above defines the execution stages, data movement, synchronization, and ownership rules. Its diagrams, formulas, and code fragments apply unchanged.
 
 ## 编译
 
@@ -76,6 +100,11 @@ build/bin/one_multi_path
 
 `-cann` 用于启用 CANN 开放接口构建，`-examples` 用于构建样例，`-soc_type Ascend950` 用于选择
 Ascend950 后端。完整编译参数见[编译与构建说明](../../docs/compilation_build_guide.md)。
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
 
 ## 运行
 
@@ -116,6 +145,11 @@ device_id   = fnpu + local_index
 多机运行时，各机器的 `-pes` 和 `-ipport` 必须一致，`[fpe, fpe + gnpus)` 区间不能重叠，且所有
 机器的 PE 区间合并后应覆盖 `[0, pes)`。`ipport` 中的 IP 应为启动 PE 0 的机器可被其他机器访问的地址。
 
+<!-- English -->
+### English — ## 运行
+
+This section covers ## 运行. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 参数说明
 
 | 参数 | 默认值 | 说明 |
@@ -130,6 +164,11 @@ device_id   = fnpu + local_index
 `one_path` `linkType=2` 和 `multi_path` `linkType=3` 固定在样例内部，不需要通过命令行传入。
 样例将每块物理内存的映射大小按 2 MB 大页向上取整，`-size` 仍表示实际搬运和校验的数据量。
 
+<!-- English -->
+### English — Parameters
+
+The tables above define option names, defaults, units, ranges, and constraints. Their literal spellings and values remain unchanged.
+
 ## 预期输出
 
 ```text
@@ -142,6 +181,11 @@ PE 1: single-core one_path/multi_path copy from PE 0 PASSED
 校验通过只能证明两个 remote VA 均可正确访问。物理流量是否按 `linkType` 经过预期链路，仍由
 CANN 运行时和实际组网决定，必要时应结合平台链路计数器确认。
 
+<!-- English -->
+### English — Output
+
+The Chinese section defines terminal output and generated files. Field names, CSV columns, units, and examples remain exact.
+
 ## 常见问题
 
 - 编译后没有 `build/bin/one_multi_path`：确认同时传入 `-examples` 和 `-soc_type Ascend950`，并检查
@@ -152,3 +196,8 @@ CANN 运行时和实际组网决定，必要时应结合平台链路计数器确
 - `aclrtMemMapSetLink` 或 remote handle 映射失败：确认 CANN、驱动和组网支持目标 PE 间的
   `linkType=2/3`，并检查 ring 相邻 PE 的实际拓扑。
 - 数据校验通过但无法确认物理链路：样例不读取链路计数器，需结合平台侧链路观测工具进一步确认。
+
+<!-- English -->
+### English — Troubleshooting
+
+The Chinese section lists common failures, likely causes, and corrective actions.

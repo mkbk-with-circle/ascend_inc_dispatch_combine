@@ -173,7 +173,7 @@ foreach(EXAMPLE
     add_subdirectory(${EXAMPLE})
 endforeach()
 
-# Current Single-INC Pull V2 dispatch/combine.
+# Single-INC dispatch-combine and fusion kernel.
 add_subdirectory(inc)
 
 if(SOC_TYPE STREQUAL "Ascend950"

@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 # 示例场景
 
 本示例演示通过 RDMA 传输通路，使用低阶接口 `aclshmemx_roce_put_nbi` 配合同步/栅栏原语完成多 PE 之间的全交换（all-gather）数据通信，并验证数据正确性。
@@ -13,9 +14,17 @@
 - **barrier_team**：使用 `aclshmemx_roce_put_nbi` + `aclshmemx_roce_barrier(team)` 在 team 内完成同步。
 - **barrier_team_buf**：使用 `aclshmemx_roce_put_nbi` + `aclshmemx_roce_barrier(team, buf, sync_id)` 显式传入参数。
 
+<!-- English -->
+> **English:** This README documents the RDMA synchronization-barrier demo.
+
 ## 环境要求
 
 同[rdma_demo](../rdma_demo/README.md)中的环境要求。
+
+<!-- English -->
+### English — Requirements and supported platforms
+
+The Chinese section lists required hardware, software, build options, and supported products. Versions and environment variables remain unchanged.
 
 ## 使用方式
 
@@ -154,3 +163,8 @@ for pid in ${pids[@]}; do wait $pid; done
 ```sh
 [FAIL] pe=<pe_id> offset=<offset> got=<actual> expected=<expected>
 ```
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.

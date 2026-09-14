@@ -1,14 +1,30 @@
+<!-- 中文 / Chinese -->
 # INC Examples
 
-当前开发重点是Single-INC源rank独立分区；旧紧凑布局入口保留作回归对照。
-新协议与已完成验证见[源分区说明](dispatch_combine/single_inc/pull_combine/SOURCE_PARTITIONS.md)。
+当前只维护 Single-INC Pull V2 Dispatch / Combine：
 
 ```text
 dispatch_combine/
-├── common/platform/        # Pull V2 使用的最小 AICore 公共头
-├── single_inc/pull_combine # 协议、kernel、API、示例和 qualification runner
-└── tests/single_inc/       # Pull V2 Host/API 测试
+├── common/platform/         # 必需的 AICore 公共头
+├── single_inc/pull_combine/ # 协议、kernel、API、示例和设备测试
+└── tests/single_inc/        # Host 协议与 API 测试
 ```
 
-从 [`dispatch_combine/single_inc/QUICKSTART.md`](dispatch_combine/single_inc/QUICKSTART.md)
-开始阅读。历史 V1 与 Fusion Kernel 仅存在于归档标签中，不属于当前构建。
+从 [快速接入](dispatch_combine/single_inc/QUICKSTART.md) 开始。历史 V1、
+native stream、inline-route 和 Fusion 实验可从
+`archive/pre-api-cleanup-20260913` 恢复，不参与当前构建。
+
+<!-- English -->
+> **English:** This README documents the maintained Single-INC Pull V2 example tree.
+
+## English
+
+The maintained INC example is Single-INC Pull V2 Dispatch / Combine. Start at
+[Quickstart](dispatch_combine/single_inc/QUICKSTART.md). Legacy and experimental
+implementations are recoverable from `archive/pre-api-cleanup-20260913` and
+are not built.
+
+<!-- English -->
+### English — ## English
+
+This section covers ## English. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.

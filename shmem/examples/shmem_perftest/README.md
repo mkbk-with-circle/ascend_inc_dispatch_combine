@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 # 示例介绍
 
 shmem_perftest是用于测试AscendC::DataCopy、shmem MTE/UDMA/RDMA引擎以及SIMT RMA接口性能的参数化测试示例集合，包含五个子示例：
@@ -10,6 +11,9 @@ shmem_perftest是用于测试AscendC::DataCopy、shmem MTE/UDMA/RDMA引擎以及
 
 该示例可以帮助用户对比多种数据传输方式的性能表现。**该脚本测试结果仅做参考，性能以实际场景为准**
 
+<!-- English -->
+> **English:** This README documents the SHMEM performance-test suite.
+
 ## Python依赖
 
 如果需要生成性能图表和Markdown报告，需要安装以下Python依赖：
@@ -17,6 +21,11 @@ shmem_perftest是用于测试AscendC::DataCopy、shmem MTE/UDMA/RDMA引擎以及
 ```bash
 pip install pandas matplotlib seaborn numpy tabulate
 ```
+
+<!-- English -->
+### English — Requirements and supported platforms
+
+The Chinese section lists required hardware, software, build options, and supported products. Versions and environment variables remain unchanged.
 
 ## 使用说明
 
@@ -121,6 +130,11 @@ bash scripts/build.sh -soc_type Ascend950 -examples -cann
 
 DRAM测试需要运行环境支持Host侧DRAM内存访问，相关硬件和可用内存约束可参考 [rma_d2h_demo](../rma_d2h_demo/README.md) 的“约束限制”章节。mte_perftest默认配置1GB本地内存；当测试参数需要更大本地内存时，程序会按数据量自动上调，运行前需确保可用DRAM空间大于实际本地内存配置。
 
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
+
 ## 输出结果
 
 运行完成后，结果会统一放在 `examples/shmem_perftest/output/` 目录下：
@@ -152,6 +166,11 @@ examples/shmem_perftest/output/
 └── performance_report.md  # （使用--markdown时生成）性能测试报告
 ```
 
+<!-- English -->
+### English — Output
+
+The Chinese section defines terminal output and generated files. Field names, CSV columns, units, and examples remain exact.
+
 ## 单独测试子示例
 
 如果需要单独测试某个子示例，请进入对应子目录查看详细README：
@@ -161,3 +180,8 @@ examples/shmem_perftest/output/
 - **udma_perftest**：请参考 [udma_perftest/README.md](./udma_perftest/README.md)
 - **rdma_perftest**：请参考 [rdma_perftest/README.md](./rdma_perftest/README.md)
 - **simt_rma_perftest**：请参考 [simt_rma_perftest/README.md](./simt_rma_perftest/README.md)
+
+<!-- English -->
+### English — ## 单独测试子示例
+
+This section covers ## 单独测试子示例. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.

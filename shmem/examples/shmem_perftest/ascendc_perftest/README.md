@@ -1,10 +1,19 @@
+<!-- 中文 / Chinese -->
 # ascendc_perftest
 
 > **暂不支持 Ascend950**：当前暂不支持在 Ascend950 平台配套编译运行。
 
+<!-- English -->
+> **English:** This README documents the parameterized AscendC DataCopy benchmark.
+
 ## 示例概述
 
 ascendc_perftest是一个用于**测试AscendC::DataCopy性能并可与shmem的put/get接口进行比较**的参数化测试示例，支持多种测试类型、多种数据类型和灵活的参数配置。该示例可以测试不同核数和数据量下的性能表现，帮助用户评估和比较两种数据传输方式的性能差异，为性能优化提供参考。**该脚本测试结果仅做参考，性能以实际场景为准**
+
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
 
 ## 测试目的
 
@@ -14,6 +23,11 @@ ascendc_perftest是一个用于**测试AscendC::DataCopy性能并可与shmem的p
 2. **shmem的put/get接口**：共享内存的数据传输接口
 
 通过对比测试结果，用户可以了解在不同场景下哪种数据传输方式具有更好的性能表现。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.
 
 ## 功能特性
 
@@ -45,6 +59,11 @@ ascendc_perftest是一个用于**测试AscendC::DataCopy性能并可与shmem的p
 - ✅ 生成CSV格式性能报告
 - ✅ 支持批量测试（"all"选项）
 
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
+
 ## 编译说明
 
 在shmem根目录下编译示例：
@@ -60,6 +79,11 @@ cmake -DUSE_EXAMPLES=ON ..
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 make -j
 ```
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
 
 ## 使用方法
 
@@ -147,6 +171,11 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 python ../utils/perf_data_process.py -d output
 ```
 
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
+
 ## 输出说明
 
 ### CSV文件格式
@@ -178,6 +207,11 @@ CSV文件包含以下字段：
 | `CoreMaxTime/us` | 最大核时间（微秒） |
 | `SingleCoreTime/us` | 单核时间（微秒） |
 
+<!-- English -->
+### English — Output
+
+The Chinese section defines terminal output and generated files. Field names, CSV columns, units, and examples remain exact.
+
 ## 数据验证
 
 测试过程中仅PUT/GET会自动进行数据正确性验证：
@@ -190,6 +224,11 @@ CSV文件包含以下字段：
 ```bash
 [Verification] SUCCESS: All cores' first values transferred correctly!
 ```
+
+<!-- English -->
+### English — Correctness and validation
+
+The Chinese section defines input generation, reference results, checks, tolerances, and pass/fail conditions. Every listed check remains required.
 
 ## 注意事项
 
@@ -211,6 +250,11 @@ CSV文件包含以下字段：
 
 7. **性能稳定性**: 建议使用较大的循环次数（如1000次）以获得稳定的性能数据
 
+<!-- English -->
+### English — Constraints and boundaries
+
+All platform, alignment, resource, synchronization, lifecycle, and safety restrictions listed above apply unchanged.
+
 ## 性能分析建议
 
 1. 对比不同测试类型（put/get/ub2gm_local/ub2gm_remote/gm2ub_local/gm2ub_remote）的性能差异
@@ -219,6 +263,11 @@ CSV文件包含以下字段：
 4. 针对不同的数据量范围分析性能瓶颈
 5. 结合测试结果选择最适合实际应用场景的数据传输方式和数据类型
 6. 对比本地操作（_local）和远端操作（_remote）的性能差异
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.
 
 ## 故障排查
 
@@ -255,3 +304,8 @@ CSV文件包含以下字段：
    ```
 
    解决方案：检查设备状态，可能需要重置设备或重新运行测试。
+
+<!-- English -->
+### English — Troubleshooting
+
+The Chinese section lists common failures, likely causes, and corrective actions.

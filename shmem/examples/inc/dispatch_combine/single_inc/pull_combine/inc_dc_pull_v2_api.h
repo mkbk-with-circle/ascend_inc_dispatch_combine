@@ -2,7 +2,7 @@
 #define INC_DC_PULL_V2_API_H
 
 #include <cstdint>
-#include "inc_dc_pull_dispatch_v2_abi.h"
+#include <limits>
 
 namespace inc::dc::pull_v2::api {
 
@@ -78,11 +78,6 @@ struct DispatchOutput {
     uint32_t assignment_capacity = 0u;
     uint32_t *recv_row_count = nullptr;
     uint32_t *recv_assignment_count = nullptr;
-    // Optional caller-owned device views. Rows are unique (token, GPU);
-    // assignments carry every expert/weight and index those compact rows.
-    DestinationRow *recv_rows = nullptr;
-    ExpertAssignment *recv_assignments = nullptr;
-    uint32_t *recv_expert_counts = nullptr; // [config.expert_count]
 };
 
 // Current device-qualified Combine contract is FP32 partial/reduction/output.
@@ -108,18 +103,12 @@ struct BatchHandle {
     WaveId id{};
     BackendTicket ticket{};
     bool live = false;
-    uint64_t instance = 0u;
-    uint64_t lease = 0u;
 };
 
 struct Completion {
     BackendTicket ticket{};
     bool live = false;
-    uint64_t instance = 0u;
-    uint64_t request = 0u;
 };
-
-struct SessionState;
 
 struct BackendOps {
     StatusCode (*create)(void *context, const SessionConfig &config) = nullptr;
@@ -141,17 +130,11 @@ struct BackendOps {
 };
 
 struct SingleIncSession {
-    // Host calls on a session must be externally serialized. Device requests
-    // in different ring slots can remain in flight concurrently.
-    SingleIncSession() = default;
-    SingleIncSession(const SingleIncSession &) = delete;
-    SingleIncSession &operator=(const SingleIncSession &) = delete;
     SessionConfig config{};
     BackendOps backend{};
     void *backend_context = nullptr;
     uint32_t live_batches = 0u;
     bool initialized = false;
-    SessionState *state = nullptr;
 };
 
 Status single_inc_create(
@@ -164,10 +147,6 @@ Status completion_query(
 Status completion_wait(
     SingleIncSession *session, const Completion &completion,
     uint64_t timeout_ns = 0u);
-
-// A successful query/wait consumes the completion ticket. Observe Dispatch
-// completion before Combine or batch_release. Observe Combine completion
-// before slot reuse or destroy; timeout never releases a slot.
 
 Status DispatchAsync(
     SingleIncSession *session, DataType dtype, const WaveId &id,
@@ -202,6 +181,10 @@ Status shmem_dispatch_alltoall_inc(
     uint32_t topk, DispatchOutput *output, Stream stream,
     BatchHandle *batch, Completion *completion)
 {
+    if (topk == 0u ||
+        token_count > std::numeric_limits<uint32_t>::max() / topk) {
+        return Status{StatusCode::INVALID_ARGUMENT, "invalid argument"};
+    }
     DispatchInput input{};
     input.send_buffer = send_buffer;
     input.send_token_ids = send_token_ids;

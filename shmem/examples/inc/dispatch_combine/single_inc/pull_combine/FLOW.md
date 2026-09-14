@@ -1,58 +1,93 @@
-# 源rank独立分区：抽象流程
+# Pull V2 抽象流程
 
-s是原始源rank；B_s是专家Worker B为源s预留的分区。位置由容量决定，
-实际数量只影响本分区使用范围。以下每个流程都对应一个origin。
+本文只描述协议阶段和生命周期，不对应某个具体函数。
 
 ## Dispatch
 
 ```text
-A_s准备本wave的hidden与metadata
-  ↓ 固定Source Slot
-发布一次64B READY ─────────────────→ INC轮询本源READY
-                                      ↓
-本源Header/metadata被GET ←────────── GET并校验身份、容量、路由
-                                      ↓
-                                   计算本源局部行号r，建立本源Journal
-                                      ↓
-本源hidden tile被GET ←────────────── GET一份hidden，循环缓冲
-                                      ↓
-B.hidden[ring][s][r] ←─────────────── PUT到各唯一目标B的固定s分区
-B_s的路由metadata   ←─────────────── 保留全部expert assignment
-                                      ↓ 本执行组校验与传输完成
-                                   本源Journal：DISPATCH_SEALED
-B_s可以消费         ←────────────── 本分区Destination Completion
-A_s源slot可复用     ←────────────── Source ACK
+┌──────────────────────── A 端 Worker ────────────────────────┐
+│ 1. 生成 Hidden、Token ID、Top-k GPU/Expert/Weight           │
+│ 2. 写入一个完整且不可变的 Source Slot                       │
+│ 3. PUT Header+Metadata 到 INC，再发布一次 64B READY         │
+└────────────────────────────┬─────────────────────────────────┘
+                             │ READY：Metadata 已在 INC；Hidden 可 GET
+                             ▼
+┌──────────────────────── INC Dispatch 半区 ──────────────────┐
+│ 4. 收到 READY，直接读取本地 Header+Metadata inbox           │
+│ 5. 并行刷新并解析 Metadata，无控制面 GET 往返               │
+│ 6. 在线校验 CSR、GPU、Expert、Ordinal、Weight、Digest       │
+│ 7. 计算每个目标的 Row / Assignment / Expert 前缀            │
+│ 8. 建立 Journal：Owner Token ↔ Contributor B Rows           │
+│                                                              │
+│ 9. 每个 Token Hidden 只从源 Worker GET 一次                 │
+│    ├─ Uniform：Worker → INC UB → 多个目标直接 PUT            │
+│    └─ Non-uniform：INC 按目标重整 → 每目标一次 Bulk PUT       │
+│                                                              │
+│10. PUT DestinationRow / ExpertAssignment / ExpertCount      │
+│11. 等待所有远端数据可见，Journal 进入 DISPATCH_SEALED       │
+└───────────────┬───────────────────────────────┬──────────────┘
+                │ Destination Completion        │ Source ACK
+                ▼                               ▼
+┌──────────────── B 端 Worker ─────────────┐  ┌── A 端 Worker ─┐
+│ 可以消费 Expert 输入，开始 Expert Compute │  │ 可以复用源 Slot │
+└───────────────────────────────────────────┘  └────────────────┘
 ```
 
-同源目标集合一致可连续搬运，变化时逐token定位；对齐主路径分别采用双缓冲/三缓冲。
-INC验证Worker提示。其他源可以尚未READY，先到源仍可完成自己的PUT与通知。
+Dispatch 的核心语义：
+
+```text
+一份源 Token Hidden → INC → 每个命中的 Unique Destination 一份 Hidden
+```
+
+同一 GPU 上多个 Expert 只增加 Assignment，不增加网络 Hidden 副本。
 
 ## Combine
 
 ```text
-B消费D已完成的源s分区                 INC等待本源真实Journal封存
-  ↓ 专家计算、本地加权归约              ↓ 分段并行校验token及贡献，合并检查段间边界
-准备partial[ring][s][r]和128B READY
-  ↓
-PUT128B描述到INC，quiet确认可见 ────→ INC保存对应dst/src分区就绪描述
-  ↓
-发布64B Notice到[s][ring][B] ───────→ 轮询路由记录实际需要的dst
-                                      ↓ 读取INC本地128B描述
-                                   校验cookie、行数、dtype、分区地址
-                                      ↓ 标记该B_s可读
-B_s partial tile被GET ←──────────── 按token贡献记录，等所需B_s并GET
-                                      ↓ 两份一批FP32累加
-A_s原始token输出行  ←────────────── PUT已收齐贡献的结果tile
-                                      ↓ 本执行组quiet / 汇合
-                                   本源Journal：COMPLETE或ABORTED
-B_s partial可复用   ←────────────── 本分区Source ACK
-A_s结果可消费       ←────────────── Owner Completion
+┌──────────────────────── B 端 Worker ─────────────────────────┐
+│ 1. 执行 Expert FFN                                           │
+│ 2. 同一 Token 在本 GPU 上的多个 Expert 先做 Local Reduce      │
+│ 3. FP32 Partial Rows 与 128B READY 写入注册 Ring Slot         │
+│ 4. PUT 128B READY 到 INC，完成后发布一次 64B Notice           │
+└────────────────────────────┬──────────────────────────────────┘
+                             │ Notice
+                             ▼
+┌──────────────────────── INC Combine 半区 ────────────────────┐
+│ 5. 验证 Notice 的 Session / Generation / Wave / Source       │
+│ 6. 读取 INC 本地 READY，校验 Cookie / Row Count / Offset     │
+│ 7. 读取 Dispatch Seal 时生成的确定性 Pull Index              │
+│ 8. 已 READY 的 Source 可以先处理，不等待 Rank 顺序            │
+│                                                               │
+│ 9. 按 Token GET 各 B 的 Partial Rows                          │
+│    ├─ Top-k2：两个 GET → 一次 FP32 Add                        │
+│    └─ Generic：按 Journal 固定顺序逐 Contributor Reduction    │
+│                                                               │
+│10. 上一 Task 的 Owner PUT 与下一 Task 的 Partial GET 交叠     │
+│11. 最终结果只 PUT 给原始 Owner Rank / Owner Row               │
+│12. 全部远端可见后，Journal 进入 COMPLETE 或 ABORTED           │
+└───────────────┬───────────────────────────────┬───────────────┘
+                │ Combine Source ACK            │ Owner Completion
+                ▼                               ▼
+┌──────────────── B 端 Worker ─────────────┐  ┌── A 端 Owner ───┐
+│ 可以复用 Partial Slot                     │  │ 可以消费最终输出 │
+└───────────────────────────────────────────┘  └─────────────────┘
 ```
 
-描述先PUT、Notice后发布；INC不再发起GET READY。partial按归约任务拉取，真实贡献未到齐仍须等待。
-Journal校验仅在本origin组内并行，全部检查通过后才接受所需Notice；摘要留在INC本地。
-每AIV为两输入/两输出各16 KiB，同token下一tile的GET可提前；复用和错误退出均排空事件。
-ACK与Owner Completion可交错到达。分区C直接消费设备D的Journal，Host不构造归约索引。
+Combine 的核心语义：
 
-不同origin或不同可用ring slot可使用独立stream；同一origin的C依赖其D Journal封存。
-ring slot按本分区生命周期复用。验证范围见[SOURCE_PARTITIONS.md](SOURCE_PARTITIONS.md)。
+```text
+多个 B Local Partial → INC FP32 Reduction → 原始 A Owner 的一份结果
+```
+
+## 不同 Wave 的交叠
+
+```text
+时间 ─────────────────────────────────────────────────────────►
+
+INC Dispatch 半区： [ Dispatch Wave N+1 ─────────────────── ]
+INC Combine 半区：       [ Combine Wave N ─────────── ]
+B Expert Compute：                                         [ N+1 ]
+```
+
+`Combine(N)` 可以和 `Dispatch(N+1)` 任意错峰；同一 Wave 的 Combine 仍必须等待
+对应 Dispatch Journal Sealed。

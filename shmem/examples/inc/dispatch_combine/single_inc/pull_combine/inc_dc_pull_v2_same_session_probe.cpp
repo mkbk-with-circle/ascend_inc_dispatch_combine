@@ -95,6 +95,7 @@ struct DispatchContext {
     std::vector<uint8_t> local_slot;
     P::Ready local_ready{};
     uint64_t source_stride = 0u;
+    uint64_t metadata_inbox_stride = sizeof(P::SlotHeader);
     uint64_t row_capacity = 1u;
     uint64_t assignment_capacity = 1u;
     uint64_t journal_token_capacity = 1u;
@@ -109,7 +110,7 @@ struct DispatchContext {
     uint64_t expert_slot_stride = 0u;
     uint64_t parser_scratch_entries = 0u;
     uint32_t dispatch_blocks = 0u;
-    D::GuardedBuffer source_region, ready_mailbox, source_acks;
+    D::GuardedBuffer source_region, ready_mailbox, metadata_inbox, source_acks;
     D::GuardedBuffer destination_hidden, destination_rows;
     D::GuardedBuffer destination_assignments, destination_expert_counts;
     D::GuardedBuffer destination_completions;
@@ -145,6 +146,10 @@ struct DispatchContext {
             sizing.layout.contributors.size(), 1u);
         prefix_entries = static_cast<uint64_t>(o.workers + 1u) * o.workers;
         expert_entries = static_cast<uint64_t>(o.workers) * o.expert_count;
+        for (const P::ParsedSource &source : sizing.sources)
+            metadata_inbox_stride = std::max<uint64_t>(
+                metadata_inbox_stride, source.header.hidden_offset);
+        metadata_inbox_stride = D::Align64(metadata_inbox_stride);
         const uint64_t row_bytes = static_cast<uint64_t>(o.hidden) * 2u;
         hidden_slot_stride = D::Align64(row_capacity * row_bytes);
         rows_slot_stride = D::Align64(
@@ -153,7 +158,8 @@ struct DispatchContext {
             assignment_capacity * sizeof(P::ExpertAssignment));
         expert_slot_stride = D::Align64(
             static_cast<uint64_t>(o.expert_count) * sizeof(uint32_t));
-        buffers = {&source_region, &ready_mailbox, &source_acks,
+        buffers = {&source_region, &ready_mailbox, &metadata_inbox,
+            &source_acks,
             &destination_hidden, &destination_rows, &destination_assignments,
             &destination_expert_counts, &destination_completions, &inc_slots,
             &inc_destination_rows, &inc_destination_assignments,
@@ -179,6 +185,9 @@ struct DispatchContext {
                   "ss_d_source_region") &&
             alloc(&ready_mailbox, o.workers * sizeof(P::Ready), true,
                   "ss_d_ready") &&
+            alloc(&metadata_inbox,
+                  static_cast<uint64_t>(o.workers) * metadata_inbox_stride,
+                  true, "ss_d_metadata_inbox") &&
             alloc(&source_acks, o.workers * sizeof(P::SourceConsumed), true,
                   "ss_d_acks") &&
             alloc(&destination_hidden,
@@ -266,7 +275,8 @@ struct DispatchContext {
                 D::Fill(&destination_expert_counts, D::kPoison) &&
                 D::Fill(&destination_completions, 0u) ? 0 : 1;
         if (status == 0 && pe == inc_pe) {
-            status = D::Fill(&inc_slots, 0u) &&
+            status = D::Fill(&metadata_inbox, 0u) &&
+                D::Fill(&inc_slots, 0u) &&
                 D::Fill(&inc_destination_rows, D::kPoison) &&
                 D::Fill(&inc_destination_assignments, D::kPoison) &&
                 D::Fill(&journal_tokens, D::kPoison) &&
@@ -292,7 +302,8 @@ struct DispatchContext {
     {
         D::launch_inc_dc_pull_dispatch_v2_device(
             aiv, stream, source_region.data, ready_mailbox.data,
-            inc_slots.data, source_acks.data, destination_hidden.data,
+            metadata_inbox.data, inc_slots.data, source_acks.data,
+            destination_hidden.data,
             destination_rows.data, destination_assignments.data,
             destination_expert_counts.data, destination_completions.data,
             inc_destination_rows.data, inc_destination_assignments.data,
@@ -303,6 +314,7 @@ struct DispatchContext {
             expert_counts.data, parser_scratch.data, status_line.data,
             shmemx_get_ffts_config(), D::kSessionId, D::kPlacementEpoch,
             D::kFirstGeneration, D::kFirstSequence, source_stride,
+            metadata_inbox_stride,
             hidden_slot_stride, rows_slot_stride, assignments_slot_stride,
             expert_slot_stride, journal_token_capacity,
             journal_contributor_capacity, journal_assignment_capacity,
@@ -348,7 +360,7 @@ struct CombineContext {
     uint64_t pull_capacity = 1u;
     uint64_t accumulator_capacity = 1u;
     uint64_t source_capacity = 1u;
-    C::GuardedBuffer partials, ready, notices, ready_staging, registrations;
+    C::GuardedBuffer partials, ready, notices, registrations;
     C::GuardedBuffer acks, output, completions, source_offsets, pulls;
     C::GuardedBuffer owner_offsets, results, journal, pull_next, heads;
     C::GuardedBuffer counts, result_index, ready_state, payload_offsets;
@@ -365,8 +377,8 @@ struct CombineContext {
         accumulator_capacity = std::max<uint64_t>(
             sizing.plan.accumulator_count, 1u);
         source_capacity = std::max<uint64_t>(o.workers, 1u);
-        buffers = {&partials, &ready, &notices, &ready_staging,
-            &registrations, &acks, &output, &completions, &source_offsets,
+        buffers = {&partials, &ready, &notices, &registrations, &acks,
+            &output, &completions, &source_offsets,
             &pulls, &owner_offsets, &results, &journal, &pull_next, &heads,
             &counts, &result_index, &ready_state, &payload_offsets,
             &timeline_buffer};
@@ -388,8 +400,6 @@ struct CombineContext {
                   static_cast<uint64_t>(C::kRingSlots) * o.workers *
                       sizeof(P::CombineReadyNoticeV2), true,
                   "ss_c_notices") &&
-            alloc(&ready_staging, static_cast<uint64_t>(o.workers) *
-                  sizeof(P::CombineReadyV2), false, "ss_c_ready_staging") &&
             alloc(&registrations, static_cast<uint64_t>(o.workers) *
                   sizeof(P::CombineRegionRegistration), true,
                   "ss_c_registrations") &&
@@ -484,7 +494,6 @@ struct CombineContext {
                     wave.plan.accumulator_contributor_counts) &&
                 C::CopyToDevice(result_index.data,
                     wave.plan.accumulator_result_index) &&
-                C::Fill(&ready_staging, C::kPoison) &&
                 C::Fill(&ready_state, 0u) &&
                 C::Fill(&payload_offsets, 0u) &&
                 C::Fill(&timeline_buffer, 0u) ? 0 : 1;
@@ -500,7 +509,7 @@ struct CombineContext {
     {
         C::launch_inc_dc_pull_combine_v2_device(
             aiv, stream, partials.data, ready.data, notices.data,
-            ready_staging.data, registrations.data, acks.data, output.data,
+            registrations.data, acks.data, output.data,
             completions.data, source_offsets.data, pulls.data,
             owner_offsets.data, results.data, journal.data, pull_next.data,
             heads.data, counts.data, result_index.data, ready_state.data,
@@ -519,7 +528,7 @@ struct CombineContext {
     {
         bool ok = pe < inc_pe
             ? C::ValidateWorker(o, wave, 0u, acks, output, completions)
-            : C::ValidateInc(wave, journal, ready_staging, notices,
+            : C::ValidateInc(wave, journal, ready, notices,
                 ready_state, timeline_buffer, timeline);
         for (C::GuardedBuffer *buffer : buffers)
             ok = C::GuardsValid(*buffer) && ok;

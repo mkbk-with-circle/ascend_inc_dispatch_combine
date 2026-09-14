@@ -1,30 +1,19 @@
-# ascend_inc_dispatch_combine
+# Single-INC Pull V2 Dispatch/Combine
 
-昇腾 Single-INC Dispatch/Combine：src独立分区，INC pull / fan-out / reduction。
-Combine由dst先推送128B就绪描述，再发布64B Notice；INC直接读取本地描述。
+本仓库保留一套基于 SHMEM 的昇腾 Single-INC Pull V2 实现。`shmem/` 包含基础库、当前 Dispatch/Combine 设备路径、公共 API、示例和验证测试。
 
-当前树只保留：
+Dispatch 使用 `metadata PUT → READY → INC 本地解析 → hidden GET → fan-out`；Combine 使用 `READY 描述 PUT → Notice → 本地校验 → partial GET → FP32 归约 → owner PUT`。
 
-- SHMEM 基础库；
-- Pull V2 Dispatch/Combine 协议和设备 kernel；
-- 公共 API 与完整调用示例；
-- Host、设备 E2E、交叠和压力测试代码；
-- nb-borrow W2/W4 汇总资格证据。
+从 [快速接入](shmem/examples/inc/dispatch_combine/single_inc/QUICKSTART.md)、[API 与构建说明](shmem/examples/inc/dispatch_combine/single_inc/pull_combine/README.md) 和 [当前验证报告](shmem/docs/inc/report/nb-borrow/pull_v2_current_20260913/README.md) 开始。当前报告只将与最终 Dispatch 库匹配的 W2/W4 真机数据列为现行结果；Combine 的新设备带宽尚待真机复测。
 
-V1、inline-route、旧 framework/runtime、Fusion Kernel 和历史结果均已从当前树删除，
-可通过 Git 标签 `archive/pre-minimal-v1-fusion-20260904` 完整恢复。
+旧实验及历史结果可通过 Git 历史查阅；当前主线仅展示交付所需文件。构建产物和原始运行日志不纳入 Git。
 
-## 快速入口
+## English
 
-- [当前设备入口、构建和运行](shmem/examples/inc/dispatch_combine/single_inc/pull_combine/README.md)
-- [完整设备D→C示例](shmem/examples/inc/dispatch_combine/single_inc/pull_combine/inc_dc_source_partition_device_e2e.cpp)
-- [API适配状态](shmem/docs/inc/API_COMPLETION_STATUS.md)
-- [前端调用流程](shmem/examples/inc/dispatch_combine/single_inc/QUICKSTART.md)
-- [Pull V2 README](shmem/examples/inc/dispatch_combine/single_inc/pull_combine/README.md)
-- [公共 API](shmem/examples/inc/dispatch_combine/single_inc/pull_combine/inc_dc_pull_v2_api.h)
-- [完整示例](shmem/examples/inc/dispatch_combine/single_inc/pull_combine/inc_dc_pull_v2_api_example.cpp)
-- [Dispatch/Combine 流程图](shmem/examples/inc/dispatch_combine/single_inc/pull_combine/FLOW.md)
-- [当前 nb 结果](shmem/docs/inc/report/single_inc_LIVE_STATUS.md)
+This repository contains one maintained Ascend Single-INC Pull V2 implementation built on SHMEM. The `shmem/` directory includes the base library, current Dispatch and Combine device paths, public API, examples, and validation tests.
 
-构建产物、原始 JSONL、PE 日志和 profiler trace 不进入 Git。
-公共前端仍需适配分区设备后端；完整NPU链路请从上述设备示例开始。
+Dispatch follows `metadata PUT → READY → local INC parse → hidden GET → fan-out`. Combine follows `READY descriptor PUT → Notice → local validation → partial GET → FP32 reduction → owner PUT`.
+
+Start with the [quickstart](shmem/examples/inc/dispatch_combine/single_inc/QUICKSTART.md), [API and build guide](shmem/examples/inc/dispatch_combine/single_inc/pull_combine/README.md), and [current validation report](shmem/docs/inc/report/nb-borrow/pull_v2_current_20260913/README.md). The current report treats only W2/W4 device measurements matching the final Dispatch library as current results; device bandwidth for the new Combine path still needs to be measured.
+
+Earlier experiments and results remain available in Git history. The current main branch shows only delivery files; build artifacts and raw runtime logs are excluded.

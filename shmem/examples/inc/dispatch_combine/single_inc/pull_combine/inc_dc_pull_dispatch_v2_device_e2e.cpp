@@ -23,7 +23,8 @@ using namespace inc::dc::pull_v2;
 
 extern "C" void launch_inc_dc_pull_dispatch_v2_device(
     uint32_t block_dim, void *stream, uint8_t *source_region,
-    uint8_t *ready_mailbox, uint8_t *inc_slots, uint8_t *source_acks,
+    uint8_t *ready_mailbox, uint8_t *metadata_inbox, uint8_t *inc_slots,
+    uint8_t *source_acks,
     uint8_t *destination_hidden, uint8_t *destination_rows,
     uint8_t *destination_assignments, uint8_t *destination_expert_counts,
     uint8_t *destination_completions, uint8_t *inc_destination_rows,
@@ -36,7 +37,8 @@ extern "C" void launch_inc_dc_pull_dispatch_v2_device(
     uint8_t *parser_scratch, uint8_t *status_line, uint64_t ffts_addr,
     uint64_t session_id,
     uint64_t placement_epoch, uint64_t generation, uint64_t sequence,
-    uint64_t source_slot_stride, uint64_t destination_hidden_slot_stride,
+    uint64_t source_slot_stride, uint64_t metadata_inbox_stride,
+    uint64_t destination_hidden_slot_stride,
     uint64_t destination_rows_slot_stride,
     uint64_t destination_assignments_slot_stride,
     uint64_t destination_expert_counts_slot_stride,
@@ -81,19 +83,9 @@ constexpr double kSystemCycleUs = 0.02; // GetSystemCycle is 50 MHz on 910B.
 enum class Workload {
     SYM_DENSE,
     SYM_K2_BALANCED,
-    SYM_K4_GPU4,
-    SYM_K4_GPU2,
-    SYM_K8_GPU4,
     SYM_K1_RR,
     HOTSPOT,
     RAGGED,
-    RANDOM_K2_GPU2,
-    RANDOM_K4_GPU2,
-    RANDOM_K4_GPU4,
-    RANDOM_K8_GPU4,
-    RANDOM_EXPERT_K2,
-    RANDOM_EXPERT_K4,
-    RANDOM_EXPERT_K8,
 };
 
 struct Options {
@@ -130,6 +122,7 @@ struct WaveOracle {
     std::vector<JournalContributor> fixed_contributors;
     uint64_t ingress_hidden_bytes = 0u;
     uint64_t egress_hidden_bytes = 0u;
+    uint64_t aggregate_logical_bytes = 0u;
     uint64_t logical_bytes = 0u;
 };
 
@@ -202,11 +195,7 @@ bool ParserScratchEntries(uint32_t blocks, uint32_t workers,
         Add(entries, row_extent, &entries) &&
         Add(entries, row_extent, &entries) &&
         Add(entries, expert_extent, &entries) &&
-        Add(entries, source_extent, &entries) &&
-        Add(entries, row_extent, &entries) &&
-        Add(entries, row_extent, &entries) &&
-        Add(entries, block_extent, &entries) &&
-        Add(entries, static_cast<uint64_t>(active) * (2u + 2u * workers) * 8u * 32u, out);
+        Add(entries, source_extent, out);
 }
 
 void DumpParserState(const GuardedBuffer &buffer, uint32_t blocks,
@@ -287,46 +276,15 @@ bool ParseWorkload(const char *text, Workload *workload)
         *workload = Workload::SYM_DENSE;
     else if (std::strcmp(text, "sym_k2_balanced") == 0)
         *workload = Workload::SYM_K2_BALANCED;
-    else if (std::strcmp(text, "sym_k4_gpu4") == 0)
-        *workload = Workload::SYM_K4_GPU4;
-    else if (std::strcmp(text, "sym_k4_gpu2") == 0)
-        *workload = Workload::SYM_K4_GPU2;
-    else if (std::strcmp(text, "sym_k8_gpu4") == 0)
-        *workload = Workload::SYM_K8_GPU4;
     else if (std::strcmp(text, "sym_k1_rr") == 0)
         *workload = Workload::SYM_K1_RR;
     else if (std::strcmp(text, "hotspot") == 0)
         *workload = Workload::HOTSPOT;
     else if (std::strcmp(text, "ragged") == 0)
         *workload = Workload::RAGGED;
-    else if (std::strcmp(text, "random_k2_gpu2") == 0)
-        *workload = Workload::RANDOM_K2_GPU2;
-    else if (std::strcmp(text, "random_k4_gpu2") == 0)
-        *workload = Workload::RANDOM_K4_GPU2;
-    else if (std::strcmp(text, "random_k4_gpu4") == 0)
-        *workload = Workload::RANDOM_K4_GPU4;
-    else if (std::strcmp(text, "random_k8_gpu4") == 0)
-        *workload = Workload::RANDOM_K8_GPU4;
-    else if (std::strcmp(text, "random_expert_k2") == 0)
-        *workload = Workload::RANDOM_EXPERT_K2;
-    else if (std::strcmp(text, "random_expert_k4") == 0)
-        *workload = Workload::RANDOM_EXPERT_K4;
-    else if (std::strcmp(text, "random_expert_k8") == 0)
-        *workload = Workload::RANDOM_EXPERT_K8;
     else
         return false;
     return true;
-}
-
-bool RandomRouting(Workload workload)
-{
-    return workload == Workload::RANDOM_K2_GPU2 ||
-           workload == Workload::RANDOM_K4_GPU2 ||
-           workload == Workload::RANDOM_K4_GPU4 ||
-           workload == Workload::RANDOM_K8_GPU4 ||
-           workload == Workload::RANDOM_EXPERT_K2 ||
-           workload == Workload::RANDOM_EXPERT_K4 ||
-           workload == Workload::RANDOM_EXPERT_K8;
 }
 
 uint32_t TokensForSource(const Options &o, uint32_t source,
@@ -381,45 +339,7 @@ SourceInput MakeInput(const Options &o, uint32_t source,
         const uint64_t random = Mix(o.seed ^
             (static_cast<uint64_t>(source) << 32u) ^ token);
         std::vector<uint32_t> destinations;
-        std::vector<uint32_t> selected_experts;
         switch (o.workload) {
-            case Workload::RANDOM_EXPERT_K2:
-            case Workload::RANDOM_EXPERT_K4:
-            case Workload::RANDOM_EXPERT_K8: {
-                const uint32_t k = o.workload == Workload::RANDOM_EXPERT_K2 ? 2u :
-                    o.workload == Workload::RANDOM_EXPERT_K4 ? 4u : 8u;
-                std::vector<uint32_t> sorted;
-                for (uint32_t i = 0u; i < k; ++i) {
-                    // Draw from the remaining experts without a retry loop or
-                    // an O(expert_count) temporary permutation per token.
-                    uint32_t expert = Mix(random ^ (i + 1u)) % (o.expert_count - i);
-                    for (uint32_t previous : sorted)
-                        if (expert >= previous) ++expert;
-                    sorted.insert(std::lower_bound(sorted.begin(), sorted.end(), expert), expert);
-                    selected_experts.push_back(expert);
-                    destinations.push_back(static_cast<uint64_t>(expert) * o.workers / o.expert_count);
-                }
-                break;
-            }
-            case Workload::RANDOM_K2_GPU2:
-            case Workload::RANDOM_K4_GPU2:
-            case Workload::RANDOM_K4_GPU4:
-            case Workload::RANDOM_K8_GPU4: {
-                std::vector<uint32_t> peers(o.workers);
-                std::iota(peers.begin(), peers.end(), 0u);
-                for (uint32_t i = o.workers - 1u; i > 0u; --i)
-                    std::swap(peers[i], peers[Mix(random ^ i) % (i + 1u)]);
-                const uint32_t gpu_k =
-                    o.workload == Workload::RANDOM_K2_GPU2 ||
-                    o.workload == Workload::RANDOM_K4_GPU2 ? 2u : 4u;
-                const uint32_t copies =
-                    o.workload == Workload::RANDOM_K4_GPU2 ||
-                    o.workload == Workload::RANDOM_K8_GPU4 ? 2u : 1u;
-                for (uint32_t i = 0u; i < gpu_k; ++i)
-                    for (uint32_t e = 0u; e < copies; ++e)
-                        destinations.push_back(peers[i]);
-                break;
-            }
             case Workload::SYM_DENSE:
                 for (uint32_t destination = 0u;
                      destination < o.workers; ++destination)
@@ -428,24 +348,6 @@ SourceInput MakeInput(const Options &o, uint32_t source,
             case Workload::SYM_K2_BALANCED:
                 destinations.push_back(source % o.workers);
                 destinations.push_back((source + 1u) % o.workers);
-                break;
-            case Workload::SYM_K4_GPU4:
-                for (uint32_t destination = 0u; destination < 4u;
-                     ++destination)
-                    destinations.push_back(destination);
-                break;
-            case Workload::SYM_K4_GPU2:
-                destinations.push_back(source % o.workers);
-                destinations.push_back(source % o.workers);
-                destinations.push_back((source + 1u) % o.workers);
-                destinations.push_back((source + 1u) % o.workers);
-                break;
-            case Workload::SYM_K8_GPU4:
-                for (uint32_t destination = 0u; destination < 4u;
-                     ++destination) {
-                    destinations.push_back(destination);
-                    destinations.push_back(destination);
-                }
                 break;
             case Workload::SYM_K1_RR:
                 destinations.push_back(
@@ -471,36 +373,11 @@ SourceInput MakeInput(const Options &o, uint32_t source,
              ++ordinal) {
             AssignmentRecord assignment{};
             assignment.destination_rank = destinations[ordinal];
-            if (!selected_experts.empty()) {
-                assignment.expert_id = selected_experts[ordinal];
-                assignment.weight = 1.0f / selected_experts.size();
-            } else if (RandomRouting(o.workload)) {
-                const uint32_t copies =
-                    o.workload == Workload::RANDOM_K4_GPU2 ||
-                    o.workload == Workload::RANDOM_K8_GPU4 ? 2u : 1u;
-                const uint32_t local_experts = o.expert_count / o.workers;
-                const uint32_t base = static_cast<uint32_t>(
-                    Mix(random ^ (static_cast<uint64_t>(destinations[ordinal]) << 40u)) % local_experts);
-                assignment.expert_id = destinations[ordinal] * local_experts +
-                    (base + ordinal % copies) % local_experts;
-                assignment.weight = 1.0f / destinations.size();
-            } else if (o.workload == Workload::SYM_K4_GPU4) {
-                assignment.expert_id =
-                    destinations[ordinal] * 4u + source;
-                assignment.weight = 0.25f;
-            } else if (o.workload == Workload::SYM_K4_GPU2 ||
-                       o.workload == Workload::SYM_K8_GPU4) {
-                assignment.expert_id =
-                    destinations[ordinal] * 4u + (ordinal & 1u);
-                assignment.weight = o.workload == Workload::SYM_K8_GPU4
-                    ? 0.125f : 0.25f;
-            } else {
-                assignment.expert_id = static_cast<uint32_t>(Mix(
-                    random + ordinal * 17u) % o.expert_count);
-                assignment.weight = static_cast<float>(ordinal + 1u) /
-                    static_cast<float>(destinations.size() + 1u);
-            }
+            assignment.expert_id = static_cast<uint32_t>(Mix(
+                random + ordinal * 17u) % o.expert_count);
             assignment.ordinal = ordinal;
+            assignment.weight = static_cast<float>(ordinal + 1u) /
+                static_cast<float>(destinations.size() + 1u);
             input.assignments.push_back(assignment);
         }
         input.assignment_offsets.push_back(
@@ -741,8 +618,12 @@ bool BuildOracle(const Options &o, uint64_t generation, uint64_t sequence,
     const uint64_t row_bytes = static_cast<uint64_t>(o.hidden) * 2u;
     for (const auto &rows : built.layout.destination_rows)
         built.egress_hidden_bytes += rows.size() * row_bytes;
-    built.logical_bytes = built.ingress_hidden_bytes +
-                          built.egress_hidden_bytes;
+    // Primary operator bandwidth is directional: Dispatch delivers hidden
+    // bytes from INC to destination workers.  The sum of GET+PUT traffic is
+    // retained only as an aggregate-traffic diagnostic.
+    built.logical_bytes = built.egress_hidden_bytes;
+    built.aggregate_logical_bytes = built.ingress_hidden_bytes +
+                                    built.egress_hidden_bytes;
     *oracle = std::move(built);
     return true;
 }
@@ -1153,8 +1034,8 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
     const double seconds = us * 1e-6;
     const double gbps = seconds == 0.0 ? 0.0 :
         static_cast<double>(oracle.logical_bytes) / seconds / 1e9;
-    const double downlink_gbps = seconds == 0.0 ? 0.0 :
-        static_cast<double>(oracle.egress_hidden_bytes) / seconds / 1e9;
+    const double aggregate_gbps = seconds == 0.0 ? 0.0 :
+        static_cast<double>(oracle.aggregate_logical_bytes) / seconds / 1e9;
     const double protocol_us = timeline.all_ready != 0u &&
         timeline.kernel_done > timeline.all_ready
         ? static_cast<double>(timeline.kernel_done - timeline.all_ready) *
@@ -1167,8 +1048,6 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
               << "{\"test\":\"pull_dispatch_v2_device_e2e\""
               << ",\"workers\":" << o.workers
               << ",\"workload\":\"" << o.workload_name << "\""
-              << ",\"first_npu\":" << o.first_npu
-              << ",\"route_seed\":" << o.seed
               << ",\"iteration\":" << iteration
               << ",\"phase\":\"" << (warmup ? "warmup" : "measure")
               << "\",\"generation\":" << oracle.generation
@@ -1183,20 +1062,13 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
               << oracle.ingress_hidden_bytes
               << ",\"egress_hidden_bytes\":"
               << oracle.egress_hidden_bytes
-              << ",\"source_hidden_bytes\":[";
-    for (uint32_t source = 0u; source < o.workers; ++source) {
-        if (source) std::cout << ',';
-        std::cout << static_cast<uint64_t>(oracle.source_tokens[source]) * o.hidden * 2u;
-    }
-    std::cout << "],\"destination_hidden_bytes\":[";
-    for (uint32_t destination = 0u; destination < o.workers; ++destination) {
-        if (destination) std::cout << ',';
-        std::cout << static_cast<uint64_t>(oracle.layout.destination_rows[destination].size()) * o.hidden * 2u;
-    }
-    std::cout << ']' << ",\"logical_bytes\":" << oracle.logical_bytes
+              << ",\"logical_bytes\":" << oracle.logical_bytes
+              << ",\"bandwidth_definition\":\"dispatch_egress_bytes/full_operator_time\""
               << ",\"makespan_us\":" << us
               << ",\"logical_gb_s\":" << gbps
-              << ",\"downlink_gb_s\":" << downlink_gbps
+              << ",\"aggregate_logical_bytes\":"
+              << oracle.aggregate_logical_bytes
+              << ",\"aggregate_traffic_gb_s\":" << aggregate_gbps
               << ",\"protocol_makespan_us\":" << protocol_us
               << ",\"protocol_logical_gb_s\":" << protocol_gbps
               << ",\"status\":" << timeline.status
@@ -1204,6 +1076,8 @@ void PrintJson(const Options &o, const WaveOracle &oracle, uint32_t iteration,
               << ",\"cycle_kernel_start\":" << timeline.kernel_start
               << ",\"cycle_all_ready\":" << timeline.all_ready
               << ",\"cycle_headers_pulled\":" << timeline.headers_pulled
+              << ",\"cycle_metadata_inbox_ready\":"
+              << timeline.headers_pulled
               << ",\"cycle_metadata_parse_begin\":"
               << timeline.metadata_parse_begin
               << ",\"cycle_metadata_parse_done\":"
@@ -1236,10 +1110,7 @@ int main(int argc, char **argv)
             << "usage: " << argv[0]
             << " <workers> <pe> <ipport> <first_npu>"
                " <per_worker_payload_bytes>"
-               " <sym_k2_balanced|sym_k4_gpu4|sym_k4_gpu2|sym_k8_gpu4|sym_dense|"
-               "sym_k1_rr|hotspot|ragged|random_k2_gpu2|random_k4_gpu2|"
-               "random_k4_gpu4|random_k8_gpu4|random_expert_k2|"
-               "random_expert_k4|random_expert_k8>"
+               " <sym_k2_balanced|sym_dense|sym_k1_rr|hotspot|ragged>"
                " <hidden> <expert_count> <channels_per_source>"
                " <warmup> <measure> <seed>"
                " <fault:0=none,1=digest,2=assignment,3=missing_ready,"
@@ -1284,25 +1155,11 @@ int main(int argc, char **argv)
         (o.fault != 0u && o.payload_bytes == 0u &&
                          (o.fault == 1u || o.fault == 2u)))
         return Fail("arguments", 2);
-    if ((o.workload == Workload::SYM_K4_GPU4 ||
-         o.workload == Workload::SYM_K4_GPU2 ||
-         o.workload == Workload::SYM_K8_GPU4) &&
-        (o.workers != 4u || o.expert_count < 16u))
-        return Fail("top-k4 requires W4 and at least 16 experts", 2);
     const uint64_t row_bytes = static_cast<uint64_t>(o.hidden) * 2u;
     if (row_bytes / 2u != o.hidden ||
         o.payload_bytes > static_cast<uint64_t>(
             std::numeric_limits<uint32_t>::max()) * row_bytes)
         return Fail("payload range", 2);
-
-    if (RandomRouting(o.workload) &&
-        (o.expert_count < o.workers * 2u ||
-         ((o.workload == Workload::RANDOM_K4_GPU4 ||
-           o.workload == Workload::RANDOM_K8_GPU4) && o.workers < 4u)))
-        return Fail("random route requires enough GPUs/experts", 2);
-    if ((o.workload == Workload::RANDOM_EXPERT_K8 && o.expert_count < 8u) ||
-        (o.workload == Workload::RANDOM_EXPERT_K4 && o.expert_count < 4u))
-        return Fail("random expert top-k exceeds expert count", 2);
 
     // Capacity is the exact maximum required by this workload.  It is
     // independent of wave identity, so one bounded allocation serves every
@@ -1331,13 +1188,17 @@ int main(int argc, char **argv)
     // assignment journal is an optional diagnostics workspace.
     const uint64_t journal_assignment_capacity = 0u;
     // Canonical V2 relay and Combine consume compact contributors directly.
-    // The optional row map is generated entirely by INC for streaming relay;
-    // it is never uploaded as a host routing plan.
-    const uint64_t row_map_entries = total_tokens * o.workers;
+    // A zero capacity disables the legacy dense W x token row map.
+    const uint64_t row_map_entries = 0u;
     const uint64_t prefix_entries =
         static_cast<uint64_t>(o.workers + 1u) * o.workers;
     const uint64_t expert_entries =
         static_cast<uint64_t>(o.workers) * o.expert_count;
+    uint64_t metadata_inbox_stride = sizeof(SlotHeader);
+    for (const ParsedSource &source : sizing.sources)
+        metadata_inbox_stride = std::max<uint64_t>(
+            metadata_inbox_stride, source.header.hidden_offset);
+    metadata_inbox_stride = Align64(metadata_inbox_stride);
     const uint64_t hidden_slot_stride = Align64(row_capacity * row_bytes);
     const uint64_t rows_slot_stride = Align64(
         row_capacity * sizeof(DestinationRow));
@@ -1350,7 +1211,7 @@ int main(int argc, char **argv)
     aclrtStream stream = nullptr;
     bool shmem_initialized = false;
     std::vector<GuardedBuffer *> buffers;
-    GuardedBuffer source_region, ready_mailbox, source_acks;
+    GuardedBuffer source_region, ready_mailbox, metadata_inbox, source_acks;
     GuardedBuffer destination_hidden, destination_rows;
     GuardedBuffer destination_assignments, destination_expert_counts;
     GuardedBuffer destination_completions;
@@ -1360,7 +1221,7 @@ int main(int argc, char **argv)
     GuardedBuffer row_map, source_token_prefix, source_destination_prefix;
     GuardedBuffer destination_row_counts, destination_assignment_counts;
     GuardedBuffer expert_counts, parser_scratch, status_line;
-    buffers = {&source_region, &ready_mailbox, &source_acks,
+    buffers = {&source_region, &ready_mailbox, &metadata_inbox, &source_acks,
         &destination_hidden, &destination_rows, &destination_assignments,
         &destination_expert_counts, &destination_completions, &inc_slots,
         &inc_destination_rows, &inc_destination_assignments, &journal_header,
@@ -1408,6 +1269,9 @@ int main(int argc, char **argv)
               "source_region");
         Alloc(&ready_mailbox, o.workers * sizeof(Ready), true,
               "ready_mailbox");
+        Alloc(&metadata_inbox,
+              static_cast<uint64_t>(o.workers) * metadata_inbox_stride, true,
+              "metadata_inbox");
         Alloc(&source_acks, o.workers * sizeof(SourceConsumed), true,
               "source_acks");
         Alloc(&destination_hidden, hidden_slot_stride * kRingSlots, true,
@@ -1467,7 +1331,6 @@ int main(int argc, char **argv)
     const uint32_t iterations = o.warmup + o.measure;
     std::vector<double> measured;
     std::vector<double> measured_protocol_gbps;
-    std::vector<double> measured_downlink_gbps;
     for (uint32_t iteration = 0u; iteration < iterations; ++iteration) {
         bool iteration_correct = true;
         const uint64_t generation = kFirstGeneration + iteration;
@@ -1514,7 +1377,7 @@ int main(int argc, char **argv)
                 Fill(&destination_completions, 0u) ? 0 : 1;
         }
         if (status == 0 && o.pe == inc_pe) {
-            status = Fill(&inc_slots, 0u) &&
+            status = Fill(&metadata_inbox, 0u) && Fill(&inc_slots, 0u) &&
                 Fill(&inc_destination_rows, kPoison) &&
                 Fill(&inc_destination_assignments, kPoison) &&
                 Fill(&journal_tokens, kPoison) &&
@@ -1562,7 +1425,8 @@ int main(int argc, char **argv)
         }
         launch_inc_dc_pull_dispatch_v2_device(
             dispatch_aiv_budget, stream, source_region.data,
-            ready_mailbox.data, inc_slots.data, source_acks.data,
+            ready_mailbox.data, metadata_inbox.data, inc_slots.data,
+            source_acks.data,
             destination_hidden.data, destination_rows.data,
             destination_assignments.data, destination_expert_counts.data,
             destination_completions.data, inc_destination_rows.data,
@@ -1576,6 +1440,7 @@ int main(int argc, char **argv)
             parser_scratch.data, status_line.data,
             shmemx_get_ffts_config(), kSessionId,
             kPlacementEpoch, generation, sequence, source_stride,
+            metadata_inbox_stride,
             hidden_slot_stride, rows_slot_stride, assignments_slot_stride,
             expert_slot_stride, journal_token_capacity,
             journal_contributor_capacity, journal_assignment_capacity,
@@ -1603,7 +1468,7 @@ int main(int argc, char **argv)
                 destination_hidden, destination_rows,
                 destination_assignments, destination_expert_counts,
                 destination_completions, source_acks);
-        else
+        else {
             iteration_correct = ValidateInc(o, oracle, expected_status,
                 inc_destination_rows, inc_destination_assignments,
                 journal_header, journal_tokens, journal_contributors,
@@ -1612,6 +1477,25 @@ int main(int argc, char **argv)
                 destination_assignment_counts, expert_counts, status_line,
                 parser_scratch, dispatch_aiv_budget, &timeline,
                 rows_slot_stride, assignments_slot_stride);
+            if (!iteration_correct) {
+                for (uint32_t source = 0u; source < o.workers; ++source) {
+                    SlotHeader observed{};
+                    aclrtMemcpy(&observed, sizeof(observed),
+                        metadata_inbox.data +
+                            static_cast<uint64_t>(source) *
+                                metadata_inbox_stride,
+                        sizeof(observed), ACL_MEMCPY_DEVICE_TO_HOST);
+                    std::cerr << "[DEBUG] metadata_inbox source=" << source
+                              << " magic=" << observed.magic
+                              << " version=" << observed.abi_version
+                              << " source_rank=" << observed.source_rank
+                              << " tokens=" << observed.token_count
+                              << " assignments=" << observed.assignment_count
+                              << " hidden_offset=" << observed.hidden_offset
+                              << '\n';
+                }
+            }
+        }
         for (GuardedBuffer *buffer : buffers)
             iteration_correct = GuardsValid(*buffer) && iteration_correct;
         if (status == 0) aclshmem_barrier_all();
@@ -1628,9 +1512,6 @@ int main(int argc, char **argv)
                       iteration_correct);
             if (!warmup) {
                 measured.push_back(us);
-                measured_downlink_gbps.push_back(
-                    static_cast<double>(oracle.egress_hidden_bytes) /
-                    (us * 1e-6) / 1e9);
                 const double protocol_us = timeline.all_ready != 0u &&
                     timeline.kernel_done > timeline.all_ready
                     ? static_cast<double>(timeline.kernel_done -
@@ -1660,26 +1541,27 @@ int main(int argc, char **argv)
             protocol_variance += (value - protocol_mean) *
                                  (value - protocol_mean);
         protocol_variance /= measured_protocol_gbps.size();
-        const double downlink_mean = std::accumulate(
-            measured_downlink_gbps.begin(), measured_downlink_gbps.end(),
-            0.0) / measured_downlink_gbps.size();
-        double downlink_variance = 0.0;
-        for (double value : measured_downlink_gbps)
-            downlink_variance += (value - downlink_mean) *
-                                 (value - downlink_mean);
-        downlink_variance /= measured_downlink_gbps.size();
+        const double min_us = *std::min_element(measured.begin(),
+                                                measured.end());
+        const double max_us = *std::max_element(measured.begin(),
+                                                measured.end());
+        const double mean_gbps = mean == 0.0 ? 0.0 :
+            static_cast<double>(sizing.logical_bytes) / (mean * 1e3);
+        const double min_gbps = max_us == 0.0 ? 0.0 :
+            static_cast<double>(sizing.logical_bytes) / (max_us * 1e3);
         std::cout << std::setprecision(12)
                   << "{\"test\":\"pull_dispatch_v2_device_e2e_summary\""
                   << ",\"workers\":" << o.workers
                   << ",\"workload\":\"" << o.workload_name << "\""
                   << ",\"measure\":" << measured.size()
-                  << ",\"min_us\":"
-                  << *std::min_element(measured.begin(), measured.end())
+                  << ",\"min_us\":" << min_us
                   << ",\"mean_us\":" << mean
-                  << ",\"max_us\":"
-                  << *std::max_element(measured.begin(), measured.end())
+                  << ",\"max_us\":" << max_us
                   << ",\"cv_percent\":"
                   << (mean == 0.0 ? 0.0 : std::sqrt(variance) / mean * 100.0)
+                  << ",\"bandwidth_definition\":\"dispatch_egress_bytes/full_operator_time\""
+                  << ",\"min_gb_s\":" << min_gbps
+                  << ",\"mean_gb_s\":" << mean_gbps
                   << ",\"protocol_min_gb_s\":"
                   << *std::min_element(measured_protocol_gbps.begin(),
                                        measured_protocol_gbps.end())
@@ -1687,13 +1569,6 @@ int main(int argc, char **argv)
                   << ",\"protocol_cv_percent\":"
                   << (protocol_mean == 0.0 ? 0.0 :
                       std::sqrt(protocol_variance) / protocol_mean * 100.0)
-                  << ",\"downlink_min_gb_s\":"
-                  << *std::min_element(measured_downlink_gbps.begin(),
-                                       measured_downlink_gbps.end())
-                  << ",\"downlink_mean_gb_s\":" << downlink_mean
-                  << ",\"downlink_cv_percent\":"
-                  << (downlink_mean == 0.0 ? 0.0 :
-                      std::sqrt(downlink_variance) / downlink_mean * 100.0)
                   << ",\"correct\":true}\n";
     }
 

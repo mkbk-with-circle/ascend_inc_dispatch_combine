@@ -26,7 +26,7 @@ using namespace inc::dc::pull_v2;
 extern "C" void launch_inc_dc_pull_combine_v2_device(
     uint32_t block_dim, void *stream, uint8_t *symmetric_partials,
     uint8_t *ready_records, uint8_t *ready_notices,
-    uint8_t *ready_staging, uint8_t *registrations,
+    uint8_t *registrations,
     uint8_t *source_acks, uint8_t *owner_output,
     uint8_t *owner_completions, uint8_t *source_offsets, uint8_t *pulls,
     uint8_t *owner_offsets, uint8_t *results, uint8_t *journal_header,
@@ -136,14 +136,7 @@ static_assert(sizeof(CombineDeviceTimelineV2) == 128u);
 enum class Workload {
     SYM_TOPK_ALL,
     SYM_K2_BALANCED,
-    SYM_K4_GPU4,
-    SYM_K4_GPU2,
-    SYM_K8_GPU4,
     ASYMMETRIC,
-    MIXED_K,
-    FIXED_K1,
-    FIXED_K3,
-    RANDOM_K2,
     READY_SKEW
 };
 
@@ -157,8 +150,6 @@ struct Options {
     const char *workload_name = nullptr;
     uint32_t warmup = 0u;
     uint32_t measure = 0u;
-    uint32_t fault = 0u;
-    uint64_t route_seed = 0x636f6d62696e65ull;
 };
 
 struct GuardedBuffer {
@@ -224,16 +215,8 @@ uint64_t Publication(const void *record, size_t bytes)
     return hash == 0u ? 1u : hash;
 }
 
-float PartialValue(uint32_t source, uint32_t row, uint32_t element,
-                   bool random_values = false)
+float PartialValue(uint32_t source, uint32_t row, uint32_t element)
 {
-    if (random_values) {
-        const uint64_t bits = Mix((static_cast<uint64_t>(source) << 48u) ^
-                                  (static_cast<uint64_t>(row) << 24u) ^ element);
-        const float fraction = static_cast<float>(bits & 0x7fffffu) / 8388608.0f;
-        const int exponent = static_cast<int>((bits >> 24u) % 21u) - 10;
-        return std::ldexp((bits >> 63u) ? -fraction : fraction, exponent);
-    }
     const int32_t value = static_cast<int32_t>(
         (source * 131u + row * 17u + element * 7u) % 1021u) - 510;
     return static_cast<float>(value) / 64.0f;
@@ -246,22 +229,8 @@ bool ParseWorkload(const char *text, Workload *workload)
         *workload = Workload::SYM_TOPK_ALL;
     else if (std::strcmp(text, "sym_k2_balanced") == 0)
         *workload = Workload::SYM_K2_BALANCED;
-    else if (std::strcmp(text, "sym_k4_gpu4") == 0)
-        *workload = Workload::SYM_K4_GPU4;
-    else if (std::strcmp(text, "sym_k4_gpu2") == 0)
-        *workload = Workload::SYM_K4_GPU2;
-    else if (std::strcmp(text, "sym_k8_gpu4") == 0)
-        *workload = Workload::SYM_K8_GPU4;
     else if (std::strcmp(text, "asymmetric") == 0)
         *workload = Workload::ASYMMETRIC;
-    else if (std::strcmp(text, "mixed_k") == 0)
-        *workload = Workload::MIXED_K;
-    else if (std::strcmp(text, "fixed_k1") == 0)
-        *workload = Workload::FIXED_K1;
-    else if (std::strcmp(text, "fixed_k3") == 0)
-        *workload = Workload::FIXED_K3;
-    else if (std::strcmp(text, "random_k2") == 0)
-        *workload = Workload::RANDOM_K2;
     else if (std::strcmp(text, "ready_skew") == 0)
         *workload = Workload::READY_SKEW;
     else
@@ -390,27 +359,10 @@ ParsedSource MakeSource(const Options &o, uint32_t owner,
         token.assignment_begin = source.assignments.size();
         const uint64_t global_row = static_cast<uint64_t>(owner) +
             static_cast<uint64_t>(row) * o.workers;
-        const uint32_t first = Mix(global_row ^ o.route_seed) % o.workers;
-        const uint32_t second = (first + 1u +
-            Mix(global_row ^ o.route_seed ^ 0x9e3779b97f4a7c15ull) %
-                (o.workers - 1u)) % o.workers;
         for (uint32_t destination = 0u; destination < o.workers;
              ++destination) {
             bool selected = true;
-            if (o.workload == Workload::RANDOM_K2) {
-                selected = destination == first || destination == second;
-            } else if (o.workload == Workload::MIXED_K) {
-                // Stable per-row random subset, including no contributors.
-                // Keeping it stable across ring reuse also keeps sizing fixed.
-                selected = (Mix(global_row ^ o.route_seed) &
-                            (1ull << destination)) != 0u;
-            } else if (o.workload == Workload::FIXED_K1 ||
-                       o.workload == Workload::FIXED_K3) {
-                const uint32_t k = o.workload == Workload::FIXED_K1 ? 1u :
-                    std::min<uint32_t>(3u, o.workers);
-                selected = (destination + o.workers - owner) % o.workers < k;
-            } else if (o.workload == Workload::SYM_K2_BALANCED ||
-                o.workload == Workload::SYM_K4_GPU2) {
+            if (o.workload == Workload::SYM_K2_BALANCED) {
                 selected = destination == owner ||
                     destination == (owner + 1u) % o.workers;
             } else if (o.workload == Workload::ASYMMETRIC &&
@@ -419,26 +371,11 @@ ParsedSource MakeSource(const Options &o, uint32_t owner,
                 selected = (global_row & ((1u << shift) - 1u)) == 0u;
             }
             if (!selected) continue;
-            const uint32_t local_experts =
-                o.workload == Workload::SYM_K4_GPU4 ? 1u : 2u;
-            for (uint32_t local = 0u; local < local_experts; ++local) {
-                const uint32_t expert =
-                    o.workload == Workload::SYM_K4_GPU4
-                    ? destination * 4u + owner
-                    : (o.workload == Workload::SYM_K4_GPU2 ||
-                       o.workload == Workload::SYM_K8_GPU4)
-                        ? destination * 4u + local
-                        : (destination * 2u + local) % 16u;
-                const float weight =
-                    o.workload == Workload::SYM_K8_GPU4 ? 0.125f :
-                    (o.workload == Workload::SYM_K4_GPU4 ||
-                     o.workload == Workload::SYM_K4_GPU2)
-                    ? 0.25f : (local == 0u ? 0.75f : 0.25f);
+            for (uint32_t local = 0u; local < 2u; ++local) {
                 source.assignments.push_back(AssignmentRecord{
-                    destination, expert,
-                    static_cast<uint32_t>(source.assignments.size() -
-                                          token.assignment_begin),
-                    weight});
+                    destination, (destination * 2u + local) % 16u,
+                    destination * 2u + local,
+                    local == 0u ? 0.75f : 0.25f});
             }
         }
         token.assignment_count = source.assignments.size() -
@@ -653,26 +590,18 @@ bool ValidateWorker(const Options &o, const Wave &wave_data,
         if (token.owner_rank != rank || token.owner_row != owner_row ||
             token.route_key != RouteKey(rank, owner_row)) return false;
         for (uint32_t element = 0u; element < o.hidden; ++element) {
-            const bool random_values = o.workload == Workload::MIXED_K;
-            double expected = 0.0;
-            double sum_abs = 0.0;
+            float expected = 0.0f;
             for (uint32_t local = 0u; local < token.contributors_count;
                  ++local) {
                 const auto &contributor = wave_data.layout.contributors[
                     token.contributors_begin + local];
-                const float partial = PartialValue(contributor.worker_rank,
-                    contributor.destination_row, element, random_values);
-                expected += partial;
-                sum_abs += std::abs(static_cast<double>(partial));
+                expected += PartialValue(contributor.worker_rank,
+                                         contributor.destination_row,
+                                         element);
             }
             const float value = actual[
                 static_cast<size_t>(owner_row) * o.hidden + element];
-            // Mixed routes use cancellation-prone FP32 values and a FP64
-            // oracle. Bound rounding by contributor count and sum of magnitudes.
-            const double tolerance = random_values ?
-                2.0 * std::numeric_limits<float>::epsilon() *
-                    token.contributors_count * sum_abs : 0.0;
-            if (!std::isfinite(value) || std::abs(value - expected) > tolerance) {
+            if (value != expected) {
                 if (mismatches < 8u)
                     std::cerr << "[FAIL] PE" << rank << " row=" << owner_row
                               << " element=" << element << " actual="
@@ -685,7 +614,7 @@ bool ValidateWorker(const Options &o, const Wave &wave_data,
 }
 
 bool ValidateInc(const Wave &wave_data, const GuardedBuffer &journal,
-                 const GuardedBuffer &ready_staging,
+                 const GuardedBuffer &ready_records,
                  const GuardedBuffer &ready_notices,
                  const GuardedBuffer &ready_state,
                  const GuardedBuffer &timeline_buffer,
@@ -740,9 +669,8 @@ bool ValidateInc(const Wave &wave_data, const GuardedBuffer &journal,
                 static_cast<uint64_t>(wave_data.plan.ring_slot) *
                     wave_data.plan.worker_count + source;
             if (aclrtMemcpy(&descriptor, sizeof(descriptor),
-                            ready_staging.data +
-                                static_cast<uint64_t>(source) *
-                                    sizeof(descriptor),
+                            ready_records.data +
+                                notice_index * sizeof(descriptor),
                             sizeof(descriptor),
                             ACL_MEMCPY_DEVICE_TO_HOST) == ACL_SUCCESS) {
                 CombineReadyNoticeV2 notice{};
@@ -773,14 +701,12 @@ bool ValidateInc(const Wave &wave_data, const GuardedBuffer &journal,
 
 int main(int argc, char **argv)
 {
-    if (argc != 10 && argc != 11 && argc != 12) {
+    if (argc != 10) {
         std::cerr << "usage: " << argv[0]
                   << " <workers:2|4> <pe> <ipport> <first_npu> <hidden>"
-                     " <rows> <sym_k2_balanced|sym_k4_gpu4|sym_k4_gpu2|sym_k8_gpu4|"
-                     "sym_topk_all|asymmetric|"
-                     "ready_skew|mixed_k|fixed_k1|fixed_k3|random_k2>"
-                     " <warmup> <measure> [fault:0=none,1=head,2=cycle,"
-                     "3=token,4=owner,5=last-owner] [route_seed]\n"
+                     " <rows> <sym_k2_balanced|sym_topk_all|asymmetric|"
+                     "ready_skew>"
+                     " <warmup> <measure>\n"
                   << "rows is the total A-token count. sym_k2_balanced is "
                      "the W2/W4 gate workload; sym_topk_all (legacy alias "
                      "symmetric) is the topk=W expansion stress case. "
@@ -798,25 +724,16 @@ int main(int argc, char **argv)
     o.workload_name = argv[7];
     o.warmup = static_cast<uint32_t>(std::strtoul(argv[8], nullptr, 10));
     o.measure = static_cast<uint32_t>(std::strtoul(argv[9], nullptr, 10));
-    if (argc >= 11)
-        o.fault = static_cast<uint32_t>(std::strtoul(argv[10], nullptr, 10));
-    if (argc == 12)
-        o.route_seed = std::strtoull(argv[11], nullptr, 10);
     const uint32_t pes = o.workers + 1u;
     const int inc_pe = static_cast<int>(o.workers);
     g_npus = static_cast<int>(pes);
     uint32_t requested_active_aiv = 0u;
     if ((o.workers != 2u && o.workers != 4u) || o.pe < 0 ||
         o.pe >= static_cast<int>(pes) || o.first_npu < 0 ||
-        o.hidden == 0u || o.measure == 0u || o.fault > 5u ||
-        (o.fault != 0u && o.rows == 0u) ||
+        o.hidden == 0u || o.measure == 0u ||
         !ParseWorkload(o.workload_name, &o.workload) ||
         !ParseDiagnosticActiveAiv(&requested_active_aiv))
         return Fail("arguments", 2);
-    if ((o.workload == Workload::SYM_K4_GPU4 ||
-         o.workload == Workload::SYM_K4_GPU2 ||
-         o.workload == Workload::SYM_K8_GPU4) && o.workers != 4u)
-        return Fail("fixed top-k4/top-k8 cases require W4", 2);
     uint64_t row_bytes = 0u;
     if (!Mul(o.hidden, sizeof(float), &row_bytes) ||
         static_cast<uint64_t>(o.rows) * row_bytes >
@@ -859,13 +776,13 @@ int main(int argc, char **argv)
     if (status == 0)
         std::cerr << "[STAGE] pe=" << o.pe << " initialized\n" << std::flush;
 
-    GuardedBuffer partials, ready, notices, ready_staging, registrations;
+    GuardedBuffer partials, ready, notices, registrations;
     GuardedBuffer acks, output, completions;
     GuardedBuffer source_offsets, pulls, owner_offsets, results, journal;
     GuardedBuffer pull_next, heads, counts, result_index, ready_state;
     GuardedBuffer payload_offsets, timeline_buffer;
     std::vector<GuardedBuffer *> buffers{&partials, &ready, &notices,
-        &ready_staging, &registrations, &acks, &output, &completions,
+        &registrations, &acks, &output, &completions,
         &source_offsets, &pulls, &owner_offsets, &results, &journal,
         &pull_next, &heads, &counts, &result_index, &ready_state,
         &payload_offsets, &timeline_buffer};
@@ -886,8 +803,6 @@ int main(int argc, char **argv)
             sizeof(CombineReadyV2), true, "ready");
         Alloc(&notices, static_cast<uint64_t>(kRingSlots) * o.workers *
             sizeof(CombineReadyNoticeV2), true, "ready_notices");
-        Alloc(&ready_staging, static_cast<uint64_t>(o.workers) *
-            sizeof(CombineReadyV2), false, "ready_staging");
         Alloc(&registrations, static_cast<uint64_t>(o.workers) *
             sizeof(CombineRegionRegistration), true, "registrations");
         Alloc(&acks, static_cast<uint64_t>(kRingSlots) * o.workers *
@@ -921,7 +836,7 @@ int main(int argc, char **argv)
     }
 
     bool correct = status == 0;
-    std::vector<double> measured_us, measured_gbps, measured_uplink_gbps;
+    std::vector<double> measured_us, measured_gbps;
     const uint32_t iterations = o.warmup + o.measure;
     for (uint32_t iteration = 0u; iteration < iterations && correct;
          ++iteration) {
@@ -945,8 +860,7 @@ int main(int argc, char **argv)
             for (uint32_t row = 0u; row < rows; ++row)
                 for (uint32_t element = 0u; element < o.hidden; ++element)
                     host[static_cast<size_t>(row) * o.hidden + element] =
-                        PartialValue(source, row, element,
-                                     o.workload == Workload::MIXED_K);
+                        PartialValue(source, row, element);
             const uint64_t offset = static_cast<uint64_t>(ring_slot) *
                 sizing.partial_slot_stride;
             if (!host.empty())
@@ -991,7 +905,6 @@ int main(int argc, char **argv)
                 CopyToDevice(
                     result_index.data,
                     wave_data.plan.accumulator_result_index) &&
-                Fill(&ready_staging, kPoison) &&
                 Fill(&ready_state, 0u) && Fill(&payload_offsets, 0u) &&
                 Fill(&timeline_buffer, 0u) ? 0 : 1;
             if (status == 0)
@@ -999,33 +912,6 @@ int main(int argc, char **argv)
                     sizeof(JournalSlotHeader),
                     &wave_data.layout.journal_header,
                     sizeof(JournalSlotHeader), ACL_MEMCPY_HOST_TO_DEVICE);
-            if (status == 0 && o.fault != 0u) {
-                // Corrupt only the device copy; keep the independent oracle
-                // and valid source registrations intact.
-                uint8_t *target = nullptr;
-                uint32_t value = 0u;
-                const uint32_t head = wave_data.plan.accumulator_heads[0];
-                if (o.fault == 1u) {
-                    target = heads.data;
-                    value = static_cast<uint32_t>(wave_data.plan.pulls.size());
-                } else if (o.fault == 2u) {
-                    target = pull_next.data + head * sizeof(uint32_t);
-                    value = head;
-                } else if (o.fault == 3u) {
-                    target = pulls.data + head * sizeof(CombinePullOp) +
-                        offsetof(CombinePullOp, journal_token);
-                    value = wave_data.plan.accumulator_count;
-                } else {
-                    const uint32_t result =
-                        wave_data.plan.accumulator_result_index[
-                            o.fault == 5u ? wave_data.plan.accumulator_count - 1u : 0u];
-                    target = results.data + result * sizeof(CombineResultOp) +
-                        offsetof(CombineResultOp, owner_rank);
-                    value = o.workers;
-                }
-                status = aclrtMemcpy(target, sizeof(value), &value,
-                    sizeof(value), ACL_MEMCPY_HOST_TO_DEVICE);
-            }
         }
         if (status == 0) status = aclrtSynchronizeStream(stream);
         if (status == 0)
@@ -1055,7 +941,7 @@ int main(int argc, char **argv)
                   << iteration << '\n' << std::flush;
         launch_inc_dc_pull_combine_v2_device(
             combine_aiv, stream, partials.data, ready.data,
-            notices.data, ready_staging.data, registrations.data,
+            notices.data, registrations.data,
             acks.data, output.data, completions.data, source_offsets.data,
             pulls.data, owner_offsets.data, results.data, journal.data,
             pull_next.data, heads.data, counts.data, result_index.data,
@@ -1076,44 +962,11 @@ int main(int argc, char **argv)
         if (status != 0) { correct = false; break; }
 
         CombineDeviceTimelineV2 timeline{};
-        if (o.fault != 0u) {
-            constexpr uint32_t invalid_journal = 2u;
-            if (o.pe == inc_pe) {
-                JournalSlotHeader header{};
-                correct = aclrtMemcpy(&timeline, sizeof(timeline),
-                    timeline_buffer.data, sizeof(timeline),
-                    ACL_MEMCPY_DEVICE_TO_HOST) == ACL_SUCCESS &&
-                    aclrtMemcpy(&header, sizeof(header), journal.data,
-                    sizeof(header), ACL_MEMCPY_DEVICE_TO_HOST) == ACL_SUCCESS &&
-                    timeline.status == invalid_journal &&
-                    header.status == invalid_journal &&
-                    header.state == static_cast<uint16_t>(JournalSlotState::ABORTED);
-            } else {
-                CombineSourceAckV2 ack{};
-                CombineOwnerCompletionV2 completion{};
-                const uint64_t index =
-                    static_cast<uint64_t>(ring_slot) * o.workers + o.pe;
-                correct = aclrtMemcpy(&ack, sizeof(ack),
-                    acks.data + index * sizeof(ack), sizeof(ack),
-                    ACL_MEMCPY_DEVICE_TO_HOST) == ACL_SUCCESS &&
-                    aclrtMemcpy(&completion, sizeof(completion),
-                    completions.data + index * sizeof(completion),
-                    sizeof(completion), ACL_MEMCPY_DEVICE_TO_HOST) == ACL_SUCCESS &&
-                    ack.status == invalid_journal &&
-                    completion.status == invalid_journal &&
-                    ack.generation == generation && completion.generation == generation &&
-                    ack.sequence == sequence && completion.sequence == sequence &&
-                    ack.row_count == 0u && completion.row_count == 0u &&
-                    ack.publication == Publication(&ack,
-                        offsetof(CombineSourceAckV2, publication)) &&
-                    completion.publication == Publication(&completion,
-                        offsetof(CombineOwnerCompletionV2, publication));
-            }
-        } else if (o.pe < inc_pe)
+        if (o.pe < inc_pe)
             correct = ValidateWorker(o, wave_data, ring_slot, acks, output,
                                      completions);
         else
-            correct = ValidateInc(wave_data, journal, ready_staging,
+            correct = ValidateInc(wave_data, journal, ready,
                                   notices, ready_state, timeline_buffer,
                                   &timeline);
         for (GuardedBuffer *buffer : buffers)
@@ -1123,35 +976,33 @@ int main(int argc, char **argv)
         if (o.pe == inc_pe) {
             const double us = std::chrono::duration<double, std::micro>(
                 end - begin).count();
-            const double logical_bytes = static_cast<double>(
+            // Primary operator bandwidth is directional: Combine consumes
+            // partial rows from workers into INC.  GET+PUT aggregate traffic
+            // remains a diagnostic and is not reported as link bandwidth.
+            const double logical_bytes =
+                static_cast<double>(wave_data.ingress_bytes);
+            const double aggregate_bytes = static_cast<double>(
                 wave_data.ingress_bytes + wave_data.egress_bytes);
             const double gbps = logical_bytes / us / 1.0e3;
-            const double uplink_gbps =
-                static_cast<double>(wave_data.ingress_bytes) / us / 1.0e3;
+            const double aggregate_gbps = aggregate_bytes / us / 1.0e3;
             const bool warmup = iteration < o.warmup;
             std::cout << std::setprecision(12)
                       << "{\"test\":\"pull_combine_v2_npu_e2e\""
                       << ",\"iteration\":" << iteration
-                      << ",\"fault\":" << o.fault
                       << ",\"warmup\":" << (warmup ? "true" : "false")
                       << ",\"workers\":" << o.workers
                       << ",\"workload\":\"" << o.workload_name << "\""
-                      << ",\"first_npu\":" << o.first_npu
-                      << ",\"route_seed\":" << o.route_seed
                       << ",\"hidden\":" << o.hidden
                       << ",\"rows\":" << o.rows
                       << ",\"active_aiv\":" << combine_aiv
                       << ",\"ingress_bytes\":" << wave_data.ingress_bytes
                       << ",\"egress_bytes\":" << wave_data.egress_bytes
-                      << ",\"source_partial_bytes\":[";
-            for (uint32_t source = 0u; source < o.workers; ++source) {
-                if (source != 0u) std::cout << ',';
-                std::cout << static_cast<uint64_t>(wave_data.plan.source_row_counts[source]) * row_bytes;
-            }
-            std::cout << ']'
                       << ",\"e2e_us\":" << us
+                      << ",\"bandwidth_definition\":\"combine_ingress_bytes/full_operator_time\""
                       << ",\"logical_gb_s\":" << gbps
-                      << ",\"uplink_gb_s\":" << uplink_gbps
+                      << ",\"aggregate_logical_bytes\":"
+                      << static_cast<uint64_t>(aggregate_bytes)
+                      << ",\"aggregate_traffic_gb_s\":" << aggregate_gbps
                       << ",\"status\":" << timeline.status
                       << ",\"cycle_kernel_start\":"
                       << timeline.kernel_start
@@ -1160,10 +1011,9 @@ int main(int argc, char **argv)
                       << ",\"cycle_kernel_done\":" << timeline.kernel_done
                       << ",\"correct\":" << (correct ? "true" : "false")
                       << "}\n";
-            if (!warmup && o.fault == 0u) {
+            if (!warmup) {
                 measured_us.push_back(us);
                 measured_gbps.push_back(gbps);
-                measured_uplink_gbps.push_back(uplink_gbps);
             }
         }
     }
@@ -1179,16 +1029,6 @@ int main(int argc, char **argv)
         variance /= measured_gbps.size();
         const double mean_us = std::accumulate(measured_us.begin(),
             measured_us.end(), 0.0) / measured_us.size();
-        const double uplink_mean = std::accumulate(
-            measured_uplink_gbps.begin(), measured_uplink_gbps.end(), 0.0) /
-            measured_uplink_gbps.size();
-        const double uplink_minimum = *std::min_element(
-            measured_uplink_gbps.begin(), measured_uplink_gbps.end());
-        double uplink_variance = 0.0;
-        for (double value : measured_uplink_gbps)
-            uplink_variance += (value - uplink_mean) *
-                               (value - uplink_mean);
-        uplink_variance /= measured_uplink_gbps.size();
         std::cout << std::setprecision(12)
                   << "{\"test\":\"pull_combine_v2_npu_e2e_summary\""
                   << ",\"workers\":" << o.workers
@@ -1198,13 +1038,9 @@ int main(int argc, char **argv)
                   << ",\"active_aiv\":" << combine_aiv
                   << ",\"measure\":" << measured_gbps.size()
                   << ",\"mean_us\":" << mean_us
+                  << ",\"bandwidth_definition\":\"combine_ingress_bytes/full_operator_time\""
                   << ",\"min_logical_gb_s\":" << minimum
                   << ",\"mean_logical_gb_s\":" << mean
-                  << ",\"min_uplink_gb_s\":" << uplink_minimum
-                  << ",\"mean_uplink_gb_s\":" << uplink_mean
-                  << ",\"uplink_cv_pct\":"
-                  << (uplink_mean == 0.0 ? 0.0 :
-                      100.0 * std::sqrt(uplink_variance) / uplink_mean)
                   << ",\"cv_pct\":"
                   << (mean == 0.0 ? 0.0 : 100.0 * std::sqrt(variance) / mean)
                   << ",\"correct\":true}\n";

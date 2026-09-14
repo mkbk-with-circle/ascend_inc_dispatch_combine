@@ -1,22 +1,31 @@
-# Single INC：源rank独立分区
+<!-- 中文 / Chinese -->
+# Single-INC Pull V2
 
-当前开发入口位于[pull_combine/](pull_combine/README.md)。
-Dispatch按源origin预留独立目标空间，Combine直接读取本源真实设备Journal。
-旧紧凑布局入口与旧报告保留作回归对照。
+```text
+Dispatch: Worker PUT Header/metadata → READY → INC GET hidden → INC PUT B
+Compute : B expert compute + same-GPU local weighted reduce
+Combine : B PUT READY descriptor → Notice → INC GET partials
+          → FP32 reduce → INC PUT original A
+```
 
-- [源分区协议与内存布局](pull_combine/SOURCE_PARTITIONS.md)
-- [详细流程图](pull_combine/FLOW.md)
-- [新设备入口与真机示例](pull_combine/README.md)
-- [框架前端适配说明](QUICKSTART.md)
-- [测试状态](SWEEP_STATUS.md)
+- [快速接入](QUICKSTART.md)
+- [实现、API 与构建](pull_combine/README.md)
+- [协议流程图](pull_combine/FLOW.md)
+- [Dispatch 设计](pull_combine/PULL_DISPATCH_V2_DESIGN.md)
 
-历史V1/Fusion从archive/pre-minimal-v1-fusion-20260904恢复。
-源分区之前的代码从archive/pre-source-partitions-a230a1b恢复。
+当前源码只保留这一套 Dispatch/Combine 实现。归档标签
+`archive/pre-api-cleanup-20260913` 保存清理前代码。
+
+<!-- English -->
+> **English:** This README documents the maintained Single-INC Pull V2 data flow.
 
 ## English
 
-The development path uses fixed per-origin destination partitions and a
-Combine kernel that consumes the actual device Dispatch Journal.
-See the linked protocol and device example. Legacy compact-layout entries
-are retained for regression comparisons; frontend backend binding remains
-separate from the qualified device test path.
+This directory contains the sole maintained Single-INC Pull V2 implementation.
+Use [QUICKSTART.md](QUICKSTART.md) for integration and
+[pull_combine/README.md](pull_combine/README.md) for build and validation.
+
+<!-- English -->
+### English — ## English
+
+This section covers ## English. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.

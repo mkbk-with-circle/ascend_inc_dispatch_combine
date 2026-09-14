@@ -1,9 +1,15 @@
-# Pull V2 AICore Platform Headers
+<!-- 中文 / Chinese -->
+# Pull V2 device primitives
 
-本目录仅保留 Pull V2 Combine kernel 直接依赖的三个硬件无关辅助头：
+当前只保留 Combine device kernel 的直接依赖：
 
-- `inc_dc_platform_capabilities.h`
-- `inc_dc_ub_tile_aicore.h`
-- `inc_dc_vector_reduce_aicore.h`
+| 文件 | 用途 |
+|---|---|
+| `inc_dc_platform_capabilities.h` | AIV UB 与平台容量常量 |
+| `inc_dc_ub_tile_aicore.h` | UB tile 尺寸计算 |
+| `inc_dc_vector_reduce_aicore.h` | FP32 partial 向量归约 |
 
-这里没有公开应用 API；应用入口位于 `single_inc/pull_combine/`。
+这些头文件由 `inc_dc_pull_combine_v2_device_kernel.cpp` 直接或传递包含。
+
+<!-- English -->
+> **English:** This README documents the device primitives required by Pull V2.

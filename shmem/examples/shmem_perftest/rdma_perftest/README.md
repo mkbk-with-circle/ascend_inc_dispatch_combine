@@ -1,8 +1,17 @@
+<!-- 中文 / Chinese -->
 # rdma_perftest
+
+<!-- English -->
+> **English:** This README documents the low-level RDMA benchmark.
 
 ## 示例概述
 
 `rdma_perftest` 是用于**测试 shmem RDMA 低阶接口性能**的参数化测试示例，平行于同目录下的 `mte_perftest`（针对 MTE 引擎）和 `udma_perftest`（针对 UDMA 引擎）。该示例通过 [SHMEMI_PROF_START/END](../../../src/device/utils/prof/shmemi_prof.h) 宏采集性能数据，覆盖 `aclshmemx_roce_put_nbi` / `aclshmemx_roce_get_nbi` 两个 RDMA 低阶接口在不同数据量下的传输带宽。**该脚本测试结果仅做参考，性能以实际场景为准**。
+
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
 
 ## 测试目的
 
@@ -12,6 +21,11 @@
 2. **双向 Put** (`bi_put`)：两个 PE 同时调用 put，互相传输数据。
 3. **单向 Get** (`get`)：仅 PE0 调用 RDMA get 接口，从对端 PE 拉取数据。
 4. **双向 Get** (`bi_get`)：两个 PE 同时调用 get，互相拉取数据。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.
 
 ## 与 `mte_perftest`、`udma_perftest` 的差异
 
@@ -25,13 +39,28 @@
 | SOC 限制 | 通用 | **仅 Ascend950**：非 950 上 device kernel 内置 abort | **Ascend950（需指定 `XSCALE` 或 `HNS_1825` 后端）或 A2/A3* |
 | CSV 文件名 | `<test>_<dtype>_<pe>.csv` | `udma_<test>_<dtype>_<pe>.csv` | `rdma_<test>_<dtype>_<pe>.csv` |
 
+<!-- English -->
+### English — ## 与 `mte_perftest`、`udma_perftest` 的差异
+
+This section covers ## 与 `mte_perftest`、`udma_perftest` 的差异. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 环境要求
 
 同[rdma_demo](../../rdma_demo/README.md)中的环境要求。
 
+<!-- English -->
+### English — Requirements and supported platforms
+
+The Chinese section lists required hardware, software, build options, and supported products. Versions and environment variables remain unchanged.
+
 ## 编译说明
 
 RDMA 功能需要在编译时启用 `-enable_rdma` 参数，并根据 SOC 类型配置后端。RDMA 编译参数（A2/A3，以及 Ascend950 的 `XSCALE` / `HNS_1825` 后端）详见 [编译与构建 - RDMA 参数使用说明](../../../docs/compilation_build_guide.md#rdma参数使用说明)。
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
 
 ## 使用方法
 
@@ -115,6 +144,11 @@ bash run.sh [选项]
 ./run.sh -t bi_put -d float --exponent-range 8 20 --loop-count 1000
 ```
 
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
+
 ## CSV 输出
 
 CSV 格式如图：
@@ -124,6 +158,11 @@ DataSize/B, Npus, Blocks, UBsize/KB, Bandwidth/GB/s, Bandwidth/GiB/s, CoreMaxTim
 ```
 
 `Blocks` 列恒为 1。文件名前缀为 `rdma_<metric>_`：`output/rdma_<metric>_<test_type>_<dtype>_<pe>.csv`。
+
+<!-- English -->
+### English — Output
+
+The Chinese section defines terminal output and generated files. Field names, CSV columns, units, and examples remain exact.
 
 ## 输出示例
 
@@ -145,9 +184,19 @@ FIRST_NPU: 0
 [INFO] rdma_perftest start, pe=1, t=bi_get, d=float, exp=11-20, loop=1000, ub=12864B, metric=lat, batch=100, sync_id=0, qp=1
 ```
 
+<!-- English -->
+### English — Output
+
+The Chinese section defines terminal output and generated files. Field names, CSV columns, units, and examples remain exact.
+
 ## 已知约束
 
 1. RDMA 头文件注明：concurrent RMA/AMO operations to the same PE are not supported。本 perftest 通过 `block_dim=1` 规避，多核场景留作后续扩展。
 2. RDMA 功能需要在编译时启用 `-enable_rdma` 参数，否则编译期会报错；Ascend950 平台还需额外指定 `-soc_type Ascend950` 及 `-rdma_backend XSCALE`（或 `HNS_1825`）参数。
 3. **不支持 D2H / `HOST_SIDE` (DRAM)**: RDMA 引擎当前未对 Host 侧 DRAM 提供 RMA 路径，仅测 HBM。
 4. 原子操作不在本 perftest 范围。
+
+<!-- English -->
+### English — Constraints and boundaries
+
+All platform, alignment, resource, synchronization, lifecycle, and safety restrictions listed above apply unchanged.

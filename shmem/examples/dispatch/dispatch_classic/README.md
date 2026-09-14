@@ -1,6 +1,10 @@
+<!-- 中文 / Chinese -->
 # 经典 MoE Dispatch 示例
 
 本示例实现非量化 MoE 的经典 dispatch 算子，对应设计文档 `DOC/moe_dispatch_combine_non_quant_architecture.md`。Dispatch 的职责是根据 `expert_ids` 将本 PE 的 token/topK 路由到目标 expert 所在 PE，并生成 combine 阶段需要的辅助信息。
+
+<!-- English -->
+> **English:** This README documents the classic MoE Dispatch operator and its validation workflow.
 
 ## 功能说明
 
@@ -18,6 +22,11 @@
 
 输出顺序固定为 `(local_expert_id, src_rank_id)`，便于后续 combine 和 golden 校验。
 
+<!-- English -->
+### English — Overview and functionality
+
+The Chinese section describes the example purpose, operator semantics, supported operations, and main interfaces. API names and formulas remain exact.
+
 ## 实现逻辑
 
 Kernel 启动 `pe_size` 个 AIV core。发送阶段中，`core_id == dst_rank` 的 core 负责写入对应目标 PE 的对称窗口。
@@ -31,6 +40,11 @@ Kernel 启动 `pe_size` 个 AIV core。发送阶段中，`core_id == dst_rank` �
 5. 根据 count 构造 `ep_recv_count` 和 `expert_token_nums`，再按确定顺序 compact 到最终输出。
 
 当前经典版本优先保证逻辑清晰、可验证和输出顺序稳定，数据面使用 MTE 传输。
+
+<!-- English -->
+### English — Workflow and implementation
+
+The Chinese section above defines the execution stages, data movement, synchronization, and ownership rules. Its diagrams, formulas, and code fragments apply unchanged.
 
 ## 构建
 
@@ -47,6 +61,11 @@ bash scripts/build.sh -examples
 ```bash
 bash scripts/build.sh -soc_type Ascend950 -examples
 ```
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
 
 ## 运行
 
@@ -66,6 +85,11 @@ bash scripts/run.sh -pes 8 -bs 8 -h 16 -topk 2 -expertPerPe 8 -type int32_t
 
 脚本会自动生成输入、路由矩阵和 golden 数据，启动每个 PE 对应的进程，输出写入 `output/`，并校验 `expand_x`、`assist_info`、`ep_recv_count` 和 `expert_token_nums`。
 
+<!-- English -->
+### English — ## 运行
+
+This section covers ## 运行. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
+
 ## 常用参数
 
 ```text
@@ -80,6 +104,11 @@ bash scripts/run.sh -pes 8 -bs 8 -h 16 -topk 2 -expertPerPe 8 -type int32_t
 ```
 
 `expertPerPe` 上限为 1024。Kernel 在 AI core 栈上为每个目标 local expert 分配固定工作区，超过该上限会被 host 侧拒绝。
+
+<!-- English -->
+### English — Parameters
+
+The tables above define option names, defaults, units, ranges, and constraints. Their literal spellings and values remain unchanged.
 
 ## 性能测试
 
@@ -108,3 +137,8 @@ CSV 指标包括：
 - `comm_only`：Stage 1 payload 通信及必要的元数据/status 协议。
 
 单 rank 文件名为 `dispatch_perf_rank<rank>.csv`。使用 `--prof-pe all` 时，脚本会轮流 profile 每个 PE，并生成 `dispatch_perf_summary.csv`。
+
+<!-- English -->
+### English — Performance and metrics
+
+The Chinese section defines the timing boundary, byte-count convention, repetitions, metrics, and interpretation. Use those exact definitions.

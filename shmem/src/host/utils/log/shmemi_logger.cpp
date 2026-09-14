@@ -60,7 +60,7 @@ public:
 
         ssize_t write_len = write(aclshmem_fd, log_content.c_str(), log_content.size());
         if (write_len != static_cast<ssize_t>(log_content.size())) {
-            std::cout << "aclshmem_log: write file fail, want: " << log_content.size()
+            std::cout << "aclshmem_log: write file fail, want: " << log_content.size() 
                       << ", actual: " << write_len << std::endl;
             close_file();
             return;
@@ -93,7 +93,7 @@ private:
             std::cout << "aclshmem_log: failed to get realpath for log directory: " << aclshmem_log_dir << std::endl;
             return false;
         }
-
+        
         struct stat dir_stat;
         if (stat(real_log_dir.c_str(), &dir_stat) != 0) {
             std::cout << "aclshmem_log: stat failed for log directory: " << real_log_dir << std::endl;
@@ -107,13 +107,13 @@ private:
                       << std::endl;
             return false;
         }
-
+        
         if ((dir_stat.st_mode & S_IWGRP) || (dir_stat.st_mode & S_IWOTH)) {
             std::cout << "aclshmem_log: security check failed, log directory has insecure permissions: "
                       << real_log_dir << ", mode=" << std::oct << dir_stat.st_mode << std::dec << std::endl;
             return false;
         }
-
+        
         aclshmem_log_dir = real_log_dir;
         return true;
     }
@@ -179,7 +179,7 @@ private:
         time_t now = time(nullptr);
         struct tm local_tm {};
         localtime_r(&now, &local_tm);
-
+        
         char time_buf[32] = {0};
         strftime(time_buf, sizeof(time_buf), "%Y%m%d%H%M%S", &local_tm);
 
@@ -300,7 +300,7 @@ bool is_disk_available(const std::string& dir) {
 
     uint64_t available = static_cast<uint64_t>(vfs.f_bsize) * vfs.f_bfree;
     if (available <= DISK_AVAILABLE_LIMIT) {
-        std::cout << "aclshmem_log: disk space low, avail: " << available
+        std::cout << "aclshmem_log: disk space low, avail: " << available 
                   << ", limit: " << DISK_AVAILABLE_LIMIT << std::endl;
         return false;
     }
@@ -366,9 +366,9 @@ aclshmem_out_logger::aclshmem_out_logger() {
     is_log_stdout = get_log_to_stdout_from_env_cfg();
     if (!is_log_stdout) {
         aclshmem_file_sink = new (std::nothrow) log_file_sink();
-        if (aclshmem_file_sink == nullptr) {
-        std::cout << "New log_file_sink failed, logs cannot be stored in files." << std::endl;
-        }
+        if (aclshmem_file_sink == nullptr) { 
+        std::cout << "New log_file_sink failed, logs cannot be stored in files." << std::endl; 
+        }   
     }
 }
 
@@ -388,7 +388,7 @@ std::string aclshmem_out_logger::build_log_content(int32_t level, const std::ost
     gettimeofday(&tv, nullptr);
     time_t time_stamp = tv.tv_sec;
     struct tm local_time {};
-
+    
     if (strftime(str_time, sizeof str_time, "%Y-%m-%d %H:%M:%S.", localtime_r(&time_stamp, &local_time)) != 0) {
         log_oss << str_time << std::setw(6U) << std::setfill('0') << tv.tv_usec
                 << " " << log_level_desc(level) << " " << syscall(SYS_gettid)

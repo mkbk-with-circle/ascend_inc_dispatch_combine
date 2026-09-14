@@ -10,8 +10,7 @@ constexpr uint16_t kPullDispatchAbiVersion = 2u;
 constexpr uint32_t kPullDispatchAlignment = 64u;
 constexpr uint32_t kPullDispatchMaxWorkers = 128u;
 // The source promises that every token has exactly the same set of unique
-// destinations. Multiple expert assignments on one selected destination are
-// legal: they share one network hidden row and remain distinct metadata.
+// destinations and exactly one assignment for each selected destination.
 // Destination sets may differ between source ranks.  This is a hint only:
 // both host and INC derive/verify the property independently before success.
 constexpr uint16_t kSlotFlagUniformDestinations = 1u << 0u;
@@ -47,7 +46,8 @@ static_assert(sizeof(RegionRegistration) == 64u,
               "pull Dispatch registration ABI drift");
 
 // A worker publishes exactly one READY per source/wave after its complete
-// slot is immutable and remotely readable.  publication is written last.
+// slot is immutable and remotely readable and its header/metadata prefix has
+// been pushed to the source's INC inbox.  publication is written last.
 struct alignas(64) Ready {
     uint32_t magic = kPullDispatchMagic;
     uint16_t abi_version = kPullDispatchAbiVersion;
@@ -128,6 +128,8 @@ struct alignas(64) PullTimeline {
     uint32_t ready_sources = 0u;
     uint64_t kernel_start = 0u;
     uint64_t all_ready = 0u;
+    // ABI-stable legacy name.  Metadata-push mode records the point at which
+    // all source inbox headers have been accepted; no Header GET occurs.
     uint64_t headers_pulled = 0u;
     uint64_t metadata_parse_begin = 0u;
     uint64_t metadata_parse_done = 0u;
@@ -145,8 +147,10 @@ struct alignas(64) PullTimeline {
 static_assert(sizeof(PullTimeline) == 128u,
               "pull Dispatch timeline ABI drift");
 
-// Canonical source slot.  The INC first GETs this fixed header, then pulls
-// metadata and hidden tiles from offsets derived and checked from the counts.
+// Canonical source slot.  Before publishing READY, the worker pushes the
+// fixed header and [tokens_offset, hidden_offset) metadata prefix to its INC
+// inbox.  The INC validates that local copy, then pulls hidden tiles from the
+// source slot using offsets derived and checked from the counts.
 struct alignas(64) SlotHeader {
     uint32_t magic = kPullDispatchMagic;
     uint16_t abi_version = kPullDispatchAbiVersion;

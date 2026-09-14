@@ -1,3 +1,4 @@
+<!-- 中文 / Chinese -->
 # 样例介绍
 
 本样例旨在展示 SIMD 与 SIMT 混合编译模式下，SIMT 远程内存访问（RMA）接口的典型使用方法。该类接口主要包含以下三种形式：
@@ -20,6 +21,9 @@
 - **第二种接口**：基于每个传输元素的比特位大小（如 `8`、`16` 等）进行描述。
 - **第三种接口**：直接指定需要传输的总内存字节大小。
 
+<!-- English -->
+> **English:** This README documents the SIMT RMA example.
+
 ## 样例执行流程
 
 本样例通过以下流程演示 RMA 接口的具体工作机制：
@@ -29,9 +33,19 @@
 3. **PUT 操作演示**：每个 PE 均调用 `put` 接口，将自身第一块内存中的数据，推送并写入至逻辑上属于**下一个 PE** 的第三块内存中。
 4. **结果校验**：通信操作完成后，各 PE 将自动比对内存中的数据，验证数据传输的正确性。
 
+<!-- English -->
+### English — Workflow and implementation
+
+The Chinese section above defines the execution stages, data movement, synchronization, and ownership rules. Its diagrams, formulas, and code fragments apply unchanged.
+
 ## 支持的设备
 
 - Ascend950
+
+<!-- English -->
+### English — ## 支持的设备
+
+This section covers ## 支持的设备. Commands, paths, code blocks, tables, values, and constraints in the Chinese section above apply unchanged.
 
 ## 使用方式
 
@@ -49,3 +63,8 @@
    cd examples/simt_rma
    bash run.sh
    ```
+
+<!-- English -->
+### English — Build and usage
+
+Run the commands above from the stated directory and environment. Command names, flags, paths, and platform variants are preserved exactly.
